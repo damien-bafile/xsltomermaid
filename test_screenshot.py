@@ -128,10 +128,15 @@ def test_module_import_sets_webengine_flags_for_cli_mode():
             "print(os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS','')); "
         ),
     ]
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k != "QT_QPA_PLATFORM" and not k.startswith("QTWEBENGINE_")
+    }
     proc = subprocess.run(
         cmd,
         cwd=os.path.dirname(__file__),
-        env={k: v for k, v in os.environ.items() if not k.startswith("QTWEBENGINE_")},
+        env=env,
         capture_output=True,
         text=True,
         check=False,
