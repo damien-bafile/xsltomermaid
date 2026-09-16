@@ -400,7 +400,8 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 </style>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>
-  mermaid.initialize({{ startOnLoad: true, securityLevel: 'loose', theme: 'default' }});
+  mermaid.initialize({{ startOnLoad: true, securityLevel: 'loose', theme: 'default',
+    maxTextSize: 2000000, maxEdges: 10000 }});
 </script>
 </head>
 <body>
