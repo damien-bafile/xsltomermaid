@@ -50,9 +50,13 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -71,10 +75,17 @@ from excel_to_mermaid import (
     EXPECTED_HEADERS,
     Schema,
     build_schema,
+    filter_schema,
     generate_mermaid,
     read_rows,
     wrap_mermaid_html,
 )
+
+# Above this many tables we don't auto-render the whole diagram (it's slow and
+# Mermaid chokes); the user picks a subset instead.
+AUTO_RENDER_LIMIT = 25
+# Rendering more than this many tables at once prompts a confirmation first.
+RENDER_WARN_LIMIT = 60
 
 _ACCEPTED_SUFFIXES = (".xlsx", ".xlsm", ".xltx", ".xltm")
 
@@ -202,6 +213,106 @@ class LoadWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class TableSelector(QWidget):
+    """A filterable, checkable list of tables to include in the diagram."""
+
+    applied = Signal()  # user asked to (re)render the current selection
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        title = QLabel("Tables in diagram")
+        title.setStyleSheet("font-weight: 600;")
+        layout.addWidget(title)
+
+        self._filter = QLineEdit()
+        self._filter.setPlaceholderText("Filter tables…")
+        self._filter.setClearButtonEnabled(True)
+        self._filter.textChanged.connect(self._apply_filter_text)
+        layout.addWidget(self._filter)
+
+        self._list = QListWidget()
+        self._list.setUniformItemSizes(True)
+        self._list.itemChanged.connect(lambda _item: self._update_count())
+        layout.addWidget(self._list, 1)
+
+        self._count = QLabel("0 of 0 selected")
+        self._count.setStyleSheet("color: #6b7078;")
+        layout.addWidget(self._count)
+
+        button_row = QHBoxLayout()
+        select_shown = QPushButton("Select shown")
+        clear_btn = QPushButton("Clear")
+        select_shown.setToolTip("Tick every table currently visible in the list.")
+        select_shown.clicked.connect(self.check_shown)
+        clear_btn.clicked.connect(self.clear_selection)
+        button_row.addWidget(select_shown)
+        button_row.addWidget(clear_btn)
+        layout.addLayout(button_row)
+
+        self._related = QCheckBox("Include related tables")
+        self._related.setToolTip(
+            "Also draw tables connected by a foreign key to the ones you picked."
+        )
+        layout.addWidget(self._related)
+
+        render_btn = QPushButton("Render selected")
+        render_btn.clicked.connect(lambda: self.applied.emit())
+        layout.addWidget(render_btn)
+
+    # -- population --------------------------------------------------------
+    def set_tables(self, names: list[str]):
+        self._list.blockSignals(True)
+        self._list.clear()
+        for name in names:
+            item = QListWidgetItem(name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            self._list.addItem(item)
+        self._list.blockSignals(False)
+        self._filter.clear()
+        self._update_count()
+
+    # -- selection helpers -------------------------------------------------
+    def _items(self):
+        return (self._list.item(i) for i in range(self._list.count()))
+
+    def _apply_filter_text(self, text: str):
+        needle = text.strip().lower()
+        for item in self._items():
+            item.setHidden(needle not in item.text().lower())
+
+    def check_shown(self):
+        self._set_state((item for item in self._items() if not item.isHidden()), Qt.Checked)
+
+    def check_all(self):
+        self._set_state(self._items(), Qt.Checked)
+
+    def clear_selection(self):
+        self._set_state(self._items(), Qt.Unchecked)
+
+    def _set_state(self, items, state):
+        self._list.blockSignals(True)
+        for item in items:
+            item.setCheckState(state)
+        self._list.blockSignals(False)
+        self._update_count()
+
+    def selected_tables(self) -> list[str]:
+        return [item.text() for item in self._items() if item.checkState() == Qt.Checked]
+
+    def include_related(self) -> bool:
+        return self._related.isChecked()
+
+    def _update_count(self):
+        total = self._list.count()
+        selected = sum(1 for item in self._items() if item.checkState() == Qt.Checked)
+        self._count.setText(f"{selected} of {total} selected")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -212,6 +323,7 @@ class MainWindow(QMainWindow):
         self._mermaid_text: str = ""
         self._worker: LoadWorker | None = None
         self._pending_path: str = ""
+        self._loaded_name: str = ""
 
         central = QWidget()
         outer = QVBoxLayout(central)
@@ -254,9 +366,18 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._diagram_view, "Rendered diagram")
 
         self._tabs = tabs
-        splitter = QSplitter(Qt.Vertical)
-        splitter.addWidget(tabs)
-        outer.addWidget(splitter, 1)
+
+        # Left: table picker to limit what gets rendered. Right: the tabs.
+        self._selector = TableSelector()
+        self._selector.applied.connect(self._render_selection)
+
+        body = QSplitter(Qt.Horizontal)
+        body.addWidget(self._selector)
+        body.addWidget(tabs)
+        body.setStretchFactor(0, 0)
+        body.setStretchFactor(1, 1)
+        body.setSizes([280, 820])
+        outer.addWidget(body, 1)
 
         # Action buttons.
         buttons = QHBoxLayout()
@@ -352,22 +473,70 @@ class MainWindow(QMainWindow):
             self._status.setText(f"Loading {name}…")
 
     def _apply_loaded(self, path: str, rows: list[dict], schema: Schema, mermaid_text: str):
-        """Push a loaded schema into the widgets (must run on the UI thread)."""
-        self._schema = schema
-        self._mermaid_text = mermaid_text
-        self._populate_table(rows)
-        self._mermaid_view.setPlainText(mermaid_text)
-        self._diagram_view.set_diagram(mermaid_text)
+        """Push a loaded schema into the widgets (must run on the UI thread).
 
-        table_count = len(schema.tables)
-        rel_count = len(schema.relationships)
-        col_count = sum(len(t.columns) for t in schema.tables)
-        self._status.setText(
-            f"Loaded {os.path.basename(path)} — {table_count} table(s), "
-            f"{col_count} column(s), {rel_count} relationship(s)."
-        )
+        The passed-in ``mermaid_text`` is for the full schema; the diagram we
+        actually show is driven by the table selection (all tables for a small
+        schema, or a user-picked subset for a large one).
+        """
+        self._schema = schema
+        self._loaded_name = os.path.basename(path)
+        self._populate_table(rows)
+
+        names = [t.name for t in schema.tables]
+        self._selector.set_tables(names)
+        # Small schemas render in full; large ones wait for the user to pick.
+        if len(names) <= AUTO_RENDER_LIMIT:
+            self._selector.check_all()
+        self._render_selection()
+
         for btn in self._action_buttons:
             btn.setEnabled(True)
+
+    def _render_selection(self):
+        """Render the currently-selected tables (Mermaid source + diagram)."""
+        if self._schema is None:
+            return
+
+        names = self._selector.selected_tables()
+        if len(names) > RENDER_WARN_LIMIT:
+            answer = QMessageBox.question(
+                self,
+                "Render a large diagram?",
+                f"You selected {len(names)} tables. A diagram that big can be slow "
+                "to render and hard to read. Render it anyway?",
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        filtered = filter_schema(
+            self._schema, names, include_related=self._selector.include_related()
+        )
+        mermaid_text = generate_mermaid(filtered)
+        self._mermaid_text = mermaid_text
+        self._mermaid_view.setPlainText(mermaid_text)
+
+        total = len(self._schema.tables)
+        shown = len(filtered.tables)
+        if shown == 0:
+            self._diagram_view.show_message(
+                "No tables selected.\n\n"
+                "Tick the tables you want on the left, then click “Render selected”."
+            )
+            self._status.setText(
+                f"Loaded {self._loaded_name} — {total} table(s). "
+                "Select tables on the left to render a diagram."
+            )
+            return
+
+        self._diagram_view.set_diagram(mermaid_text)
+        col_count = sum(len(t.columns) for t in filtered.tables)
+        rel_count = len(filtered.relationships)
+        scope = f"{shown} of {total}" if shown != total else f"{total}"
+        self._status.setText(
+            f"Loaded {self._loaded_name} — showing {scope} table(s), "
+            f"{col_count} column(s), {rel_count} relationship(s)."
+        )
 
     def _populate_table(self, rows: list[dict]):
         self._table.setRowCount(0)

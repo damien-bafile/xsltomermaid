@@ -340,6 +340,41 @@ def _derive_relationships(
     return relationships
 
 
+def filter_schema(
+    schema: Schema,
+    selected_names: Iterable[str],
+    include_related: bool = False,
+) -> Schema:
+    """Return a copy of ``schema`` containing only the selected tables.
+
+    ``selected_names`` is matched against table names case-insensitively.
+    Relationships are kept only when *both* endpoints are in the result, so the
+    filtered diagram never dangles an edge to a table that isn't drawn.
+
+    When ``include_related`` is true, any table connected by a foreign key to a
+    selected table (in either direction) is pulled in as well, so a picked table
+    is shown together with what it references and what references it.
+    """
+    wanted = {name.strip().lower() for name in selected_names if name.strip()}
+
+    if include_related and wanted:
+        for rel in schema.relationships:
+            parent = rel.parent_table.lower()
+            child = rel.child_table.lower()
+            if parent in wanted or child in wanted:
+                wanted.add(parent)
+                wanted.add(child)
+
+    tables = [t for t in schema.tables if t.name.lower() in wanted]
+    present = {t.name.lower() for t in tables}
+    relationships = [
+        rel
+        for rel in schema.relationships
+        if rel.parent_table.lower() in present and rel.child_table.lower() in present
+    ]
+    return Schema(tables=tables, relationships=relationships)
+
+
 # ---------------------------------------------------------------------------
 # Mermaid generation
 # ---------------------------------------------------------------------------

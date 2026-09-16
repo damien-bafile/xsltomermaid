@@ -6,6 +6,7 @@ Run: python test_excel_to_mermaid.py   (or: python -m pytest test_excel_to_merma
 from excel_to_mermaid import (
     _parse_reference_table,
     build_schema,
+    filter_schema,
     generate_mermaid,
 )
 
@@ -59,6 +60,36 @@ def test_relationships():
     assert rel.parent_table == "Customer"
     assert rel.child_table == "Order"
     assert rel.label == "CustomerID"
+
+
+def test_filter_schema_keeps_only_selected():
+    schema = build_schema(SAMPLE_ROWS)
+    filtered = filter_schema(schema, ["Customer"])
+    assert [t.name for t in filtered.tables] == ["Customer"]
+    # The FK relationship needs both endpoints, so it's dropped here.
+    assert filtered.relationships == []
+
+
+def test_filter_schema_is_case_insensitive():
+    schema = build_schema(SAMPLE_ROWS)
+    filtered = filter_schema(schema, ["customer", "ORDER"])
+    assert {t.name for t in filtered.tables} == {"Customer", "Order"}
+    assert len(filtered.relationships) == 1
+
+
+def test_filter_schema_include_related_pulls_in_neighbours():
+    schema = build_schema(SAMPLE_ROWS)
+    # Selecting only the child (Order) should pull in the referenced Customer.
+    filtered = filter_schema(schema, ["Order"], include_related=True)
+    assert {t.name for t in filtered.tables} == {"Customer", "Order"}
+    assert len(filtered.relationships) == 1
+
+
+def test_filter_schema_empty_selection():
+    schema = build_schema(SAMPLE_ROWS)
+    filtered = filter_schema(schema, [])
+    assert filtered.tables == []
+    assert filtered.relationships == []
 
 
 def test_generate_mermaid():
