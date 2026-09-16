@@ -11,9 +11,22 @@ import tempfile
 import webbrowser
 
 
+def _normalize_cli_args(argv: list[str] | None) -> list[str]:
+    """Treat optional argv consistently whether it includes program name or not."""
+    if argv is None:
+        return list(sys.argv[1:])
+    args = list(argv)
+    if args and os.path.basename(args[0]) in {
+        os.path.basename(sys.argv[0]),
+        os.path.basename(__file__),
+    }:
+        return args[1:]
+    return args
+
+
 def _configure_headless_env(argv: list[str] | None = None) -> None:
     """Set Qt/WebEngine env vars for screenshot modes before Qt imports."""
-    args = argv if argv is not None else sys.argv[1:]
+    args = _normalize_cli_args(argv)
     headless = "--screenshot" in args or "--screenshot-diagram" in args
     if not headless:
         return
@@ -385,9 +398,10 @@ def main(argv: list[str] | None = None):
         help="Headless: load the file, render the Mermaid ER diagram, and save it as "
         ".png or .svg (by extension), then exit. Works offscreen.",
     )
-    args = parser.parse_args(argv)
+    normalized_argv = _normalize_cli_args(argv)
+    args = parser.parse_args(normalized_argv)
 
-    _configure_headless_env(argv)
+    _configure_headless_env(normalized_argv)
 
     app = QApplication(sys.argv[:1])
     window = MainWindow()
