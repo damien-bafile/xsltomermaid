@@ -12,6 +12,11 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Needed for the WebEngine (Chromium) diagram render to run headless / as root.
+os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+os.environ.setdefault(
+    "QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu --in-process-gpu"
+)
 
 import struct
 import tempfile
@@ -75,9 +80,44 @@ def test_window_screenshot(tmp_path):
     del app  # keep linters quiet; app is a singleton
 
 
+def test_diagram_screenshot(tmp_path):
+    """Render the actual Mermaid ER diagram to PNG and SVG (needs WebEngine)."""
+    import diagram_view
+
+    if not diagram_view.WEBENGINE_AVAILABLE:
+        pytest.skip("PySide6 WebEngine not available")
+
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+
+    png = tmp_path / "diagram.png"
+    window.capture_diagram(str(png))
+    assert png.exists()
+    width, height = _png_size(str(png))
+    assert width > 100 and height > 100, f"diagram PNG looks empty: {width}x{height}"
+
+    svg = tmp_path / "diagram.svg"
+    window.capture_diagram(str(svg))
+    text = svg.read_text(encoding="utf-8")
+    assert text.lstrip().startswith("<svg")
+    # The rendered diagram should mention the tables from the sample.
+    assert "OrderLine" in text and "Customer" in text
+
+    window._diagram_view.cleanup()
+    del app
+
+
 if __name__ == "__main__":
     from pathlib import Path
 
     with tempfile.TemporaryDirectory() as directory:
         test_window_screenshot(Path(directory))
         print("PASS  test_window_screenshot")
+    with tempfile.TemporaryDirectory() as directory:
+        test_diagram_screenshot(Path(directory))
+        print("PASS  test_diagram_screenshot")

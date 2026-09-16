@@ -19,8 +19,10 @@ DefaultValue | ComputedDefinition | Collation | Description
 3. **Groups** rows into tables and derives relationships from `ForeignKeyReference`.
 4. **Generates** a Mermaid `erDiagram` with each table, its columns, `PK`/`FK`
    markers, and one relationship line per foreign key.
-5. Lets you **copy** the Mermaid text, **save** it as `.mmd` or `.md`, or **preview**
-   it rendered in your browser.
+5. **Renders** the diagram live in-app (a "Rendered diagram" tab powered by a
+   locally vendored `mermaid.js` — no internet needed).
+6. Lets you **copy** the Mermaid text, **save** it as `.mmd` / `.md`, **export the
+   rendered diagram** as `.png` / `.svg`, or **preview** it in your browser.
 
 Foreign-key references are parsed flexibly — `dbo.Customer.CustomerID`,
 `Customer.CustomerID`, `Customer(CustomerID)`, and a bare `Customer` all resolve to
@@ -60,16 +62,28 @@ Generate the diagram without the GUI:
 uv run excel_to_mermaid.py sample_schema.xlsx
 ```
 
-## Screenshot (headless self-test)
+## Screenshots (headless self-test)
 
-The app can render its own window to a PNG — handy for CI or verifying the UI
-paints without a display. It uses Qt's offscreen platform, so no screen is needed:
+The app can screenshot **itself** — handy for CI or verifying output without a
+display. Both modes use Qt's offscreen platform, so no screen is needed.
+
+Screenshot the **whole window** (data table + Mermaid source):
 
 ```bash
 QT_QPA_PLATFORM=offscreen uv run main.py sample_schema.xlsx --screenshot window.png
 ```
 
-This loads the file, saves `window.png`, and exits without opening a window.
+Screenshot the **rendered ER diagram** itself (real boxes-and-arrows), as PNG or
+SVG by extension:
+
+```bash
+QT_QPA_PLATFORM=offscreen uv run main.py sample_schema.xlsx --screenshot-diagram diagram.png
+QT_QPA_PLATFORM=offscreen uv run main.py sample_schema.xlsx --screenshot-diagram diagram.svg
+```
+
+The diagram is rendered by the vendored `mermaid.js` in a headless `QWebEngineView`,
+then the resulting `<svg>` is saved directly (SVG) or rasterised with QtSvg (PNG) —
+this works offscreen where a plain window grab of web content would come back blank.
 
 ## Example output
 
@@ -96,10 +110,12 @@ erDiagram
 | File | Purpose |
 |------|---------|
 | `excel_to_mermaid.py` | Pure-Python core: read the sheet, build the schema model, emit Mermaid. No Qt required. |
-| `main.py` | PySide6 GUI with drag-and-drop. |
+| `main.py` | PySide6 GUI with drag-and-drop and the `--screenshot*` CLI modes. |
+| `diagram_view.py` | Renders the Mermaid diagram in a `QWebEngineView` and exports it as SVG/PNG. |
+| `vendor/mermaid.min.js` | Locally bundled Mermaid (MIT) so rendering works offline. |
 | `make_sample.py` | Writes a small `sample_schema.xlsx` for testing. |
 | `test_excel_to_mermaid.py` | Tests for the core (no Qt needed). |
-| `test_screenshot.py` | Headless GUI test — builds the window and screenshots it. |
+| `test_screenshot.py` | Headless tests — screenshots the window and the rendered diagram. |
 | `pyproject.toml` / `uv.lock` | uv project definition and locked dependencies. |
 
 ## Tests

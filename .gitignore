@@ -222,3 +222,7 @@ sample_schema.xlsx
 
 # Generated screenshots
 window.png
+
+# Generated diagram exports
+diagram.png
+diagram.svg

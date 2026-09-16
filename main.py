@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from diagram_view import DiagramView
 from excel_to_mermaid import (
     EXPECTED_HEADERS,
     Schema,
@@ -161,8 +162,12 @@ class MainWindow(QMainWindow):
         self._mermaid_view.setPlaceholderText(
             "The generated Mermaid erDiagram will appear here."
         )
-        tabs.addTab(self._mermaid_view, "Mermaid diagram")
+        tabs.addTab(self._mermaid_view, "Mermaid source")
 
+        self._diagram_view = DiagramView()
+        tabs.addTab(self._diagram_view, "Rendered diagram")
+
+        self._tabs = tabs
         splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(tabs)
         outer.addWidget(splitter, 1)
@@ -172,21 +177,33 @@ class MainWindow(QMainWindow):
         self._copy_btn = QPushButton("Copy Mermaid")
         self._save_mmd_btn = QPushButton("Save .mmd")
         self._save_md_btn = QPushButton("Save .md")
+        self._save_png_btn = QPushButton("Save diagram PNG")
+        self._save_svg_btn = QPushButton("Save diagram SVG")
         self._preview_btn = QPushButton("Preview in browser")
-        for btn in (
+        self._action_buttons = [
             self._copy_btn,
             self._save_mmd_btn,
             self._save_md_btn,
+            self._save_png_btn,
+            self._save_svg_btn,
             self._preview_btn,
-        ):
+        ]
+        for btn in self._action_buttons:
             btn.setEnabled(False)
             buttons.addWidget(btn)
         buttons.addStretch(1)
         outer.addLayout(buttons)
 
+        # Diagram export needs WebEngine; hide those buttons if it's unavailable.
+        if not self._diagram_view.available:
+            self._save_png_btn.setVisible(False)
+            self._save_svg_btn.setVisible(False)
+
         self._copy_btn.clicked.connect(self.copy_mermaid)
         self._save_mmd_btn.clicked.connect(self.save_mmd)
         self._save_md_btn.clicked.connect(self.save_md)
+        self._save_png_btn.clicked.connect(self.save_diagram_png)
+        self._save_svg_btn.clicked.connect(self.save_diagram_svg)
         self._preview_btn.clicked.connect(self.preview_browser)
 
         self.setCentralWidget(central)
@@ -205,6 +222,7 @@ class MainWindow(QMainWindow):
         self._mermaid_text = mermaid_text
         self._populate_table(rows)
         self._mermaid_view.setPlainText(mermaid_text)
+        self._diagram_view.set_diagram(mermaid_text)
 
         table_count = len(schema.tables)
         rel_count = len(schema.relationships)
@@ -213,12 +231,7 @@ class MainWindow(QMainWindow):
             f"Loaded {os.path.basename(path)} — {table_count} table(s), "
             f"{col_count} column(s), {rel_count} relationship(s)."
         )
-        for btn in (
-            self._copy_btn,
-            self._save_mmd_btn,
-            self._save_md_btn,
-            self._preview_btn,
-        ):
+        for btn in self._action_buttons:
             btn.setEnabled(True)
 
     def _populate_table(self, rows: list[dict]):
@@ -274,6 +287,30 @@ class MainWindow(QMainWindow):
             "Opened diagram preview in your browser (needs internet for Mermaid CDN)."
         )
 
+    def save_diagram_png(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save diagram PNG", "diagram.png", "PNG image (*.png)"
+        )
+        if path:
+            try:
+                self._diagram_view.save_png(path)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(self, "Could not save diagram", str(exc))
+                return
+            self._status.setText(f"Saved rendered diagram to {path}")
+
+    def save_diagram_svg(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save diagram SVG", "diagram.svg", "SVG image (*.svg)"
+        )
+        if path:
+            try:
+                self._diagram_view.save_svg(path)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(self, "Could not save diagram", str(exc))
+                return
+            self._status.setText(f"Saved rendered diagram to {path}")
+
     # -- testing helpers ---------------------------------------------------
     def capture(self, path: str) -> str:
         """Render the current window to a PNG and return the saved path.
@@ -290,6 +327,21 @@ class MainWindow(QMainWindow):
             raise RuntimeError(f"Failed to save screenshot to {path}")
         return path
 
+    def capture_diagram(self, path: str) -> str:
+        """Render the Mermaid ER diagram itself and save it (.png or .svg).
+
+        Unlike :meth:`capture` (which grabs the Qt window), this saves the actual
+        rendered ER diagram. Works headless via the vendored mermaid.js + QtSvg.
+        """
+        if not self._diagram_view.available:
+            raise RuntimeError(
+                "Rendering the diagram needs PySide6's WebEngine module "
+                "(install PySide6-Addons)."
+            )
+        if path.lower().endswith(".svg"):
+            return self._diagram_view.save_svg(path)
+        return self._diagram_view.save_png(path)
+
 
 def main(argv: list[str] | None = None):
     import argparse
@@ -305,14 +357,27 @@ def main(argv: list[str] | None = None):
     parser.add_argument(
         "--screenshot",
         metavar="PNG",
-        help="Headless self-test: load the file, save a PNG of the window, and exit "
-        "without showing the GUI. Use with QT_QPA_PLATFORM=offscreen in CI.",
+        help="Headless self-test: load the file, save a PNG of the whole window, "
+        "and exit without showing the GUI. Use with QT_QPA_PLATFORM=offscreen in CI.",
+    )
+    parser.add_argument(
+        "--screenshot-diagram",
+        metavar="FILE",
+        help="Headless: load the file, render the Mermaid ER diagram, and save it as "
+        ".png or .svg (by extension), then exit. Works offscreen.",
     )
     args = parser.parse_args(argv)
 
-    if args.screenshot:
+    headless = bool(args.screenshot or args.screenshot_diagram)
+    if headless:
         # No visible window needed when we only want a screenshot.
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if args.screenshot_diagram and os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        # Chromium (WebEngine) needs these to run headless / as root in CI.
+        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+        os.environ.setdefault(
+            "QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu --in-process-gpu"
+        )
 
     app = QApplication(sys.argv[:1])
     window = MainWindow()
@@ -322,7 +387,14 @@ def main(argv: list[str] | None = None):
     if args.screenshot:
         window.resize(1100, 760)
         saved = window.capture(args.screenshot)
-        print(f"Saved screenshot to {saved}")
+        print(f"Saved window screenshot to {saved}")
+        return 0
+
+    if args.screenshot_diagram:
+        if not args.file:
+            parser.error("--screenshot-diagram requires a file argument to render.")
+        saved = window.capture_diagram(args.screenshot_diagram)
+        print(f"Saved diagram to {saved}")
         return 0
 
     window.show()
