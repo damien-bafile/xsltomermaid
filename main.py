@@ -10,6 +10,25 @@ import sys
 import tempfile
 import webbrowser
 
+
+def _configure_headless_env(argv: list[str] | None = None) -> None:
+    """Set Qt/WebEngine env vars for screenshot modes before Qt imports."""
+    args = argv if argv is not None else sys.argv[1:]
+    headless = "--screenshot" in args or "--screenshot-diagram" in args
+    if not headless:
+        return
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if "--screenshot-diagram" in args and os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        # Chromium (WebEngine) needs these to run headless / as root in CI.
+        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+        os.environ.setdefault(
+            "QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu --in-process-gpu"
+        )
+
+
+_configure_headless_env()
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
@@ -368,16 +387,7 @@ def main(argv: list[str] | None = None):
     )
     args = parser.parse_args(argv)
 
-    headless = bool(args.screenshot or args.screenshot_diagram)
-    if headless:
-        # No visible window needed when we only want a screenshot.
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    if args.screenshot_diagram and os.environ.get("QT_QPA_PLATFORM") == "offscreen":
-        # Chromium (WebEngine) needs these to run headless / as root in CI.
-        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
-        os.environ.setdefault(
-            "QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu --in-process-gpu"
-        )
+    _configure_headless_env(argv)
 
     app = QApplication(sys.argv[:1])
     window = MainWindow()
