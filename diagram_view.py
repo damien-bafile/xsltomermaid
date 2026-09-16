@@ -66,7 +66,8 @@ def _diagram_html(mermaid_text: str, theme: str = "default") -> str:
   window._mermaidDone = false;
   window._mermaidError = null;
   try {{
-    mermaid.initialize({{ startOnLoad: false, securityLevel: 'loose', theme: '{theme}' }});
+    mermaid.initialize({{ startOnLoad: false, securityLevel: 'loose', theme: '{theme}',
+      maxTextSize: 2000000, maxEdges: 10000 }});
     mermaid.run().then(function () {{ window._mermaidDone = true; }})
       .catch(function (e) {{ window._mermaidError = String(e); window._mermaidDone = true; }});
   }} catch (e) {{
@@ -144,7 +145,7 @@ class DiagramView(QWidget):
         loop.exec()
         return box.get("r")
 
-    def current_svg(self, timeout_ms: int = 15000) -> str | None:
+    def current_svg(self, timeout_ms: int = 60000) -> str | None:
         """Block until Mermaid finishes, then return the rendered ``<svg>`` markup.
 
         Returns ``None`` if WebEngine is unavailable or rendering times out.
