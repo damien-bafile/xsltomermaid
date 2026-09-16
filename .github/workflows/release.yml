@@ -1,0 +1,69 @@
+name: Release
+
+# Publishes the Windows exe as a GitHub Release asset (permanent, no-login link).
+# Trigger either by pushing a version tag (e.g. v0.1.0), or manually from the
+# Actions tab / API with the version as input (the release action creates the tag).
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to release (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write  # needed to create the tag, release, and upload assets
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "version=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies (incl. dev / PyInstaller)
+        run: uv sync
+
+      - name: Build one-file executable
+        run: uv run pyinstaller xsltomermaid.spec --noconfirm
+        env:
+          XSLTOMERMAID_ONEFILE: "1"
+
+      - name: Smoke-test the exe (headless)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          uv run python make_sample.py
+          # Windowed GUI exe: Start-Process -Wait so PowerShell blocks until it exits.
+          $p = Start-Process -FilePath ".\dist\xsltomermaid.exe" `
+            -ArgumentList "sample_schema.xlsx", "--screenshot", "window.png" `
+            -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "exe exited with $($p.ExitCode)" }
+          if (-not (Test-Path window.png)) { throw "exe did not produce window.png" }
+          Write-Host "Smoke test OK"
+
+      - name: Name the asset with the version
+        run: Copy-Item dist/xsltomermaid.exe "xsltomermaid-${{ steps.ver.outputs.version }}.exe"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          files: xsltomermaid-*.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true

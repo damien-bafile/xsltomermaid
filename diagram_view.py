@@ -17,6 +17,7 @@ message and :attr:`DiagramView.available` is ``False``.
 from __future__ import annotations
 
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -24,7 +25,20 @@ from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-VENDOR_MERMAID = Path(__file__).resolve().parent / "vendor" / "mermaid.min.js"
+
+def resource_path(relative: str) -> Path:
+    """Resolve a bundled data file, both in dev and inside a PyInstaller build.
+
+    When frozen, PyInstaller unpacks data files under ``sys._MEIPASS``; in a normal
+    checkout they sit next to this module.
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return Path(base) / relative
+    return Path(__file__).resolve().parent / relative
+
+
+VENDOR_MERMAID = resource_path("vendor/mermaid.min.js")
 
 try:
     from PySide6.QtWebEngineCore import QWebEngineSettings

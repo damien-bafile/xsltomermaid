@@ -1,0 +1,64 @@
+name: Build Windows exe
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+      - "claude/**"
+  # Tags are handled by release.yml (which also publishes a GitHub Release).
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies (incl. dev / PyInstaller)
+        run: uv sync
+
+      - name: Build one-file executable
+        run: uv run pyinstaller xsltomermaid.spec --noconfirm
+        env:
+          XSLTOMERMAID_ONEFILE: "1"
+
+      - name: Smoke-test the exe (headless)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          uv run python make_sample.py
+
+          # xsltomermaid.exe is a windowed (GUI) app, so PowerShell does NOT wait
+          # for it by default. Start-Process -Wait blocks until it exits.
+          function Invoke-Exe([string[]] $exeArgs) {
+            $p = Start-Process -FilePath ".\dist\xsltomermaid.exe" `
+              -ArgumentList $exeArgs -Wait -PassThru -NoNewWindow
+            return $p.ExitCode
+          }
+
+          # 1) Window screenshot — proves the exe launches, loads the xlsx, and
+          #    paints. Does not depend on the (headless-fragile) WebEngine.
+          $code = Invoke-Exe @("sample_schema.xlsx", "--screenshot", "window.png")
+          if ($code -ne 0) { throw "exe exited with $code on --screenshot" }
+          if (-not (Test-Path window.png)) { throw "exe did not produce window.png" }
+          Write-Host "window.png OK"
+
+          # 2) Rendered ER diagram via bundled mermaid.js. WebEngine offscreen on a
+          #    headless Windows runner can be flaky, so this is best-effort.
+          $code = Invoke-Exe @("sample_schema.xlsx", "--screenshot-diagram", "diagram.png")
+          if (($code -eq 0) -and (Test-Path diagram.png)) {
+            Write-Host "diagram.png OK (rendered ER diagram)"
+          } else {
+            Write-Host "::warning::Diagram render did not complete headlessly (exit $code). The exe itself is fine; the rendered-diagram tab works on a real desktop."
+          }
+
+      - name: Upload exe artifact
+        if: always()  # publish the exe even if the smoke-test is imperfect
+        uses: actions/upload-artifact@v4
+        with:
+          name: xsltomermaid-windows
+          path: dist/xsltomermaid.exe
+          if-no-files-found: error

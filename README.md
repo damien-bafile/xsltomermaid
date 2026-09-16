@@ -126,3 +126,45 @@ QT_QPA_PLATFORM=offscreen uv run pytest
 
 The core tests run without a display; the screenshot test runs Qt offscreen and
 skips automatically if the GUI stack isn't importable.
+
+## Package as a standalone executable
+
+The app can be frozen into a self-contained executable (bundling Python, PySide6
+incl. QtWebEngine, and the vendored `mermaid.js`) with
+[PyInstaller](https://pyinstaller.org/), driven by `xsltomermaid.spec`:
+
+```bash
+uv sync                              # installs PyInstaller (dev group)
+uv run pyinstaller xsltomermaid.spec --noconfirm
+```
+
+- **One-file (default):** produces a single `dist/xsltomermaid` (or
+  `dist/xsltomermaid.exe` on Windows). Big (~230 MB) because Qt + Chromium are
+  bundled, and slower to start.
+- **One-dir:** set `XSLTOMERMAID_ONEFILE=0` to instead produce
+  `dist/xsltomermaid/` containing the executable plus its libraries — faster to
+  start and the most reliable option for QtWebEngine. Distribute the whole folder
+  (zip it).
+
+> **Build on the target OS.** PyInstaller does not cross-compile — build the
+> Windows `.exe` on Windows, a macOS app on macOS, etc.
+
+### Get a Windows `.exe` without a Windows machine
+
+Two GitHub Actions workflows build the `.exe` on a Windows runner:
+
+- **CI build** (`.github/workflows/build-windows.yml`) — runs on pushes to `main`
+  / `claude/**` and on demand (**Actions** tab → "Build Windows exe" → *Run
+  workflow*). It uploads the exe as a run **artifact** (`xsltomermaid-windows`),
+  which requires a GitHub login and expires after 90 days.
+- **Release** (`.github/workflows/release.yml`) — runs when you push a version tag
+  and publishes the exe as a **GitHub Release** asset with a permanent, no-login
+  download link:
+
+  ```bash
+  git tag v0.1.0
+  git push origin v0.1.0
+  ```
+
+  The asset is named `xsltomermaid-v0.1.0.exe` and appears on the repo's
+  **Releases** page.
