@@ -151,8 +151,20 @@ uv run pyinstaller xsltomermaid.spec --noconfirm
 
 ### Get a Windows `.exe` without a Windows machine
 
-The repo includes a GitHub Actions workflow (`.github/workflows/build-windows.yml`)
-that builds the one-file `.exe` on a Windows runner, smoke-tests it, and uploads it
-as a downloadable artifact. Run it from the **Actions** tab ("Build Windows exe" →
-*Run workflow*), or push a `v*` tag; then download the `xsltomermaid-windows`
-artifact from the run.
+Two GitHub Actions workflows build the `.exe` on a Windows runner:
+
+- **CI build** (`.github/workflows/build-windows.yml`) — runs on pushes to `main`
+  / `claude/**` and on demand (**Actions** tab → "Build Windows exe" → *Run
+  workflow*). It uploads the exe as a run **artifact** (`xsltomermaid-windows`),
+  which requires a GitHub login and expires after 90 days.
+- **Release** (`.github/workflows/release.yml`) — runs when you push a version tag
+  and publishes the exe as a **GitHub Release** asset with a permanent, no-login
+  download link:
+
+  ```bash
+  git tag v0.1.0
+  git push origin v0.1.0
+  ```
+
+  The asset is named `xsltomermaid-v0.1.0.exe` and appears on the repo's
+  **Releases** page.

@@ -3,11 +3,10 @@ name: Build Windows exe
 on:
   workflow_dispatch: {}
   push:
-    tags:
-      - "v*"
     branches:
       - main
       - "claude/**"
+  # Tags are handled by release.yml (which also publishes a GitHub Release).
 
 jobs:
   build:

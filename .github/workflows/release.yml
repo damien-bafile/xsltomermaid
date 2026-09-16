@@ -1,0 +1,51 @@
+name: Release
+
+# Push a version tag (e.g. v0.1.0) to build the Windows exe and publish it as a
+# GitHub Release asset with a permanent, no-login download link.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write  # needed to create the release and upload assets
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies (incl. dev / PyInstaller)
+        run: uv sync
+
+      - name: Build one-file executable
+        run: uv run pyinstaller xsltomermaid.spec --noconfirm
+        env:
+          XSLTOMERMAID_ONEFILE: "1"
+
+      - name: Smoke-test the exe (headless)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          uv run python make_sample.py
+          # Windowed GUI exe: Start-Process -Wait so PowerShell blocks until it exits.
+          $p = Start-Process -FilePath ".\dist\xsltomermaid.exe" `
+            -ArgumentList "sample_schema.xlsx", "--screenshot", "window.png" `
+            -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "exe exited with $($p.ExitCode)" }
+          if (-not (Test-Path window.png)) { throw "exe did not produce window.png" }
+          Write-Host "Smoke test OK"
+
+      - name: Name the asset with the tag
+        run: Copy-Item dist/xsltomermaid.exe "xsltomermaid-${env:GITHUB_REF_NAME}.exe"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: xsltomermaid-*.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true
