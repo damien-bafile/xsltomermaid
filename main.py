@@ -36,7 +36,7 @@ def _configure_headless_env(argv: list[str] | None = None) -> None:
         return
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    if "--screenshot-diagram" in args and os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+    if "--screenshot-diagram" in args:
         # Chromium (WebEngine) needs these to run headless / as root in CI.
         os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
         os.environ.setdefault(
