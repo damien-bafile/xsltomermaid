@@ -1,20 +1,37 @@
 name: Release
 
-# Push a version tag (e.g. v0.1.0) to build the Windows exe and publish it as a
-# GitHub Release asset with a permanent, no-login download link.
+# Publishes the Windows exe as a GitHub Release asset (permanent, no-login link).
+# Trigger either by pushing a version tag (e.g. v0.1.0), or manually from the
+# Actions tab / API with the version as input (the release action creates the tag).
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to release (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
 
 permissions:
-  contents: write  # needed to create the release and upload assets
+  contents: write  # needed to create the tag, release, and upload assets
 
 jobs:
   release:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "version=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -40,12 +57,13 @@ jobs:
           if (-not (Test-Path window.png)) { throw "exe did not produce window.png" }
           Write-Host "Smoke test OK"
 
-      - name: Name the asset with the tag
-        run: Copy-Item dist/xsltomermaid.exe "xsltomermaid-${env:GITHUB_REF_NAME}.exe"
+      - name: Name the asset with the version
+        run: Copy-Item dist/xsltomermaid.exe "xsltomermaid-${{ steps.ver.outputs.version }}.exe"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.version }}
           files: xsltomermaid-*.exe
           generate_release_notes: true
           fail_on_unmatched_files: true
