@@ -49,11 +49,26 @@ _REQUIRED_HEADERS = {"tablename", "columnname"}
 # ---------------------------------------------------------------------------
 # Small value helpers
 # ---------------------------------------------------------------------------
+# Spreadsheet exports from SSMS/Dynamics/etc. commonly write the literal text
+# "NULL" (or "(null)") into an empty cell rather than leaving it blank. Treat a
+# cell whose *entire* value is one of these sentinels as empty, so an empty
+# foreign-key cell doesn't look like a reference to a table called "NULL".
+_NULL_TOKENS = {"null", "(null)"}
+
+
 def _norm(value) -> str:
-    """Return a trimmed string for any cell value (None -> "")."""
+    """Return a trimmed string for any cell value (None -> "").
+
+    A cell whose whole value is a null sentinel such as ``NULL`` is treated as
+    empty; ``NOT NULL`` and other strings that merely contain the word are left
+    untouched.
+    """
     if value is None:
         return ""
-    return str(value).strip()
+    text = str(value).strip()
+    if text.lower() in _NULL_TOKENS:
+        return ""
+    return text
 
 
 def _as_bool(value) -> bool:
