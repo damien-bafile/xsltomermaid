@@ -16,10 +16,14 @@ def _normalize_cli_args(argv: list[str] | None) -> list[str]:
     if argv is None:
         return list(sys.argv[1:])
     args = list(argv)
-    if args and os.path.basename(args[0]) in {
+    script_names = {
+        sys.argv[0],
         os.path.basename(sys.argv[0]),
+        __file__,
+        os.path.abspath(__file__),
         os.path.basename(__file__),
-    }:
+    }
+    if args and args[0] in script_names:
         return args[1:]
     return args
 
