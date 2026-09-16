@@ -46,7 +46,7 @@ def _configure_headless_env(argv: list[str] | None = None) -> None:
 
 _configure_headless_env()
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
@@ -56,6 +56,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QTableWidget,
@@ -161,6 +162,46 @@ class DropArea(QLabel):
         )
 
 
+class LoadWorker(QThread):
+    """Read + parse a spreadsheet off the UI thread, reporting progress.
+
+    The heavy work (streaming the workbook and building the schema) runs here so
+    the window stays responsive and can show a live progress bar. Only the final
+    ``loaded`` payload is handed back to the UI thread, which then touches the
+    widgets.
+    """
+
+    progressed = Signal(int)  # overall percentage, 0..100
+    staged = Signal(str)  # human-readable phase label
+    loaded = Signal(object, object, str)  # rows, schema, mermaid_text
+    failed = Signal(str)  # error message
+
+    def __init__(self, path: str, parent=None):
+        super().__init__(parent)
+        self._path = path
+
+    def run(self):  # noqa: D401 - QThread entry point
+        try:
+            self.staged.emit("Reading file…")
+            rows = read_rows(
+                self._path,
+                progress=lambda fraction: self.progressed.emit(int(fraction * 50)),
+            )
+            self.staged.emit("Building schema…")
+            schema = build_schema(
+                rows,
+                progress=lambda fraction: self.progressed.emit(
+                    50 + int(fraction * 40)
+                ),
+            )
+            self.staged.emit("Generating diagram…")
+            mermaid_text = generate_mermaid(schema)
+            self.progressed.emit(95)
+            self.loaded.emit(rows, schema, mermaid_text)
+        except Exception as exc:  # noqa: BLE001 - surface any parse error to the UI
+            self.failed.emit(str(exc))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -169,18 +210,27 @@ class MainWindow(QMainWindow):
 
         self._schema: Schema | None = None
         self._mermaid_text: str = ""
+        self._worker: LoadWorker | None = None
+        self._pending_path: str = ""
 
         central = QWidget()
         outer = QVBoxLayout(central)
         outer.setContentsMargins(16, 16, 16, 16)
         outer.setSpacing(12)
 
-        self._drop = DropArea(self.load_file)
+        self._drop = DropArea(self.load_file_async)
         outer.addWidget(self._drop)
 
         self._status = QLabel("No file loaded.")
         self._status.setStyleSheet("color: #6b7078;")
         outer.addWidget(self._status)
+
+        # Progress bar for loading a file; hidden until a load is in flight.
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 100)
+        self._progress.setTextVisible(True)
+        self._progress.setVisible(False)
+        outer.addWidget(self._progress)
 
         # Tabs: extracted data table + generated Mermaid text.
         tabs = QTabWidget()
@@ -246,6 +296,7 @@ class MainWindow(QMainWindow):
 
     # -- loading -----------------------------------------------------------
     def load_file(self, path: str):
+        """Load a file synchronously (used by tests and the CLI)."""
         try:
             rows = read_rows(path)
             schema = build_schema(rows)
@@ -254,6 +305,54 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Could not read file", str(exc))
             return
 
+        self._apply_loaded(path, rows, schema, mermaid_text)
+
+    def load_file_async(self, path: str):
+        """Load a file on a background thread, showing a progress bar.
+
+        Keeps the window responsive for large spreadsheets. When the worker
+        finishes, the results are applied on the UI thread via
+        :meth:`_apply_loaded`.
+        """
+        if self._worker is not None and self._worker.isRunning():
+            return  # a load is already in progress; ignore extra drops/clicks
+
+        self._pending_path = path
+        self._set_loading(True, os.path.basename(path))
+
+        worker = LoadWorker(path, self)
+        worker.progressed.connect(self._progress.setValue)
+        worker.staged.connect(self._status.setText)
+        worker.loaded.connect(self._on_loaded)
+        worker.failed.connect(self._on_load_failed)
+        worker.finished.connect(self._on_worker_finished)
+        self._worker = worker
+        worker.start()
+
+    def _on_loaded(self, rows, schema, mermaid_text):
+        self._status.setText("Populating view…")
+        self._progress.setValue(96)
+        self._apply_loaded(self._pending_path, rows, schema, mermaid_text)
+        self._progress.setValue(100)
+
+    def _on_load_failed(self, message: str):
+        QMessageBox.critical(self, "Could not read file", message)
+        self._status.setText("No file loaded.")
+
+    def _on_worker_finished(self):
+        self._set_loading(False)
+        self._worker = None
+
+    def _set_loading(self, loading: bool, name: str = ""):
+        """Toggle the progress bar and block re-entrant loads while running."""
+        self._progress.setVisible(loading)
+        self._drop.setEnabled(not loading)
+        if loading:
+            self._progress.setValue(0)
+            self._status.setText(f"Loading {name}…")
+
+    def _apply_loaded(self, path: str, rows: list[dict], schema: Schema, mermaid_text: str):
+        """Push a loaded schema into the widgets (must run on the UI thread)."""
         self._schema = schema
         self._mermaid_text = mermaid_text
         self._populate_table(rows)

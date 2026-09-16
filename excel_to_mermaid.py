@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Iterable
+from typing import Callable, Iterable
+
+# A progress callback receives a fraction in the range 0.0 .. 1.0.
+ProgressCallback = Callable[[float], None]
 
 # The canonical headers, in the order they appear in the reference sheet.
 EXPECTED_HEADERS: list[str] = [
@@ -129,11 +132,14 @@ class Schema:
 # ---------------------------------------------------------------------------
 # Reading the spreadsheet
 # ---------------------------------------------------------------------------
-def read_rows(path: str) -> list[dict]:
+def read_rows(path: str, progress: ProgressCallback | None = None) -> list[dict]:
     """Read an .xlsx/.xlsm file and return a list of ``{header: value}`` dicts.
 
     The header row is located by scanning for a row that contains the required
     headers, which lets the sheet have a title/banner above the real headers.
+
+    ``progress``, if given, is called with a fraction (0.0 .. 1.0) as the rows
+    are streamed in, so a caller can drive a progress bar for large files.
     """
     try:
         from openpyxl import load_workbook
@@ -146,8 +152,18 @@ def read_rows(path: str) -> list[dict]:
     workbook = load_workbook(path, data_only=True, read_only=True)
     sheet = workbook.active
 
-    grid = [list(row) for row in sheet.iter_rows(values_only=True)]
+    # ``max_row`` is available for most files; when it isn't we simply can't
+    # report a fraction, so the caller falls back to an indeterminate bar.
+    total = sheet.max_row if isinstance(sheet.max_row, int) and sheet.max_row > 0 else 0
+    grid = []
+    for index, row in enumerate(sheet.iter_rows(values_only=True)):
+        grid.append(list(row))
+        # Report every so often to keep the UI responsive without flooding it.
+        if progress is not None and total and index % 200 == 0:
+            progress(min(index / total, 1.0))
     workbook.close()
+    if progress is not None:
+        progress(1.0)
 
     header_index = _find_header_row(grid)
     if header_index is None:
@@ -190,12 +206,22 @@ def _build_getter(row: dict):
     return get
 
 
-def build_schema(rows: Iterable[dict]) -> Schema:
-    """Turn raw ``{header: value}`` rows into a :class:`Schema`."""
+def build_schema(
+    rows: Iterable[dict], progress: ProgressCallback | None = None
+) -> Schema:
+    """Turn raw ``{header: value}`` rows into a :class:`Schema`.
+
+    ``progress``, if given, is called with a fraction (0.0 .. 1.0) as rows are
+    processed, so a caller can drive a progress bar for large schemas.
+    """
     tables: dict[str, Table] = {}
     order_by_full: dict[str, Table] = {}
 
-    for row in rows:
+    rows = list(rows)
+    total = len(rows)
+    for index, row in enumerate(rows):
+        if progress is not None and total and index % 200 == 0:
+            progress(index / total)
         get = _build_getter(row)
         table_name = _norm(get("TableName"))
         column_name = _norm(get("ColumnName"))
@@ -236,6 +262,9 @@ def build_schema(rows: Iterable[dict]) -> Schema:
                 description=_norm(get("Description")),
             )
         )
+
+    if progress is not None:
+        progress(1.0)
 
     ordered_tables = sorted(tables.values(), key=lambda t: (t.schema.lower(), t.name.lower()))
     for table in ordered_tables:
