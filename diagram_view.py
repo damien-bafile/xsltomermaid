@@ -16,6 +16,7 @@ message and :attr:`DiagramView.available` is ``False``.
 
 from __future__ import annotations
 
+import html
 import shutil
 import sys
 import tempfile
@@ -135,6 +136,21 @@ class DiagramView(QWidget):
             return
         html_path = Path(self._workdir) / "diagram.html"
         html_path.write_text(_diagram_html(mermaid_text, theme), encoding="utf-8")
+        self._view.load(QUrl.fromLocalFile(str(html_path)))
+
+    def show_message(self, message: str):
+        """Show a plain text message in place of a diagram (e.g. a hint)."""
+        if not self.available or self._view is None or self._workdir is None:
+            return
+        page = (
+            "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
+            "html,body{margin:0;padding:32px;background:#ffffff;color:#6b7078;"
+            "font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;"
+            "font-size:15px;line-height:1.5}</style></head><body>"
+            f"{html.escape(message)}</body></html>"
+        )
+        html_path = Path(self._workdir) / "message.html"
+        html_path.write_text(page, encoding="utf-8")
         self._view.load(QUrl.fromLocalFile(str(html_path)))
 
     def _run_js(self, script: str, timeout_ms: int = 5000):
