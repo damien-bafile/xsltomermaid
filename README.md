@@ -126,3 +126,33 @@ QT_QPA_PLATFORM=offscreen uv run pytest
 
 The core tests run without a display; the screenshot test runs Qt offscreen and
 skips automatically if the GUI stack isn't importable.
+
+## Package as a standalone executable
+
+The app can be frozen into a self-contained executable (bundling Python, PySide6
+incl. QtWebEngine, and the vendored `mermaid.js`) with
+[PyInstaller](https://pyinstaller.org/), driven by `xsltomermaid.spec`:
+
+```bash
+uv sync                              # installs PyInstaller (dev group)
+uv run pyinstaller xsltomermaid.spec --noconfirm
+```
+
+- **One-file (default):** produces a single `dist/xsltomermaid` (or
+  `dist/xsltomermaid.exe` on Windows). Big (~230 MB) because Qt + Chromium are
+  bundled, and slower to start.
+- **One-dir:** set `XSLTOMERMAID_ONEFILE=0` to instead produce
+  `dist/xsltomermaid/` containing the executable plus its libraries — faster to
+  start and the most reliable option for QtWebEngine. Distribute the whole folder
+  (zip it).
+
+> **Build on the target OS.** PyInstaller does not cross-compile — build the
+> Windows `.exe` on Windows, a macOS app on macOS, etc.
+
+### Get a Windows `.exe` without a Windows machine
+
+The repo includes a GitHub Actions workflow (`.github/workflows/build-windows.yml`)
+that builds the one-file `.exe` on a Windows runner, smoke-tests it, and uploads it
+as a downloadable artifact. Run it from the **Actions** tab ("Build Windows exe" →
+*Run workflow*), or push a `v*` tag; then download the `xsltomermaid-windows`
+artifact from the run.

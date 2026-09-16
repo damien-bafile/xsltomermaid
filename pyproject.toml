@@ -15,6 +15,7 @@ xsltomermaid = "main:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pyinstaller>=6.6",
 ]
 
 [tool.uv]

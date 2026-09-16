@@ -1,0 +1,42 @@
+name: Build Windows exe
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "v*"
+    branches:
+      - main
+      - "claude/**"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies (incl. dev / PyInstaller)
+        run: uv sync
+
+      - name: Build one-file executable
+        run: uv run pyinstaller xsltomermaid.spec --noconfirm
+        env:
+          XSLTOMERMAID_ONEFILE: "1"
+
+      - name: Smoke-test the exe (render a diagram headless)
+        run: |
+          uv run python make_sample.py
+          .\dist\xsltomermaid.exe sample_schema.xlsx --screenshot-diagram diagram.png
+          if (-not (Test-Path diagram.png)) { throw "exe did not produce diagram.png" }
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Upload exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xsltomermaid-windows
+          path: dist/xsltomermaid.exe
+          if-no-files-found: error
