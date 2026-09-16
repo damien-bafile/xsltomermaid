@@ -26,32 +26,50 @@ Foreign-key references are parsed flexibly — `dbo.Customer.CustomerID`,
 `Customer.CustomerID`, `Customer(CustomerID)`, and a bare `Customer` all resolve to
 the `Customer` table.
 
-## Install
+## Install & run (uv)
+
+This project uses [uv](https://docs.astral.sh/uv/). No manual venv needed — `uv`
+creates and manages it from `pyproject.toml`/`uv.lock`.
 
 ```bash
-pip install -r requirements.txt
-```
-
-## Run
-
-```bash
-python main.py
+uv sync            # install dependencies (incl. dev tools) into .venv
+uv run main.py     # launch the GUI
 ```
 
 Generate a sample workbook to try it out:
 
 ```bash
-python make_sample.py   # writes sample_schema.xlsx
-python main.py          # then drag sample_schema.xlsx onto the window
+uv run make_sample.py   # writes sample_schema.xlsx
+uv run main.py          # then drag sample_schema.xlsx onto the window
 ```
+
+You can also pass a file to auto-load on startup:
+
+```bash
+uv run main.py sample_schema.xlsx
+```
+
+> Prefer plain pip? `pip install -r requirements.txt` still works; `requirements.txt`
+> mirrors the runtime dependencies in `pyproject.toml`.
 
 ## Command line
 
-You can also generate the diagram without the GUI:
+Generate the diagram without the GUI:
 
 ```bash
-python excel_to_mermaid.py sample_schema.xlsx
+uv run excel_to_mermaid.py sample_schema.xlsx
 ```
+
+## Screenshot (headless self-test)
+
+The app can render its own window to a PNG — handy for CI or verifying the UI
+paints without a display. It uses Qt's offscreen platform, so no screen is needed:
+
+```bash
+QT_QPA_PLATFORM=offscreen uv run main.py sample_schema.xlsx --screenshot window.png
+```
+
+This loads the file, saves `window.png`, and exits without opening a window.
 
 ## Example output
 
@@ -80,10 +98,15 @@ erDiagram
 | `excel_to_mermaid.py` | Pure-Python core: read the sheet, build the schema model, emit Mermaid. No Qt required. |
 | `main.py` | PySide6 GUI with drag-and-drop. |
 | `make_sample.py` | Writes a small `sample_schema.xlsx` for testing. |
-| `test_excel_to_mermaid.py` | Tests for the core (run `python test_excel_to_mermaid.py`). |
+| `test_excel_to_mermaid.py` | Tests for the core (no Qt needed). |
+| `test_screenshot.py` | Headless GUI test — builds the window and screenshots it. |
+| `pyproject.toml` / `uv.lock` | uv project definition and locked dependencies. |
 
 ## Tests
 
 ```bash
-python test_excel_to_mermaid.py
+QT_QPA_PLATFORM=offscreen uv run pytest
 ```
+
+The core tests run without a display; the screenshot test runs Qt offscreen and
+skips automatically if the GUI stack isn't importable.

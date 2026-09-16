@@ -274,13 +274,60 @@ class MainWindow(QMainWindow):
             "Opened diagram preview in your browser (needs internet for Mermaid CDN)."
         )
 
+    # -- testing helpers ---------------------------------------------------
+    def capture(self, path: str) -> str:
+        """Render the current window to a PNG and return the saved path.
 
-def main():
-    app = QApplication(sys.argv)
+        Works headless (with ``QT_QPA_PLATFORM=offscreen``) so it can be used in
+        automated tests / CI to verify the UI actually paints.
+        """
+        app = QApplication.instance()
+        if app is not None:
+            # Let layout, resizing and painting settle before grabbing.
+            app.processEvents()
+        pixmap = self.grab()
+        if not pixmap.save(path, "PNG"):
+            raise RuntimeError(f"Failed to save screenshot to {path}")
+        return path
+
+
+def main(argv: list[str] | None = None):
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Excel database-schema → Mermaid ER diagram (Qt app)."
+    )
+    parser.add_argument(
+        "file",
+        nargs="?",
+        help="Optional Excel file to load on startup (.xlsx/.xlsm).",
+    )
+    parser.add_argument(
+        "--screenshot",
+        metavar="PNG",
+        help="Headless self-test: load the file, save a PNG of the window, and exit "
+        "without showing the GUI. Use with QT_QPA_PLATFORM=offscreen in CI.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.screenshot:
+        # No visible window needed when we only want a screenshot.
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    app = QApplication(sys.argv[:1])
     window = MainWindow()
+    if args.file:
+        window.load_file(args.file)
+
+    if args.screenshot:
+        window.resize(1100, 760)
+        saved = window.capture(args.screenshot)
+        print(f"Saved screenshot to {saved}")
+        return 0
+
     window.show()
-    sys.exit(app.exec())
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
