@@ -86,6 +86,10 @@ from excel_to_mermaid import (
 AUTO_RENDER_LIMIT = 25
 # Rendering more than this many tables at once prompts a confirmation first.
 RENDER_WARN_LIMIT = 60
+# Mermaid refuses to render past its own ``maxTextSize`` (2,000,000 chars, set in
+# diagram_view). Stay under it so we can show a helpful message instead of
+# Mermaid's cryptic "Maximum text size in diagram exceeded".
+MAX_RENDER_CHARS = 1_800_000
 
 _ACCEPTED_SUFFIXES = (".xlsx", ".xlsm", ".xltx", ".xltm")
 
@@ -529,10 +533,29 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self._diagram_view.set_diagram(mermaid_text)
         col_count = sum(len(t.columns) for t in filtered.tables)
         rel_count = len(filtered.relationships)
         scope = f"{shown} of {total}" if shown != total else f"{total}"
+
+        # Too big for Mermaid to render inline — show guidance instead of letting
+        # it fail with "Maximum text size in diagram exceeded". The Mermaid source
+        # tab and the text/markdown exports still hold the full selection.
+        if len(mermaid_text) > MAX_RENDER_CHARS:
+            self._diagram_view.show_message(
+                f"This selection is too large to render as a diagram "
+                f"({shown} tables, {col_count} columns — about "
+                f"{len(mermaid_text) // 1000:,} KB of Mermaid).\n\n"
+                "Narrow it down with the filter and pick fewer tables, then click "
+                "“Render selected”. The full selection is still available in the "
+                "“Mermaid source” tab and via Save .mmd / .md."
+            )
+            self._status.setText(
+                f"Loaded {self._loaded_name} — {scope} table(s) selected, "
+                f"{col_count} column(s): too large to render (select fewer tables)."
+            )
+            return
+
+        self._diagram_view.set_diagram(mermaid_text)
         self._status.setText(
             f"Loaded {self._loaded_name} — showing {scope} table(s), "
             f"{col_count} column(s), {rel_count} relationship(s)."
