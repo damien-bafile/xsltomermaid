@@ -10,6 +10,42 @@ import sys
 import tempfile
 import webbrowser
 
+
+def _normalize_cli_args(argv: list[str] | None) -> list[str]:
+    """Treat optional argv consistently whether it includes program name or not."""
+    if argv is None:
+        return list(sys.argv[1:])
+    args = list(argv)
+    script_names = {
+        sys.argv[0],
+        os.path.basename(sys.argv[0]),
+        __file__,
+        os.path.abspath(__file__),
+        os.path.basename(__file__),
+    }
+    if args and args[0] in script_names:
+        return args[1:]
+    return args
+
+
+def _configure_headless_env(argv: list[str] | None = None) -> None:
+    """Set Qt/WebEngine env vars for screenshot modes before Qt imports."""
+    args = _normalize_cli_args(argv)
+    headless = "--screenshot" in args or "--screenshot-diagram" in args
+    if not headless:
+        return
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if "--screenshot-diagram" in args:
+        # Chromium (WebEngine) needs these to run headless / as root in CI.
+        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+        os.environ.setdefault(
+            "QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu --in-process-gpu"
+        )
+
+
+_configure_headless_env()
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
@@ -366,18 +402,10 @@ def main(argv: list[str] | None = None):
         help="Headless: load the file, render the Mermaid ER diagram, and save it as "
         ".png or .svg (by extension), then exit. Works offscreen.",
     )
-    args = parser.parse_args(argv)
+    normalized_argv = _normalize_cli_args(argv)
+    args = parser.parse_args(normalized_argv)
 
-    headless = bool(args.screenshot or args.screenshot_diagram)
-    if headless:
-        # No visible window needed when we only want a screenshot.
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    if args.screenshot_diagram and os.environ.get("QT_QPA_PLATFORM") == "offscreen":
-        # Chromium (WebEngine) needs these to run headless / as root in CI.
-        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
-        os.environ.setdefault(
-            "QTWEBENGINE_CHROMIUM_FLAGS", "--no-sandbox --disable-gpu --in-process-gpu"
-        )
+    _configure_headless_env(normalized_argv)
 
     app = QApplication(sys.argv[:1])
     window = MainWindow()

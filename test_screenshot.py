@@ -10,6 +10,8 @@ Run: QT_QPA_PLATFORM=offscreen python test_screenshot.py
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # Needed for the WebEngine (Chromium) diagram render to run headless / as root.
@@ -110,6 +112,42 @@ def test_diagram_screenshot(tmp_path):
 
     window._diagram_view.cleanup()
     del app
+
+
+def test_module_import_sets_webengine_flags_for_cli_mode():
+    """`--screenshot-diagram` should preconfigure WebEngine flags at import time."""
+    cmd = [
+        sys.executable,
+        "-c",
+        (
+            "import os, sys; "
+            "sys.argv=['main.py','sample.xlsx','--screenshot-diagram','diagram.png']; "
+            "import main; "
+            "print(os.environ.get('QT_QPA_PLATFORM','')); "
+            "print(os.environ.get('QTWEBENGINE_DISABLE_SANDBOX','')); "
+            "print(os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS','')); "
+        ),
+    ]
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k != "QT_QPA_PLATFORM" and not k.startswith("QTWEBENGINE_")
+    }
+    proc = subprocess.run(
+        cmd,
+        cwd=os.path.dirname(__file__),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    lines = [line.strip() for line in proc.stdout.splitlines()]
+    assert lines[:3] == [
+        "offscreen",
+        "1",
+        "--no-sandbox --disable-gpu --in-process-gpu",
+    ]
 
 
 if __name__ == "__main__":
