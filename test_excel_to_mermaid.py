@@ -6,6 +6,7 @@ Run: python test_excel_to_mermaid.py   (or: python -m pytest test_excel_to_merma
 from excel_to_mermaid import (
     _parse_reference_table,
     build_schema,
+    filter_columns,
     filter_schema,
     generate_mermaid,
 )
@@ -90,6 +91,24 @@ def test_filter_schema_empty_selection():
     filtered = filter_schema(schema, [])
     assert filtered.tables == []
     assert filtered.relationships == []
+
+
+def test_filter_columns_drops_selected_columns():
+    schema = build_schema(SAMPLE_ROWS)
+    # Drop the "Name" column from Customer.
+    filtered = filter_columns(schema, {("customer", "name")})
+    customer = next(t for t in filtered.tables if t.name == "Customer")
+    assert [c.name for c in customer.columns] == ["CustomerID"]
+    # Other tables are untouched.
+    order = next(t for t in filtered.tables if t.name == "Order")
+    assert len(order.columns) == 3
+    # Relationships are kept even if a column was dropped.
+    assert len(filtered.relationships) == 1
+
+
+def test_filter_columns_empty_is_noop():
+    schema = build_schema(SAMPLE_ROWS)
+    assert filter_columns(schema, set()) is schema
 
 
 def test_generate_mermaid():

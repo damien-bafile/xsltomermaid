@@ -66,6 +66,8 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -74,7 +76,9 @@ from diagram_view import DiagramView
 from excel_to_mermaid import (
     EXPECTED_HEADERS,
     Schema,
+    Table,
     build_schema,
+    filter_columns,
     filter_schema,
     generate_mermaid,
     read_rows,
@@ -90,6 +94,9 @@ RENDER_WARN_LIMIT = 60
 # diagram_view). Stay under it so we can show a helpful message instead of
 # Mermaid's cryptic "Maximum text size in diagram exceeded".
 MAX_RENDER_CHARS = 1_800_000
+# Building a checkable tree of every column gets heavy; above this many columns
+# in the current selection we skip it and ask the user to narrow the tables.
+COLUMN_TREE_LIMIT = 4000
 
 _ACCEPTED_SUFFIXES = (".xlsx", ".xlsm", ".xltx", ".xltm")
 
@@ -317,6 +324,193 @@ class TableSelector(QWidget):
         self._count.setText(f"{selected} of {total} selected")
 
 
+class ColumnSelector(QWidget):
+    """A tab with a checkable tree (table → columns) to choose diagram columns.
+
+    Owns the set of *excluded* ``(table, column)`` pairs — columns are included
+    unless unticked — so the choice survives re-rendering and changing which
+    tables are shown.
+    """
+
+    applied = Signal()  # user asked to re-render with the current column choice
+
+    # Item data roles.
+    _ROLE_KIND = Qt.UserRole  # "table" | "column"
+    _ROLE_KEYS = Qt.UserRole + 1  # (table_lower, column_lower, is_key)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._excluded: set[tuple[str, str]] = set()
+        self._signature: tuple[str, ...] | None = None
+        self._updating = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        self._hint = QLabel(
+            "Load a file and render some tables, then choose which columns to "
+            "include here."
+        )
+        self._hint.setWordWrap(True)
+        self._hint.setStyleSheet("color: #6b7078;")
+        layout.addWidget(self._hint)
+
+        self._filter = QLineEdit()
+        self._filter.setPlaceholderText("Filter columns…")
+        self._filter.setClearButtonEnabled(True)
+        self._filter.textChanged.connect(self._apply_filter_text)
+        layout.addWidget(self._filter)
+
+        self._tree = QTreeWidget()
+        self._tree.setHeaderHidden(True)
+        self._tree.setUniformRowHeights(True)
+        self._tree.itemChanged.connect(self._on_item_changed)
+        layout.addWidget(self._tree, 1)
+
+        self._count = QLabel("0 of 0 columns included")
+        self._count.setStyleSheet("color: #6b7078;")
+        layout.addWidget(self._count)
+
+        button_row = QHBoxLayout()
+        all_btn = QPushButton("All")
+        none_btn = QPushButton("None")
+        keys_btn = QPushButton("Keys only")
+        keys_btn.setToolTip("Include only primary-key and foreign-key columns.")
+        all_btn.clicked.connect(lambda: self._bulk("all"))
+        none_btn.clicked.connect(lambda: self._bulk("none"))
+        keys_btn.clicked.connect(lambda: self._bulk("keys"))
+        button_row.addWidget(all_btn)
+        button_row.addWidget(none_btn)
+        button_row.addWidget(keys_btn)
+        layout.addLayout(button_row)
+
+        apply_btn = QPushButton("Apply to diagram")
+        apply_btn.clicked.connect(lambda: self.applied.emit())
+        layout.addWidget(apply_btn)
+
+    # -- population --------------------------------------------------------
+    def set_tables(self, tables: list[Table]):
+        """Rebuild the tree for ``tables`` unless it already shows exactly them.
+
+        The excluded set persists, so previously-unticked columns stay unticked
+        and columns new to the selection default to included.
+        """
+        signature = tuple(f"{t.schema}.{t.name}" for t in tables)
+        total_columns = sum(len(t.columns) for t in tables)
+
+        if total_columns > COLUMN_TREE_LIMIT:
+            self._tree.clear()
+            self._tree.setVisible(False)
+            self._filter.setVisible(False)
+            self._hint.setText(
+                f"This selection has {total_columns:,} columns — too many to list. "
+                "Narrow the tables on the left, then come back to pick columns."
+            )
+            self._hint.setVisible(True)
+            self._signature = None
+            self._update_count()
+            return
+
+        # Same tables as last time → keep the tree (and the user's live edits).
+        if signature == self._signature and self._tree.isVisible():
+            return
+
+        self._signature = signature
+        self._filter.setVisible(True)
+        self._tree.setVisible(True)
+        self._hint.setVisible(not tables)
+        if not tables:
+            self._hint.setText(
+                "Load a file and render some tables, then choose which columns to "
+                "include here."
+            )
+
+        self._updating = True
+        self._tree.clear()
+        for table in tables:
+            key = table.name.lower()
+            parent = QTreeWidgetItem(self._tree, [table.name])
+            parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+            parent.setData(0, self._ROLE_KIND, "table")
+            for column in table.columns:
+                child = QTreeWidgetItem(parent, [column.name])
+                child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                is_key = bool(column.is_primary_key or column.foreign_key_reference)
+                child.setData(0, self._ROLE_KIND, "column")
+                child.setData(0, self._ROLE_KEYS, (key, column.name.lower(), is_key))
+                excluded = (key, column.name.lower()) in self._excluded
+                child.setCheckState(0, Qt.Unchecked if excluded else Qt.Checked)
+        self._tree.expandAll()
+        self._updating = False
+        self._apply_filter_text(self._filter.text())
+        self._update_count()
+
+    # -- interaction -------------------------------------------------------
+    def _on_item_changed(self, item, _column=0):
+        if self._updating:
+            return
+        if item.data(0, self._ROLE_KIND) != "column":
+            return  # parent (table) toggles cascade to children via auto-tristate
+        table_key, col_key, _is_key = item.data(0, self._ROLE_KEYS)
+        pair = (table_key, col_key)
+        if item.checkState(0) == Qt.Checked:
+            self._excluded.discard(pair)
+        else:
+            self._excluded.add(pair)
+        self._update_count()
+
+    def _bulk(self, mode: str):
+        self._updating = True
+        for parent in self._top_items():
+            for child in self._children(parent):
+                table_key, col_key, is_key = child.data(0, self._ROLE_KEYS)
+                if mode == "all":
+                    keep = True
+                elif mode == "none":
+                    keep = False
+                else:  # keys
+                    keep = is_key
+                child.setCheckState(0, Qt.Checked if keep else Qt.Unchecked)
+                if keep:
+                    self._excluded.discard((table_key, col_key))
+                else:
+                    self._excluded.add((table_key, col_key))
+        self._updating = False
+        self._update_count()
+
+    def _apply_filter_text(self, text: str):
+        needle = text.strip().lower()
+        for parent in self._top_items():
+            any_visible = False
+            for child in self._children(parent):
+                hidden = needle not in child.text(0).lower()
+                child.setHidden(hidden)
+                any_visible = any_visible or not hidden
+            parent.setHidden(needle != "" and not any_visible)
+
+    # -- helpers -----------------------------------------------------------
+    def _top_items(self):
+        return (self._tree.topLevelItem(i) for i in range(self._tree.topLevelItemCount()))
+
+    @staticmethod
+    def _children(parent):
+        return (parent.child(i) for i in range(parent.childCount()))
+
+    def excluded_pairs(self) -> set[tuple[str, str]]:
+        return set(self._excluded)
+
+    def _update_count(self):
+        total = 0
+        included = 0
+        for parent in self._top_items():
+            for child in self._children(parent):
+                total += 1
+                if child.checkState(0) == Qt.Checked:
+                    included += 1
+        self._count.setText(f"{included} of {total} columns included")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -365,6 +559,10 @@ class MainWindow(QMainWindow):
             "The generated Mermaid erDiagram will appear here."
         )
         tabs.addTab(self._mermaid_view, "Mermaid source")
+
+        self._columns = ColumnSelector()
+        self._columns.applied.connect(self._render_selection)
+        tabs.addTab(self._columns, "Columns")
 
         self._diagram_view = DiagramView()
         tabs.addTab(self._diagram_view, "Rendered diagram")
@@ -516,12 +714,18 @@ class MainWindow(QMainWindow):
         filtered = filter_schema(
             self._schema, names, include_related=self._selector.include_related()
         )
-        mermaid_text = generate_mermaid(filtered)
+
+        # Refresh the column picker for the tables now in play, then apply the
+        # user's column choices on top of the table filter.
+        self._columns.set_tables(filtered.tables)
+        final = filter_columns(filtered, self._columns.excluded_pairs())
+
+        mermaid_text = generate_mermaid(final)
         self._mermaid_text = mermaid_text
         self._mermaid_view.setPlainText(mermaid_text)
 
         total = len(self._schema.tables)
-        shown = len(filtered.tables)
+        shown = len(final.tables)
         if shown == 0:
             self._diagram_view.show_message(
                 "No tables selected.\n\n"
@@ -533,8 +737,8 @@ class MainWindow(QMainWindow):
             )
             return
 
-        col_count = sum(len(t.columns) for t in filtered.tables)
-        rel_count = len(filtered.relationships)
+        col_count = sum(len(t.columns) for t in final.tables)
+        rel_count = len(final.relationships)
         scope = f"{shown} of {total}" if shown != total else f"{total}"
 
         # Too big for Mermaid to render inline — show guidance instead of letting

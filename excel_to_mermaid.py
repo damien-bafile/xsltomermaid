@@ -375,6 +375,30 @@ def filter_schema(
     return Schema(tables=tables, relationships=relationships)
 
 
+def filter_columns(
+    schema: Schema, excluded: set[tuple[str, str]]
+) -> Schema:
+    """Return a copy of ``schema`` with specific columns dropped.
+
+    ``excluded`` is a set of ``(table_name_lower, column_name_lower)`` pairs; any
+    column matching one is left out of its table. Relationships are kept as-is
+    (they connect tables, not individual columns), so hiding a foreign-key
+    column doesn't remove the edge it implied.
+    """
+    if not excluded:
+        return schema
+
+    new_tables = []
+    for table in schema.tables:
+        kept = [
+            column
+            for column in table.columns
+            if (table.name.lower(), column.name.lower()) not in excluded
+        ]
+        new_tables.append(Table(schema=table.schema, name=table.name, columns=kept))
+    return Schema(tables=new_tables, relationships=schema.relationships)
+
+
 # ---------------------------------------------------------------------------
 # Mermaid generation
 # ---------------------------------------------------------------------------
