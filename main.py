@@ -90,6 +90,7 @@ from excel_to_mermaid import (
     shortest_path,
     wrap_mermaid_html,
 )
+from selection_preset import dump_selection_toml, load_selection_toml
 
 # Above this many tables we don't auto-render the whole diagram (it's slow and
 # Mermaid chokes); the user picks a subset instead.
@@ -411,6 +412,14 @@ class TableSelector(QWidget):
         self._list.blockSignals(False)
         self._update_count()
         return newly
+
+    def set_selected_tables(self, names) -> tuple[int, list[str]]:
+        wanted = [str(name).strip() for name in names if str(name).strip()]
+        present = {item.text().lower() for item in self._items()}
+        missing = [name for name in wanted if name.lower() not in present]
+        self.clear_selection()
+        applied = self.check_tables(wanted)
+        return applied, missing
 
     def _update_count(self):
         total = self._list.count()
@@ -974,6 +983,8 @@ class MainWindow(QMainWindow):
         self._copy_btn = QPushButton("Copy Mermaid")
         self._save_mmd_btn = QPushButton("Save .mmd")
         self._save_md_btn = QPushButton("Save .md")
+        self._save_selection_btn = QPushButton("Save table list .toml")
+        self._load_selection_btn = QPushButton("Load table list .toml")
         self._save_drawio_btn = QPushButton("Save diagram .drawio")
         self._save_png_btn = QPushButton("Save diagram PNG")
         self._save_svg_btn = QPushButton("Save diagram SVG")
@@ -982,6 +993,8 @@ class MainWindow(QMainWindow):
             self._copy_btn,
             self._save_mmd_btn,
             self._save_md_btn,
+            self._save_selection_btn,
+            self._load_selection_btn,
             self._save_drawio_btn,
             self._save_png_btn,
             self._save_svg_btn,
@@ -1026,6 +1039,8 @@ class MainWindow(QMainWindow):
         self._copy_btn.clicked.connect(self.copy_mermaid)
         self._save_mmd_btn.clicked.connect(self.save_mmd)
         self._save_md_btn.clicked.connect(self.save_md)
+        self._save_selection_btn.clicked.connect(self.save_table_selection_toml)
+        self._load_selection_btn.clicked.connect(self.load_table_selection_toml)
         self._save_drawio_btn.clicked.connect(self.save_diagram_drawio)
         self._save_png_btn.clicked.connect(self.save_diagram_png)
         self._save_svg_btn.clicked.connect(self.save_diagram_svg)
@@ -1326,6 +1341,73 @@ class MainWindow(QMainWindow):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(content)
             self._status.setText(f"Saved {path}")
+
+    def save_table_selection_toml(self):
+        if self._schema is None:
+            QMessageBox.information(
+                self,
+                "No schema loaded",
+                "Load a schema file first, then save selected tables to TOML.",
+            )
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save selected tables",
+            "table-selection.toml",
+            "TOML files (*.toml);;All files (*)",
+        )
+        if not path:
+            return
+        text = dump_selection_toml(
+            self._loaded_name,
+            self._selector.selected_tables(),
+        )
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        self._status.setText(f"Saved selected tables to {path}")
+
+    def load_table_selection_toml(self):
+        if self._schema is None:
+            QMessageBox.information(
+                self,
+                "No schema loaded",
+                "Load a schema file first, then load a table-selection TOML file.",
+            )
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load selected tables",
+            "",
+            "TOML files (*.toml);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            text = open(path, encoding="utf-8").read()
+            source_name, selected = load_selection_toml(text)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Could not load table list", str(exc))
+            return
+
+        current_name = self._loaded_name or ""
+        if source_name and current_name and source_name.lower() != current_name.lower():
+            answer = QMessageBox.question(
+                self,
+                "Different source file",
+                f"This preset was saved for '{source_name}', but you loaded "
+                f"'{current_name}'. Apply anyway?",
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        applied, missing = self._selector.set_selected_tables(selected)
+        self._render_selection()
+        if missing:
+            self._status.setText(
+                f"Loaded table list from {path} — applied {applied}, missing {len(missing)}."
+            )
+        else:
+            self._status.setText(f"Loaded table list from {path}")
 
     def preview_browser(self):
         html = wrap_mermaid_html(self._mermaid_text)
