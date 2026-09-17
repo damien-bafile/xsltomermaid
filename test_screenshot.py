@@ -143,6 +143,9 @@ def test_window_screenshot(tmp_path):
     assert window._png_scale.minimum() == 1
     assert window._png_scale.maximum() == 10
     assert window._png_scale.value() == 2
+    assert window._png_scale_value.text() == "2×"
+    window._png_scale.setValue(7)
+    assert window._png_scale_value.text() == "7×"
 
     out = tmp_path / "window.png"
     window.capture(str(out))

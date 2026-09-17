@@ -205,7 +205,6 @@ def svg_to_drawio(svg: str, page_name: str = "Page-1") -> str:
         "mxfile",
         {
             "host": "app.diagrams.net",
-            "version": "24.7.17",
             "compressed": "false",
         },
     )
