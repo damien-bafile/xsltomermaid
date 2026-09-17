@@ -107,6 +107,22 @@ def test_schema_to_drawio_includes_table_names_and_fk_labels():
     assert "CustomerID" in edge_values
 
 
+def test_schema_to_drawio_relationship_matching_is_case_insensitive():
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    schema = Schema(
+        tables=[Table("dbo", "Customer"), Table("dbo", "Order")],
+        relationships=[Relationship(parent_table="CUSTOMER", child_table="order", label="CustomerID")],
+    )
+    drawio = diagram_view.schema_to_drawio(schema)
+    root = ET.fromstring(drawio)
+    edges = root.findall(".//mxCell[@edge='1']")
+    assert len(edges) == 1
+    assert edges[0].attrib.get("source")
+    assert edges[0].attrib.get("target")
+
+
 def _png_size(path: str) -> tuple[int, int]:
     """Return (width, height) read from a PNG header, or (0, 0) if invalid."""
     with open(path, "rb") as handle:

@@ -395,7 +395,7 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
             "mxCell",
             {
                 "id": str(edge_id),
-                "value": html.escape(getattr(rel, "label", "") or ""),
+                "value": getattr(rel, "label", "") or "",
                 "style": (
                     "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
                     "html=1;startArrow=ERone;endArrow=ERmany;startFill=1;endFill=1;"
