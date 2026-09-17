@@ -736,6 +736,7 @@ class MainWindow(QMainWindow):
         self._worker: LoadWorker | None = None
         self._pending_path: str = ""
         self._loaded_name: str = ""
+        self._rendering: bool = False
 
         central = QWidget()
         outer = QVBoxLayout(central)
@@ -944,8 +945,33 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(loading)
         self._drop.setEnabled(not loading)
         if loading:
+            self._progress.setRange(0, 100)
             self._progress.setValue(0)
             self._status.setText(f"Loading {name}…")
+
+    def _begin_render(self, message: str):
+        """Show a busy (indeterminate) bar while a diagram export runs.
+
+        The export blocks the UI thread, but its wait loop keeps pumping events
+        (see DiagramView.current_svg), so a marquee bar animates and the message
+        stays visible. Mermaid gives no progress percentage, hence indeterminate.
+        """
+        self._rendering = True
+        self._progress.setRange(0, 0)  # 0..0 == busy indicator
+        self._progress.setVisible(True)
+        self._status.setText(message)
+        for btn in (self._save_png_btn, self._save_svg_btn):
+            btn.setEnabled(False)
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()  # paint the bar before we block
+
+    def _end_render(self):
+        self._progress.setVisible(False)
+        self._progress.setRange(0, 100)
+        for btn in (self._save_png_btn, self._save_svg_btn):
+            btn.setEnabled(True)
+        self._rendering = False
 
     def _apply_loaded(self, path: str, rows: list[dict], schema: Schema, mermaid_text: str):
         """Push a loaded schema into the widgets (must run on the UI thread).
@@ -1092,6 +1118,8 @@ class MainWindow(QMainWindow):
         )
 
     def save_diagram_png(self):
+        if self._rendering:
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save diagram PNG", "diagram.png", "PNG image (*.png)"
         )
@@ -1103,23 +1131,31 @@ class MainWindow(QMainWindow):
                 background = self._options_bar.background_value()
                 if background == "transparent":
                     background = "white"
+            self._begin_render("Rendering diagram to PNG…")
             try:
                 self._diagram_view.save_png(path, scale=scale, background=background)
             except Exception as exc:  # noqa: BLE001
+                self._end_render()
                 QMessageBox.critical(self, "Could not save diagram", str(exc))
                 return
+            self._end_render()
             self._status.setText(f"Saved rendered diagram to {path}")
 
     def save_diagram_svg(self):
+        if self._rendering:
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save diagram SVG", "diagram.svg", "SVG image (*.svg)"
         )
         if path:
+            self._begin_render("Rendering diagram to SVG…")
             try:
                 self._diagram_view.save_svg(path)
             except Exception as exc:  # noqa: BLE001
+                self._end_render()
                 QMessageBox.critical(self, "Could not save diagram", str(exc))
                 return
+            self._end_render()
             self._status.setText(f"Saved rendered diagram to {path}")
 
     # -- testing helpers ---------------------------------------------------
