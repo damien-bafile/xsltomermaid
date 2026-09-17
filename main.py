@@ -1387,7 +1387,10 @@ class MainWindow(QMainWindow):
                 text = handle.read()
             source_name, selected = load_selection_toml(text)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Could not load table list", str(exc))
+            message = str(exc).strip() or "Invalid table-selection TOML file."
+            QMessageBox.critical(
+                self, "Could not load table list", f"Could not load '{path}': {message}"
+            )
             return
 
         current_name = self._loaded_name or ""

@@ -63,7 +63,7 @@ def _load_toml(text: str) -> dict:
         key = key.strip()
         rhs = rhs.strip()
         if key not in {"filename", "selected_tables"}:
-            raise ValueError(invalid_message)
+            continue
         try:
             data[key] = json.loads(rhs)
         except json.JSONDecodeError as exc:
@@ -72,10 +72,14 @@ def _load_toml(text: str) -> dict:
 
 
 def _normalise_selected_tables(names) -> list[str]:
-    cleaned = [str(name).strip() for name in names if str(name).strip()]
     unique: list[str] = []
     seen: set[str] = set()
-    for name in cleaned:
+    for raw in names:
+        if not isinstance(raw, str):
+            raise ValueError("'selected_tables' must be an array of strings in the TOML preset.")
+        name = raw.strip()
+        if not name:
+            continue
         key = name.lower()
         if key in seen:
             continue

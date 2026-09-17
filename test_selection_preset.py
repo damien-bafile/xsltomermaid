@@ -47,3 +47,14 @@ def test_selection_preset_rejects_malformed_content():
         assert str(exc) == "Invalid TOML preset content."
     else:  # pragma: no cover
         raise AssertionError("Expected ValueError for malformed TOML")
+
+
+def test_selection_preset_allows_extra_keys():
+    text = (
+        'filename = "sample_schema.xlsx"\n'
+        'selected_tables = ["Customer"]\n'
+        'note = "extra metadata"\n'
+    )
+    filename, selected = load_selection_toml(text)
+    assert filename == "sample_schema.xlsx"
+    assert selected == ["Customer"]
