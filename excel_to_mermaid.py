@@ -434,23 +434,55 @@ def _quote_comment(text: str) -> str:
     return text.replace("\\", "/").replace('"', "'").replace("\n", " ").strip()
 
 
-def generate_mermaid(schema: Schema) -> str:
+@dataclass
+class DiagramOptions:
+    """Content toggles that change the generated Mermaid *text*.
+
+    These require regenerating the source (unlike :class:`RenderStyle`, which is
+    applied at render time). Defaults reproduce the original output exactly.
+    """
+
+    show_comments: bool = True  # the "..." note slot (description, identity, …)
+    show_rel_labels: bool = True  # the FK column name on a relationship line
+    prefix_schema: bool = False  # entity id as schema.Table vs Table
+    keys_only: bool = False  # show only PK/FK attributes
+
+
+def generate_mermaid(schema: Schema, options: DiagramOptions | None = None) -> str:
     """Render a :class:`Schema` as a Mermaid ``erDiagram``."""
+    opts = options or DiagramOptions()
     lines: list[str] = ["erDiagram"]
+
+    # Map table names to their Mermaid ids, so relationships and entity blocks
+    # agree even when the schema prefix is switched on.
+    by_name = {t.name.lower(): t for t in schema.tables}
+
+    def entity_id(name: str) -> str:
+        table = by_name.get(name.lower())
+        label = table.full_name if (table and opts.prefix_schema) else name
+        return _entity_id(label)
 
     # Relationships first so the diagram reads top-down.
     for rel in schema.relationships:
-        parent = _entity_id(rel.parent_table)
-        child = _entity_id(rel.child_table)
-        label = _quote_comment(rel.label) or "references"
+        parent = entity_id(rel.parent_table)
+        child = entity_id(rel.child_table)
+        if opts.show_rel_labels:
+            label = _quote_comment(rel.label) or "references"
+        else:
+            label = ""
         lines.append(f'    {parent} ||--o{{ {child} : "{label}"')
 
     if schema.relationships:
         lines.append("")
 
     for table in schema.tables:
-        lines.append(f"    {_entity_id(table.name)} {{")
+        lines.append(f"    {entity_id(table.name)} {{")
         for column in table.columns:
+            if opts.keys_only and not (
+                column.is_primary_key or column.foreign_key_reference
+            ):
+                continue
+
             keys = []
             if column.is_primary_key:
                 keys.append("PK")
@@ -458,17 +490,19 @@ def generate_mermaid(schema: Schema) -> str:
                 keys.append("FK")
             key_part = f" {','.join(keys)}" if keys else ""
 
-            notes = []
-            if column.description:
-                notes.append(column.description)
-            if column.is_identity:
-                notes.append("identity")
-            if column.is_computed:
-                notes.append("computed")
-            if not column.is_nullable:
-                notes.append("not null")
-            comment = _quote_comment("; ".join(notes))
-            comment_part = f' "{comment}"' if comment else ""
+            comment_part = ""
+            if opts.show_comments:
+                notes = []
+                if column.description:
+                    notes.append(column.description)
+                if column.is_identity:
+                    notes.append("identity")
+                if column.is_computed:
+                    notes.append("computed")
+                if not column.is_nullable:
+                    notes.append("not null")
+                comment = _quote_comment("; ".join(notes))
+                comment_part = f' "{comment}"' if comment else ""
 
             lines.append(
                 f"        {_attr_type(column)} {_attr_name(column)}{key_part}{comment_part}"

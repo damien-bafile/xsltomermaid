@@ -20,7 +20,26 @@ import html
 import shutil
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass
+class RenderStyle:
+    """Visual/layout options passed to Mermaid's ``mermaid.initialize``.
+
+    These map onto Mermaid v10's global config and its ``er`` block, so changing
+    them only needs a re-render of the same diagram text (no regeneration).
+    """
+
+    theme: str = "default"  # default | neutral | dark | forest | base
+    background: str = "#ffffff"  # page background (CSS colour or "transparent")
+    layout_direction: str = "TB"  # TB | LR | BT | RL
+    entity_padding: int = 15
+    min_entity_width: int = 100
+    min_entity_height: int = 75
+    use_max_width: bool = True
+    font_size: int = 12
 
 from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QImage, QPainter
@@ -50,13 +69,22 @@ except ImportError:  # pragma: no cover - depends on PySide6-Addons being presen
     WEBENGINE_AVAILABLE = False
 
 
-def _diagram_html(mermaid_text: str, theme: str = "default") -> str:
+def _diagram_html(mermaid_text: str, style: RenderStyle | None = None) -> str:
     """HTML that renders ``mermaid_text`` using the sibling ``mermaid.min.js``."""
+    style = style or RenderStyle()
+    er_config = (
+        f"layoutDirection:'{style.layout_direction}',"
+        f"entityPadding:{style.entity_padding},"
+        f"minEntityWidth:{style.min_entity_width},"
+        f"minEntityHeight:{style.min_entity_height},"
+        f"useMaxWidth:{'true' if style.use_max_width else 'false'},"
+        f"fontSize:{style.font_size}"
+    )
     # The diagram text is placed inside <pre> verbatim; Mermaid reads textContent.
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
-  html, body {{ margin: 0; padding: 12px; background: #ffffff; }}
+  html, body {{ margin: 0; padding: 12px; background: {style.background}; }}
   .mermaid {{ font-family: "Trebuchet MS", Verdana, Arial, sans-serif; }}
 </style>
 <script src="mermaid.min.js"></script>
@@ -67,8 +95,8 @@ def _diagram_html(mermaid_text: str, theme: str = "default") -> str:
   window._mermaidDone = false;
   window._mermaidError = null;
   try {{
-    mermaid.initialize({{ startOnLoad: false, securityLevel: 'loose', theme: '{theme}',
-      maxTextSize: 2000000, maxEdges: 10000 }});
+    mermaid.initialize({{ startOnLoad: false, securityLevel: 'loose', theme: '{style.theme}',
+      maxTextSize: 2000000, maxEdges: 10000, er: {{ {er_config} }} }});
     mermaid.run().then(function () {{ window._mermaidDone = true; }})
       .catch(function (e) {{ window._mermaidError = String(e); window._mermaidDone = true; }});
   }} catch (e) {{
@@ -130,12 +158,12 @@ class DiagramView(QWidget):
             layout.addWidget(label)
 
     # -- rendering ---------------------------------------------------------
-    def set_diagram(self, mermaid_text: str, theme: str = "default"):
+    def set_diagram(self, mermaid_text: str, style: RenderStyle | None = None):
         """Load a diagram into the view (async render)."""
         if not self.available or self._view is None or self._workdir is None:
             return
         html_path = Path(self._workdir) / "diagram.html"
-        html_path.write_text(_diagram_html(mermaid_text, theme), encoding="utf-8")
+        html_path.write_text(_diagram_html(mermaid_text, style), encoding="utf-8")
         self._view.load(QUrl.fromLocalFile(str(html_path)))
 
     def show_message(self, message: str):
@@ -195,11 +223,11 @@ class DiagramView(QWidget):
         Path(path).write_text(svg, encoding="utf-8")
         return path
 
-    def save_png(self, path: str, scale: float = 2.0) -> str:
+    def save_png(self, path: str, scale: float = 2.0, background: str = "white") -> str:
         svg = self.current_svg()
         if not svg:
             raise RuntimeError("No rendered diagram available to save.")
-        svg_to_png(svg, path, scale=scale)
+        svg_to_png(svg, path, scale=scale, background=background)
         return path
 
     def cleanup(self):

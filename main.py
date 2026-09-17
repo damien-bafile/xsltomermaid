@@ -51,7 +51,9 @@ from PySide6.QtGui import QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -62,6 +64,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -72,9 +75,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diagram_view import DiagramView
+from diagram_view import DiagramView, RenderStyle
 from excel_to_mermaid import (
     EXPECTED_HEADERS,
+    DiagramOptions,
     Schema,
     Table,
     build_schema,
@@ -511,6 +515,128 @@ class ColumnSelector(QWidget):
         self._count.setText(f"{included} of {total} columns included")
 
 
+class DiagramOptionsBar(QWidget):
+    """A compact bar of controls for how the diagram looks and reads.
+
+    Emits :attr:`changed` whenever any option is touched; the window reads
+    :meth:`render_style` and :meth:`diagram_options` to re-render.
+    """
+
+    changed = Signal()
+
+    # (label, value) pairs for the dropdowns.
+    _ORIENTATIONS = [
+        ("Top → Bottom", "TB"),
+        ("Left → Right", "LR"),
+        ("Bottom → Top", "BT"),
+        ("Right → Left", "RL"),
+    ]
+    _SPACINGS = [
+        ("Compact", (6, 60, 40)),  # entity_padding, min_width, min_height
+        ("Normal", (15, 100, 75)),
+        ("Spacious", (28, 140, 100)),
+    ]
+    _THEMES = [
+        ("Default", "default"),
+        ("Neutral", "neutral"),
+        ("Dark", "dark"),
+        ("Forest", "forest"),
+        ("Base", "base"),
+    ]
+    _BACKGROUNDS = [
+        ("White", "#ffffff"),
+        ("Transparent", "transparent"),
+        ("Dark", "#16181d"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setSpacing(4)
+
+        # Row 1 — appearance / layout (all applied via Mermaid config).
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        self._orientation = self._combo(self._ORIENTATIONS)
+        self._spacing = self._combo(self._SPACINGS)
+        self._theme = self._combo(self._THEMES)
+        self._background = self._combo(self._BACKGROUNDS)
+        self._font = QSpinBox()
+        self._font.setRange(8, 28)
+        self._font.setValue(12)
+        self._font.setSuffix(" px")
+        self._font.valueChanged.connect(lambda _v: self.changed.emit())
+        self._fit_width = QCheckBox("Fit width")
+        self._fit_width.setChecked(True)
+        self._fit_width.toggled.connect(lambda _v: self.changed.emit())
+
+        for label, widget in [
+            ("Orientation", self._orientation),
+            ("Spacing", self._spacing),
+            ("Theme", self._theme),
+            ("Background", self._background),
+            ("Font", self._font),
+        ]:
+            row1.addWidget(QLabel(label + ":"))
+            row1.addWidget(widget)
+        row1.addWidget(self._fit_width)
+        row1.addStretch(1)
+        outer.addLayout(row1)
+
+        # Row 2 — content toggles (applied by regenerating the Mermaid source).
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        self._show_comments = QCheckBox("Descriptions/notes")
+        self._show_comments.setChecked(True)
+        self._show_rel_labels = QCheckBox("Relationship labels")
+        self._show_rel_labels.setChecked(True)
+        self._prefix_schema = QCheckBox("Prefix schema name")
+        self._keys_only = QCheckBox("Keys only")
+        for chk in (
+            self._show_comments,
+            self._show_rel_labels,
+            self._prefix_schema,
+            self._keys_only,
+        ):
+            chk.toggled.connect(lambda _v: self.changed.emit())
+            row2.addWidget(chk)
+        row2.addStretch(1)
+        outer.addLayout(row2)
+
+    def _combo(self, pairs) -> QComboBox:
+        combo = QComboBox()
+        for label, value in pairs:
+            combo.addItem(label, value)
+        combo.currentIndexChanged.connect(lambda _i: self.changed.emit())
+        return combo
+
+    # -- read the current choices ------------------------------------------
+    def render_style(self) -> RenderStyle:
+        padding, min_w, min_h = self._spacing.currentData()
+        return RenderStyle(
+            theme=self._theme.currentData(),
+            background=self._background.currentData(),
+            layout_direction=self._orientation.currentData(),
+            entity_padding=padding,
+            min_entity_width=min_w,
+            min_entity_height=min_h,
+            use_max_width=self._fit_width.isChecked(),
+            font_size=self._font.value(),
+        )
+
+    def diagram_options(self) -> DiagramOptions:
+        return DiagramOptions(
+            show_comments=self._show_comments.isChecked(),
+            show_rel_labels=self._show_rel_labels.isChecked(),
+            prefix_schema=self._prefix_schema.isChecked(),
+            keys_only=self._keys_only.isChecked(),
+        )
+
+    def background_value(self) -> str:
+        return self._background.currentData()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -564,8 +690,21 @@ class MainWindow(QMainWindow):
         self._columns.applied.connect(self._render_selection)
         tabs.addTab(self._columns, "Columns")
 
+        # Rendered diagram tab = an options bar above the actual diagram view.
         self._diagram_view = DiagramView()
-        tabs.addTab(self._diagram_view, "Rendered diagram")
+        self._options_bar = DiagramOptionsBar()
+        self._options_bar.changed.connect(self._render_selection)
+        diagram_tab = QWidget()
+        diagram_layout = QVBoxLayout(diagram_tab)
+        diagram_layout.setContentsMargins(0, 0, 0, 0)
+        diagram_layout.setSpacing(4)
+        diagram_layout.addWidget(self._options_bar)
+        divider = QFrame()
+        divider.setFrameShape(QFrame.HLine)
+        divider.setStyleSheet("color: #d0d3d9;")
+        diagram_layout.addWidget(divider)
+        diagram_layout.addWidget(self._diagram_view, 1)
+        tabs.addTab(diagram_tab, "Rendered diagram")
 
         self._tabs = tabs
 
@@ -600,6 +739,22 @@ class MainWindow(QMainWindow):
         for btn in self._action_buttons:
             btn.setEnabled(False)
             buttons.addWidget(btn)
+
+        # PNG export options, grouped next to the Save buttons.
+        self._png_scale = QComboBox()
+        for label, value in [("1×", 1.0), ("2×", 2.0), ("3×", 3.0), ("4×", 4.0)]:
+            self._png_scale.addItem(label, value)
+        self._png_scale.setCurrentIndex(1)  # 2×
+        self._png_scale.setToolTip("Resolution multiplier for the saved PNG.")
+        self._png_transparent = QCheckBox("Transparent PNG")
+        self._png_export_widgets = [
+            QLabel("PNG:"),
+            self._png_scale,
+            self._png_transparent,
+        ]
+        for widget in self._png_export_widgets:
+            buttons.addWidget(widget)
+
         buttons.addStretch(1)
         outer.addLayout(buttons)
 
@@ -607,6 +762,8 @@ class MainWindow(QMainWindow):
         if not self._diagram_view.available:
             self._save_png_btn.setVisible(False)
             self._save_svg_btn.setVisible(False)
+            for widget in self._png_export_widgets:
+                widget.setVisible(False)
 
         self._copy_btn.clicked.connect(self.copy_mermaid)
         self._save_mmd_btn.clicked.connect(self.save_mmd)
@@ -720,7 +877,7 @@ class MainWindow(QMainWindow):
         self._columns.set_tables(filtered.tables)
         final = filter_columns(filtered, self._columns.excluded_pairs())
 
-        mermaid_text = generate_mermaid(final)
+        mermaid_text = generate_mermaid(final, self._options_bar.diagram_options())
         self._mermaid_text = mermaid_text
         self._mermaid_view.setPlainText(mermaid_text)
 
@@ -759,7 +916,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self._diagram_view.set_diagram(mermaid_text)
+        self._diagram_view.set_diagram(mermaid_text, self._options_bar.render_style())
         self._status.setText(
             f"Loaded {self._loaded_name} — showing {scope} table(s), "
             f"{col_count} column(s), {rel_count} relationship(s)."
@@ -823,8 +980,15 @@ class MainWindow(QMainWindow):
             self, "Save diagram PNG", "diagram.png", "PNG image (*.png)"
         )
         if path:
+            scale = self._png_scale.currentData()
+            if self._png_transparent.isChecked():
+                background = "transparent"
+            else:
+                background = self._options_bar.background_value()
+                if background == "transparent":
+                    background = "white"
             try:
-                self._diagram_view.save_png(path)
+                self._diagram_view.save_png(path, scale=scale, background=background)
             except Exception as exc:  # noqa: BLE001
                 QMessageBox.critical(self, "Could not save diagram", str(exc))
                 return

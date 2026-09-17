@@ -4,6 +4,7 @@ Run: python test_excel_to_mermaid.py   (or: python -m pytest test_excel_to_merma
 """
 
 from excel_to_mermaid import (
+    DiagramOptions,
     _parse_reference_table,
     build_schema,
     filter_columns,
@@ -122,6 +123,44 @@ def test_generate_mermaid():
     # Every entity block is present.
     assert "Customer {" in text
     assert "Order {" in text
+
+
+def test_options_default_matches_bare_call():
+    schema = build_schema(SAMPLE_ROWS)
+    assert generate_mermaid(schema) == generate_mermaid(schema, DiagramOptions())
+
+
+def test_options_hide_relationship_labels():
+    schema = build_schema(SAMPLE_ROWS)
+    text = generate_mermaid(schema, DiagramOptions(show_rel_labels=False))
+    assert 'Customer ||--o{ Order : ""' in text
+    assert "CustomerID" in text  # still present as a column, just not as a label
+
+
+def test_options_hide_comments():
+    schema = build_schema(SAMPLE_ROWS)
+    # "not null" is a note on non-nullable columns; it should vanish.
+    with_notes = generate_mermaid(schema, DiagramOptions(show_comments=True))
+    without = generate_mermaid(schema, DiagramOptions(show_comments=False))
+    assert "not null" in with_notes
+    assert "not null" not in without
+
+
+def test_options_keys_only():
+    schema = build_schema(SAMPLE_ROWS)
+    text = generate_mermaid(schema, DiagramOptions(keys_only=True))
+    assert "int CustomerID PK" in text  # PK kept
+    # Non-key columns dropped from the attribute lists.
+    assert "varchar Name" not in text
+    assert "decimal_18_2 Total" not in text
+
+
+def test_options_prefix_schema():
+    schema = build_schema(SAMPLE_ROWS)
+    text = generate_mermaid(schema, DiagramOptions(prefix_schema=True))
+    # Entity ids become schema-qualified (dots are flattened to underscores).
+    assert "dbo_Customer {" in text
+    assert "dbo_Customer ||--o{ dbo_Order" in text
 
 
 def _run():
