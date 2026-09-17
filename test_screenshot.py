@@ -73,8 +73,11 @@ def test_svg_to_drawio_wraps_svg_image():
 
     assert root.tag == "mxfile"
     assert image_cell is not None
-    assert "shape=image;" in image_cell.attrib.get("style", "")
-    assert "data:image/svg+xml," in image_cell.attrib.get("style", "")
+    style = image_cell.attrib.get("style", "")
+    assert isinstance(style, str)
+    assert style.startswith("shape=image;")
+    assert "data:image/svg+xml," in style
+    assert "('" not in style and "'," not in style
     assert geometry is not None
     assert geometry.attrib.get("width") == "640"
     assert geometry.attrib.get("height") == "480"
