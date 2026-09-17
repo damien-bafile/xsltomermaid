@@ -1210,8 +1210,10 @@ class MainWindow(QMainWindow):
     def _render_selection(self):
         """Render the currently-selected tables (Mermaid source + diagram)."""
         if self._schema is None:
+            self._drawio_schema = None
             return
 
+        self._drawio_schema = None
         names = self._selector.selected_tables()
         if len(names) > RENDER_WARN_LIMIT:
             answer = QMessageBox.question(

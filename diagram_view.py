@@ -303,28 +303,29 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
     if not tables:
         return ET.tostring(mxfile, encoding="unicode")
 
+    def _column_line(column) -> str:
+        keys = []
+        if getattr(column, "is_primary_key", False):
+            keys.append("PK")
+        if getattr(column, "foreign_key_reference", ""):
+            keys.append("FK")
+        key_part = f" [{' '.join(keys)}]" if keys else ""
+        data_type = (getattr(column, "data_type", "") or "").strip()
+        if hasattr(column, "rendered_type"):
+            data_type = column.rendered_type()
+        typed = f" : {data_type}" if data_type else ""
+        return f"{column.name}{typed}{key_part}"
+
     def _table_value(table) -> str:
         lines: list[str] = []
         for column in table.columns:
-            keys = []
-            if getattr(column, "is_primary_key", False):
-                keys.append("PK")
-            if getattr(column, "foreign_key_reference", ""):
-                keys.append("FK")
-            key_part = f" [{' '.join(keys)}]" if keys else ""
-            data_type = (getattr(column, "data_type", "") or "").strip()
-            if hasattr(column, "rendered_type"):
-                data_type = column.rendered_type()
-            typed = f" : {data_type}" if data_type else ""
-            line = html.escape(f"{column.name}{typed}{key_part}")
+            line = html.escape(_column_line(column))
             lines.append(line)
         body = "<br/>".join(lines) if lines else " "
         return f"<b>{html.escape(table.name)}</b><hr/>{body}"
 
     def _table_size(table) -> tuple[int, int]:
-        line_texts = [table.name] + [
-            f"{col.name} {getattr(col, 'data_type', '')}".strip() for col in table.columns
-        ]
+        line_texts = [table.name] + [_column_line(col) for col in table.columns]
         longest = max((len(text) for text in line_texts), default=10)
         width = min(max(220, longest * 7 + 48), 520)
         height = max(80, 40 + len(table.columns) * 18)
@@ -337,11 +338,13 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
     y = 40
     max_height_in_row = 0
 
-    table_ids: dict[str, str] = {}
+    table_ids_exact: dict[str, str] = {}
+    table_ids_lower: dict[str, str] = {}
     for pos, table in enumerate(tables):
         width, height = _table_size(table)
         table_id = str(pos + 2)
-        table_ids[table.name.lower()] = table_id
+        table_ids_exact[table.name] = table_id
+        table_ids_lower.setdefault(table.name.lower(), table_id)
         style = (
             "shape=mxgraph.er.entity;whiteSpace=wrap;html=1;align=left;verticalAlign=top;"
             "spacing=8;rounded=0;strokeColor=#36393d;fillColor=#ffffff;"
@@ -379,8 +382,12 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
 
     edge_id = len(tables) + 2
     for rel in rels:
-        parent_id = table_ids.get(rel.parent_table.lower())
-        child_id = table_ids.get(rel.child_table.lower())
+        parent_id = table_ids_exact.get(rel.parent_table)
+        if parent_id is None:
+            parent_id = table_ids_lower.get(rel.parent_table.lower())
+        child_id = table_ids_exact.get(rel.child_table)
+        if child_id is None:
+            child_id = table_ids_lower.get(rel.child_table.lower())
         if not parent_id or not child_id:
             continue
         ET.SubElement(

@@ -98,9 +98,13 @@ def test_schema_to_drawio_includes_table_names_and_fk_labels():
     records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
     schema = build_schema(records)
     drawio = diagram_view.schema_to_drawio(schema)
+    root = ET.fromstring(drawio)
+    edge_values = [
+        cell.attrib.get("value", "") for cell in root.findall(".//mxCell[@edge='1']")
+    ]
     assert "<b>Customer</b>" in drawio
     assert "<b>Order</b>" in drawio
-    assert "CustomerID" in drawio
+    assert "CustomerID" in edge_values
 
 
 def _png_size(path: str) -> tuple[int, int]:
