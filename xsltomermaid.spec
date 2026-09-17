@@ -33,7 +33,10 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=[],
+    # python_calamine (the fast xlsx reader) is imported lazily inside a
+    # function and is a compiled extension, so name it explicitly to be sure
+    # PyInstaller bundles it. read_rows falls back to openpyxl if it's absent.
+    hiddenimports=["python_calamine"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

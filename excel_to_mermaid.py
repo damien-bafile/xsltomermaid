@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from collections import deque
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Callable, Iterable
 
 # A progress callback receives a fraction in the range 0.0 .. 1.0.
@@ -78,9 +79,19 @@ def _as_bool(value) -> bool:
     return text in {"1", "y", "yes", "true", "t", "x", "✓", "✔"}
 
 
+_HEADER_KEY_RE = re.compile(r"[\s_]+")
+
+
+@lru_cache(maxsize=4096)
 def _header_key(value) -> str:
-    """Normalise a header cell for matching (case/space/underscore-insensitive)."""
-    return re.sub(r"[\s_]+", "", _norm(value)).lower()
+    """Normalise a header cell for matching (case/space/underscore-insensitive).
+
+    Cached: headers and the expected field names are a tiny fixed set reused
+    across every row, so build_schema was recomputing the same regex sub
+    hundreds of thousands of times. Pure function of ``value`` (hashable cell
+    scalars), so memoising is safe.
+    """
+    return _HEADER_KEY_RE.sub("", _norm(value)).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -148,15 +159,28 @@ class Schema:
 # ---------------------------------------------------------------------------
 # Reading the spreadsheet
 # ---------------------------------------------------------------------------
-def read_rows(path: str, progress: ProgressCallback | None = None) -> list[dict]:
-    """Read an .xlsx/.xlsm file and return a list of ``{header: value}`` dicts.
+def _coerce_cell(value):
+    """Normalise a fast-reader cell to match openpyxl's typing.
 
-    The header row is located by scanning for a row that contains the required
-    headers, which lets the sheet have a title/banner above the real headers.
-
-    ``progress``, if given, is called with a fraction (0.0 .. 1.0) as the rows
-    are streamed in, so a caller can drive a progress bar for large files.
+    python-calamine returns whole numbers as floats (``1`` -> ``1.0``) and blank
+    cells as ``""``; coerce those so downstream ``_norm`` / ``_as_bool`` /
+    ``rendered_type`` behave identically to the openpyxl path (e.g. ``1.0`` would
+    otherwise fail the ``_as_bool`` truthy check and drop PK/nullability flags).
+    Booleans are left alone (``bool`` is a subclass of ``int``).
     """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if value == "":
+        return None
+    return value
+
+
+def _read_grid_openpyxl(
+    path: str, progress: ProgressCallback | None = None
+) -> list[list]:
+    """Read the active sheet into a list of row lists using openpyxl."""
     try:
         from openpyxl import load_workbook
     except ImportError as exc:  # pragma: no cover - environment dependent
@@ -171,13 +195,54 @@ def read_rows(path: str, progress: ProgressCallback | None = None) -> list[dict]
     # ``max_row`` is available for most files; when it isn't we simply can't
     # report a fraction, so the caller falls back to an indeterminate bar.
     total = sheet.max_row if isinstance(sheet.max_row, int) and sheet.max_row > 0 else 0
-    grid = []
+    grid: list[list] = []
     for index, row in enumerate(sheet.iter_rows(values_only=True)):
         grid.append(list(row))
         # Report every so often to keep the UI responsive without flooding it.
         if progress is not None and total and index % 200 == 0:
             progress(min(index / total, 1.0))
     workbook.close()
+    return grid
+
+
+def _read_grid(path: str, progress: ProgressCallback | None = None) -> list[list]:
+    """Read the sheet as a list of row lists, using the fastest reader available.
+
+    Prefers python-calamine (a Rust-based xlsx reader, several times faster than
+    openpyxl) and falls back to openpyxl if it isn't installed or can't read the
+    file — so the app still works if the compiled wheel is unavailable. Both
+    readers return equivalently-typed cells (see :func:`_coerce_cell`).
+    """
+    try:
+        from python_calamine import CalamineWorkbook
+    except ImportError:
+        return _read_grid_openpyxl(path, progress)
+
+    try:
+        workbook = CalamineWorkbook.from_path(path)
+        sheet = workbook.get_sheet_by_index(0)
+        raw_rows = sheet.to_python()
+    except Exception:  # noqa: BLE001 - any calamine hiccup -> proven openpyxl path
+        return _read_grid_openpyxl(path, progress)
+
+    # calamine parses the whole sheet in one call, so there's no per-row point to
+    # stream a fraction from; it's fast enough that a single jump is fine.
+    grid = [[_coerce_cell(cell) for cell in row] for row in raw_rows]
+    if progress is not None:
+        progress(1.0)
+    return grid
+
+
+def read_rows(path: str, progress: ProgressCallback | None = None) -> list[dict]:
+    """Read an .xlsx/.xlsm file and return a list of ``{header: value}`` dicts.
+
+    The header row is located by scanning for a row that contains the required
+    headers, which lets the sheet have a title/banner above the real headers.
+
+    ``progress``, if given, is called with a fraction (0.0 .. 1.0) as the file is
+    read, so a caller can drive a progress bar for large files.
+    """
+    grid = _read_grid(path, progress)
     if progress is not None:
         progress(1.0)
 

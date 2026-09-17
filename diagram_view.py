@@ -17,6 +17,7 @@ message and :attr:`DiagramView.available` is ``False``.
 from __future__ import annotations
 
 import html
+import json
 import math
 import re
 import shutil
@@ -82,39 +83,68 @@ except ImportError:  # pragma: no cover - depends on PySide6-Addons being presen
     WEBENGINE_AVAILABLE = False
 
 
-def _diagram_html(mermaid_text: str, style: RenderStyle | None = None) -> str:
-    """HTML that renders ``mermaid_text`` using the sibling ``mermaid.min.js``."""
-    style = style or RenderStyle()
-    er_config = (
-        f"layoutDirection:'{style.layout_direction}',"
-        f"entityPadding:{style.entity_padding},"
-        f"minEntityWidth:{style.min_entity_width},"
-        f"minEntityHeight:{style.min_entity_height},"
-        f"useMaxWidth:{'true' if style.use_max_width else 'false'},"
-        f"fontSize:{style.font_size}"
-    )
-    # The diagram text is placed inside <pre> verbatim; Mermaid reads textContent.
-    return f"""<!DOCTYPE html>
+def _mermaid_config(style: RenderStyle) -> dict:
+    """The ``mermaid.initialize`` config for a RenderStyle (theme + er block)."""
+    return {
+        "startOnLoad": False,
+        "securityLevel": "loose",
+        "theme": style.theme,
+        "maxTextSize": 2000000,
+        "maxEdges": 10000,
+        "er": {
+            "layoutDirection": style.layout_direction,
+            "entityPadding": style.entity_padding,
+            "minEntityWidth": style.min_entity_width,
+            "minEntityHeight": style.min_entity_height,
+            "useMaxWidth": style.use_max_width,
+            "fontSize": style.font_size,
+        },
+    }
+
+
+def _shell_html() -> str:
+    """A page loaded once that keeps mermaid.js resident and re-renders on demand.
+
+    ``window.renderDiagram(text, config, background)`` re-initialises Mermaid with
+    the given config and draws ``text`` into ``#container`` — which keeps the
+    ``mermaid`` class so the SVG-export selector (``.mermaid svg``) still finds
+    it — without reloading the ~3 MB library. It sets ``window._mermaidDone`` /
+    ``window._mermaidError`` for the poller, and a sequence number so a stale
+    async result from a superseded render is ignored.
+    """
+    return """<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
-  html, body {{ margin: 0; padding: 12px; background: {style.background}; }}
-  .mermaid {{ font-family: "Trebuchet MS", Verdana, Arial, sans-serif; }}
+  html, body { margin: 0; padding: 12px; background: #ffffff; }
+  #container { font-family: "Trebuchet MS", Verdana, Arial, sans-serif; }
 </style>
 <script src="mermaid.min.js"></script>
 </head>
 <body>
-<pre class="mermaid">{mermaid_text}</pre>
+<div id="container" class="mermaid"></div>
 <script>
   window._mermaidDone = false;
   window._mermaidError = null;
-  try {{
-    mermaid.initialize({{ startOnLoad: false, securityLevel: 'loose', theme: '{style.theme}',
-      maxTextSize: 2000000, maxEdges: 10000, er: {{ {er_config} }} }});
-    mermaid.run().then(function () {{ window._mermaidDone = true; }})
-      .catch(function (e) {{ window._mermaidError = String(e); window._mermaidDone = true; }});
-  }} catch (e) {{
-    window._mermaidError = String(e); window._mermaidDone = true;
-  }}
+  window._renderSeq = 0;
+  window.renderDiagram = function (text, config, background) {
+    var seq = ++window._renderSeq;
+    window._mermaidDone = false;
+    window._mermaidError = null;
+    try {
+      document.body.style.background = background;
+      mermaid.initialize(config);
+      mermaid.render('erGraph' + seq, text).then(function (res) {
+        if (seq !== window._renderSeq) return;   // a newer render superseded us
+        document.getElementById('container').innerHTML = res.svg;
+        window._mermaidDone = true;
+      }).catch(function (e) {
+        if (seq !== window._renderSeq) return;
+        window._mermaidError = String(e); window._mermaidDone = true;
+      });
+    } catch (e) {
+      window._mermaidError = String(e); window._mermaidDone = true;
+    }
+  };
 </script>
 </body></html>
 """
@@ -650,8 +680,13 @@ class DiagramView(QWidget):
         self.available = WEBENGINE_AVAILABLE
         self._workdir: str | None = None
         self._view = None
-        self._render_gen = 0  # bumped per load so stale polls are ignored
-        self._expect_render = False  # True for a diagram, False for a message
+        self._render_gen = 0  # bumped per render so stale polls are ignored
+        # Keep-alive rendering: the shell page (mermaid.js) is loaded once, then
+        # each diagram is drawn by a JS call rather than a full page reload.
+        self._shell_url: QUrl | None = None
+        self._shell_loaded = False
+        self._loading_shell = False
+        self._pending_render: tuple[str, RenderStyle, int] | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -659,6 +694,9 @@ class DiagramView(QWidget):
         if WEBENGINE_AVAILABLE:
             self._workdir = tempfile.mkdtemp(prefix="xsltomermaid_")
             shutil.copy(VENDOR_MERMAID, Path(self._workdir) / "mermaid.min.js")
+            shell_path = Path(self._workdir) / "shell.html"
+            shell_path.write_text(_shell_html(), encoding="utf-8")
+            self._shell_url = QUrl.fromLocalFile(str(shell_path))
             self._view = QWebEngineView(self)
             self._view.settings().setAttribute(
                 QWebEngineSettings.LocalContentCanAccessFileUrls, True
@@ -678,24 +716,53 @@ class DiagramView(QWidget):
 
     # -- rendering ---------------------------------------------------------
     def set_diagram(self, mermaid_text: str, style: RenderStyle | None = None):
-        """Load a diagram into the view (async render)."""
+        """Render a diagram into the view (async).
+
+        Draws into the already-loaded shell via a JS call; only the first render
+        (or the first after a message page) loads the shell + mermaid.js.
+        """
         if not self.available or self._view is None or self._workdir is None:
             return
+        style = style or RenderStyle()
         self._render_gen += 1
-        self._expect_render = True
+        gen = self._render_gen
         self.render_started.emit()
-        html_path = Path(self._workdir) / "diagram.html"
-        html_path.write_text(_diagram_html(mermaid_text, style), encoding="utf-8")
-        self._view.load(QUrl.fromLocalFile(str(html_path)))
+        if self._shell_loaded:
+            self._invoke_render(mermaid_text, style, gen)
+        else:
+            # Draw as soon as the shell finishes loading; coalesce rapid calls
+            # so only the latest diagram is rendered.
+            self._pending_render = (mermaid_text, style, gen)
+            if not self._loading_shell:
+                self._loading_shell = True
+                self._view.load(self._shell_url)
+
+    def _invoke_render(self, mermaid_text: str, style: RenderStyle, gen: int):
+        script = "renderDiagram({}, {}, {})".format(
+            json.dumps(mermaid_text),
+            json.dumps(_mermaid_config(style)),
+            json.dumps(style.background),
+        )
+        self._view.page().runJavaScript(script)
+        self._poll_mermaid(gen, 0)
 
     def _on_load_finished(self, ok: bool):
-        """Once the diagram page has loaded, poll until Mermaid signals done."""
-        if not self._expect_render:
-            return  # a message page, not a diagram
+        """When the shell page finishes loading, kick off the pending render."""
+        if not self._loading_shell:
+            return  # a message page (or unrelated load), not the render shell
+        self._loading_shell = False
+        pending = self._pending_render
+        self._pending_render = None
         if not ok:
-            self.render_finished.emit(False)
+            self._shell_loaded = False
+            if pending is not None:
+                self.render_finished.emit(False)
             return
-        self._poll_mermaid(self._render_gen, 0)
+        self._shell_loaded = True
+        if pending is not None:
+            text, style, gen = pending
+            if gen == self._render_gen:  # not already superseded
+                self._invoke_render(text, style, gen)
 
     def _poll_mermaid(self, gen: int, elapsed: int):
         if gen != self._render_gen or self._view is None:
@@ -713,8 +780,11 @@ class DiagramView(QWidget):
                     lambda err: self.render_finished.emit(not err),
                 )
             else:
+                # Poll fast at first so quick diagrams return promptly, then back
+                # off so a slow layout doesn't spin the CPU.
+                delay = 16 if elapsed < 200 else 50 if elapsed < 1000 else 150
                 QTimer.singleShot(
-                    150, lambda: self._poll_mermaid(gen, elapsed + 150)
+                    delay, lambda: self._poll_mermaid(gen, elapsed + delay)
                 )
 
         self._view.page().runJavaScript("window._mermaidDone === true", on_done)
@@ -723,9 +793,12 @@ class DiagramView(QWidget):
         """Show a plain text message in place of a diagram (e.g. a hint)."""
         if not self.available or self._view is None or self._workdir is None:
             return
-        # Invalidate any in-flight render poll; this isn't a diagram.
+        # Invalidate any in-flight render poll; this isn't a diagram. Navigating
+        # to the message page drops the shell, so the next diagram reloads it.
         self._render_gen += 1
-        self._expect_render = False
+        self._shell_loaded = False
+        self._loading_shell = False
+        self._pending_render = None
         page = (
             "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
             "html,body{margin:0;padding:32px;background:#ffffff;color:#6b7078;"
