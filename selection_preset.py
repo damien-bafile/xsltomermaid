@@ -12,15 +12,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 
 def dump_selection_toml(filename: str, selected_tables: list[str]) -> str:
     """Return TOML text for a table-selection preset."""
-    cleaned = [name.strip() for name in selected_tables if str(name).strip()]
-    unique: list[str] = []
-    seen: set[str] = set()
-    for name in cleaned:
-        key = name.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(name)
+    unique = _normalise_selected_tables(selected_tables)
     return (
         "# xsltomermaid table selection preset\n"
         f"filename = {json.dumps(filename or '')}\n"
@@ -37,8 +29,7 @@ def load_selection_toml(text: str) -> tuple[str, list[str]]:
         raise ValueError("'filename' must be a string in the TOML preset.")
     if not isinstance(selected, list) or not all(isinstance(v, str) for v in selected):
         raise ValueError("'selected_tables' must be an array of strings in the TOML preset.")
-    cleaned = [name.strip() for name in selected if name.strip()]
-    return filename.strip(), cleaned
+    return filename.strip(), _normalise_selected_tables(selected)
 
 
 def _load_toml(text: str) -> dict:
@@ -66,3 +57,16 @@ def _load_toml(text: str) -> dict:
                 "Invalid TOML preset content for Python 3.10 fallback parser."
             ) from exc
     return data
+
+
+def _normalise_selected_tables(names) -> list[str]:
+    cleaned = [str(name).strip() for name in names if str(name).strip()]
+    unique: list[str] = []
+    seen: set[str] = set()
+    for name in cleaned:
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(name)
+    return unique

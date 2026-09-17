@@ -22,3 +22,9 @@ def test_selection_preset_rejects_invalid_types():
         assert "filename" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("Expected ValueError for invalid filename type")
+
+
+def test_selection_preset_load_dedupes_case_insensitive():
+    text = 'filename = "sample_schema.xlsx"\nselected_tables = ["Customer", "customer", "Order"]\n'
+    _filename, selected = load_selection_toml(text)
+    assert selected == ["Customer", "Order"]
