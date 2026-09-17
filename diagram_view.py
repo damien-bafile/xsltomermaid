@@ -193,8 +193,9 @@ def svg_to_drawio(svg: str, page_name: str = "Page-1") -> str:
     encoded_svg = quote(svg)
     style = (
         "shape=image;verticalLabelPosition=bottom;verticalAlign=top;aspect=fixed;"
-        "imageAspect=0;image=data:image/svg+xml,"
-        f"{encoded_svg};"
+        + "imageAspect=0;image=data:image/svg+xml,"
+        + encoded_svg
+        + ";"
     )
 
     mxfile = ET.Element(
