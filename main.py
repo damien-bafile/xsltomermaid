@@ -1503,6 +1503,7 @@ class MainWindow(QMainWindow):
             return
 
         render_started = False
+        schema = None
         export_kind = str(self._export_format.currentData() or "")
         file_specs = {
             "drawio": ("Save Draw.io diagram", "diagram.drawio", "Draw.io file (*.drawio)"),
@@ -1513,6 +1514,19 @@ class MainWindow(QMainWindow):
         }
         if export_kind not in file_specs:
             return
+
+        if export_kind in {"drawio", "visio"}:
+            schema = self._schema_for_export()
+            if schema is None:
+                return
+        elif not self._diagram_view.available:
+            QMessageBox.information(
+                self,
+                "Export unavailable",
+                "PNG, SVG, and PDF exports need PySide6 WebEngine (PySide6-Addons).",
+            )
+            return
+
         title, default_name, file_filter = file_specs[export_kind]
         path, _ = QFileDialog.getSaveFileName(self, title, default_name, file_filter)
         if not path:
@@ -1520,9 +1534,6 @@ class MainWindow(QMainWindow):
 
         try:
             if export_kind == "drawio":
-                schema = self._schema_for_export()
-                if schema is None:
-                    return
                 content = schema_to_drawio(schema)
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(content)
@@ -1530,9 +1541,6 @@ class MainWindow(QMainWindow):
                 return
 
             if export_kind == "visio":
-                schema = self._schema_for_export()
-                if schema is None:
-                    return
                 content = schema_to_visio(schema)
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(content)

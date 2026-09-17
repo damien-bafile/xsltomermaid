@@ -238,6 +238,58 @@ def test_window_screenshot(tmp_path):
     del app  # keep linters quiet; app is a singleton
 
 
+def test_export_drawio_checks_schema_before_prompt(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+
+    info_calls = []
+
+    def _info(*args, **kwargs):
+        info_calls.append((args, kwargs))
+        return app_module.QMessageBox.Ok
+
+    def _unexpected_dialog(*args, **kwargs):
+        raise AssertionError("File dialog should not be opened when schema is empty.")
+
+    monkeypatch.setattr(app_module.QMessageBox, "information", _info)
+    monkeypatch.setattr(app_module.QFileDialog, "getSaveFileName", _unexpected_dialog)
+    window._export_format.setCurrentIndex(0)  # drawio
+    window.export_diagram()
+    assert info_calls, "Expected an informational prompt for empty schema."
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_export_rendered_format_requires_webengine(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._diagram_view.available = False
+
+    info_calls = []
+
+    def _info(*args, **kwargs):
+        info_calls.append((args, kwargs))
+        return app_module.QMessageBox.Ok
+
+    def _unexpected_dialog(*args, **kwargs):
+        raise AssertionError("File dialog should not open when WebEngine is unavailable.")
+
+    monkeypatch.setattr(app_module.QMessageBox, "information", _info)
+    monkeypatch.setattr(app_module.QFileDialog, "getSaveFileName", _unexpected_dialog)
+    window._export_format.setCurrentIndex(2)  # pdf
+    window.export_diagram()
+    assert info_calls, "Expected an informational prompt when WebEngine is unavailable."
+    assert "WebEngine" in info_calls[0][0][2]
+
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_diagram_screenshot(tmp_path):
     """Render the actual Mermaid ER diagram to PNG and SVG (needs WebEngine)."""
     import diagram_view
