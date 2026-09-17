@@ -95,6 +95,17 @@ def test_svg_dimensions_handles_fractional_and_exponent_sizes():
     assert h0 == 0.0
 
 
+def test_svg_to_drawio_keeps_non_integer_geometry():
+    import diagram_view
+
+    drawio = diagram_view.svg_to_drawio('<svg width="640.5" height="480.25"></svg>')
+    root = ET.fromstring(drawio)
+    geometry = root.find(".//mxCell[@id='2']/mxGeometry")
+    assert geometry is not None
+    assert geometry.attrib.get("width") == "640.5"
+    assert geometry.attrib.get("height") == "480.25"
+
+
 def _png_size(path: str) -> tuple[int, int]:
     """Return (width, height) read from a PNG header, or (0, 0) if invalid."""
     with open(path, "rb") as handle:

@@ -251,8 +251,8 @@ def svg_to_drawio(svg: str, page_name: str = "Page-1") -> str:
         {
             "x": "0",
             "y": "0",
-            "width": str(max(int(width), 1)),
-            "height": str(max(int(height), 1)),
+            "width": f"{max(width, 1.0):g}",
+            "height": f"{max(height, 1.0):g}",
             "as": "geometry",
         },
     )
