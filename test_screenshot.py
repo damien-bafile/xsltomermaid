@@ -258,6 +258,37 @@ def test_diagram_screenshot(tmp_path):
     del app
 
 
+def test_shortest_path_popup_for_more_than_two_selected(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer", "Order", "Product"])
+
+    calls = []
+
+    def _fake_get_item(_parent, title, _label, items, _index, _editable):
+        calls.append((title, list(items)))
+        if "starting" in title.lower():
+            return ("Customer", True)
+        return ("Product", True)
+
+    monkeypatch.setattr(app_module.QInputDialog, "getItem", _fake_get_item)
+    window._find_shortest_path()
+
+    selected = set(window._selector.selected_tables())
+    assert "OrderLine" in selected
+    assert len(calls) == 2
+    assert calls[0][1] == ["Customer", "Order", "Product"]
+
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_module_import_sets_webengine_flags_for_cli_mode():
     """`--screenshot-diagram` should preconfigure WebEngine flags at import time."""
     cmd = [

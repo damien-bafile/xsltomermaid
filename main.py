@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -1202,12 +1203,35 @@ class MainWindow(QMainWindow):
         if self._schema is None:
             return
         names = self._selector.selected_tables()
-        if len(names) != 2:
+        if len(names) < 2:
             self._status.setText(
-                "Check exactly two tables, then find the shortest path between them."
+                "Check at least two tables, then find the shortest path between them."
             )
             return
-        start, end = names
+        if len(names) == 2:
+            start, end = names
+        else:
+            start, ok = QInputDialog.getItem(
+                self,
+                "Pick starting table",
+                "More than two tables are selected.\nChoose the starting table:",
+                names,
+                0,
+                False,
+            )
+            if not ok or not start:
+                return
+            ends = [name for name in names if name != start]
+            end, ok = QInputDialog.getItem(
+                self,
+                "Pick destination table",
+                "Choose the destination table:",
+                ends,
+                0,
+                False,
+            )
+            if not ok or not end:
+                return
         path = shortest_path(self._schema, start, end)
         if not path:
             self._status.setText(
