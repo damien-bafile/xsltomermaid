@@ -1391,12 +1391,14 @@ class MainWindow(QMainWindow):
             return
 
         current_name = self._loaded_name or ""
-        if source_name and current_name and source_name.lower() != current_name.lower():
+        source_base = os.path.basename(source_name.strip())
+        current_base = os.path.basename(current_name.strip())
+        if source_base and current_base and source_base.lower() != current_base.lower():
             answer = QMessageBox.question(
                 self,
                 "Different source file",
-                f"This preset was saved for '{source_name}', but you loaded "
-                f"'{current_name}'. Apply anyway?",
+                f"This preset was saved for '{source_base}', but you loaded "
+                f"'{current_base}'. Apply anyway?",
             )
             if answer != QMessageBox.Yes:
                 return

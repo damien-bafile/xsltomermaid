@@ -40,7 +40,12 @@ def load_selection_toml(text: str) -> tuple[str, list[str]]:
 
 def _load_toml(text: str) -> dict:
     if tomllib is not None:
-        data = tomllib.loads(text)
+        try:
+            data = tomllib.loads(text)
+        except Exception as exc:
+            if exc.__class__.__name__ == "TOMLDecodeError":
+                raise ValueError("Invalid TOML preset content.") from exc
+            raise
         if not isinstance(data, dict):
             raise ValueError("Invalid TOML preset content.")
         return data
