@@ -59,29 +59,22 @@ def test_render_style_defaults_to_left_to_right():
     assert RenderStyle().layout_direction == "LR"
 
 
-def test_svg_to_drawio_wraps_svg_image():
+def test_schema_to_drawio_creates_table_vertices_and_edges():
     import diagram_view
+    from excel_to_mermaid import build_schema
 
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480">'
-        '<rect width="640" height="480" fill="white"/></svg>'
-    )
-    drawio = diagram_view.svg_to_drawio(svg)
+    records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
+    schema = build_schema(records)
+    drawio = diagram_view.schema_to_drawio(schema)
     root = ET.fromstring(drawio)
-    image_cell = root.find(".//mxCell[@id='2']")
-    geometry = root.find(".//mxCell[@id='2']/mxGeometry")
 
     assert root.tag == "mxfile"
-    assert image_cell is not None
-    style = image_cell.attrib.get("style", "")
-    assert isinstance(style, str)
-    assert style.startswith("shape=image;")
-    assert "data:image/svg+xml," in style
-    assert "('" not in style and "'," not in style
-    assert geometry is not None
-    assert geometry.attrib.get("width") == "640"
-    assert geometry.attrib.get("height") == "480"
-    assert "%2Fsvg%3E" in style
+    vertices = root.findall(".//mxCell[@vertex='1']")
+    edges = root.findall(".//mxCell[@edge='1']")
+    assert len(vertices) == len(schema.tables)
+    assert len(edges) == len(schema.relationships)
+    assert all("shape=mxgraph.er.entity" in cell.attrib.get("style", "") for cell in vertices)
+    assert all("endArrow=ERmany" in cell.attrib.get("style", "") for cell in edges)
 
 
 def test_svg_dimensions_handles_fractional_and_exponent_sizes():
@@ -98,29 +91,80 @@ def test_svg_dimensions_handles_fractional_and_exponent_sizes():
     assert h0 == 0.0
 
 
-def test_svg_to_drawio_keeps_non_integer_geometry():
+def test_schema_to_drawio_includes_table_names_and_fk_labels():
     import diagram_view
+    from excel_to_mermaid import build_schema
 
-    drawio = diagram_view.svg_to_drawio('<svg width="640.5" height="480.25"></svg>')
+    records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
+    schema = build_schema(records)
+    drawio = diagram_view.schema_to_drawio(schema)
     root = ET.fromstring(drawio)
-    geometry = root.find(".//mxCell[@id='2']/mxGeometry")
-    assert geometry is not None
-    assert geometry.attrib.get("width") == "640.5"
-    assert geometry.attrib.get("height") == "480.25"
+    edge_values = [
+        cell.attrib.get("value", "") for cell in root.findall(".//mxCell[@edge='1']")
+    ]
+    assert "<b>Customer</b>" in drawio
+    assert "<b>Order</b>" in drawio
+    assert "CustomerID" in edge_values
 
 
-def test_save_drawio_writes_file(tmp_path):
-    from diagram_view import DiagramView
+def test_schema_to_drawio_relationship_matching_is_case_insensitive():
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
 
-    class _DummyView:
-        def current_svg(self):
-            return '<svg width="10" height="20"></svg>'
+    schema = Schema(
+        tables=[Table("dbo", "Customer"), Table("dbo", "Order")],
+        relationships=[Relationship(parent_table="CUSTOMER", child_table="order", label="CustomerID")],
+    )
+    drawio = diagram_view.schema_to_drawio(schema)
+    root = ET.fromstring(drawio)
+    vertices = {
+        cell.attrib["id"]: cell.attrib.get("value", "")
+        for cell in root.findall(".//mxCell[@vertex='1']")
+    }
+    edges = root.findall(".//mxCell[@edge='1']")
+    assert len(edges) == 1
+    source = edges[0].attrib.get("source")
+    target = edges[0].attrib.get("target")
+    assert source in vertices and "<b>Customer</b>" in vertices[source]
+    assert target in vertices and "<b>Order</b>" in vertices[target]
 
-    out = tmp_path / "diagram.drawio"
-    DiagramView.save_drawio(_DummyView(), str(out))
-    text = out.read_text(encoding="utf-8")
-    assert "<mxfile" in text
-    assert "data:image/svg+xml," in text
+
+def test_schema_to_drawio_qualified_names_avoid_ambiguous_table_matches():
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    schema = Schema(
+        tables=[
+            Table("dbo", "Customer"),
+            Table("sales", "Customer"),
+            Table("dbo", "Order"),
+        ],
+        relationships=[
+            Relationship(parent_table="dbo.Customer", child_table="Order", label="CustomerID"),
+            Relationship(parent_table="Customer", child_table="Order", label="AmbiguousCustomer"),
+        ],
+    )
+    drawio = diagram_view.schema_to_drawio(schema)
+    root = ET.fromstring(drawio)
+    edge_values = [cell.attrib.get("value", "") for cell in root.findall(".//mxCell[@edge='1']")]
+    assert "CustomerID" in edge_values
+    assert "AmbiguousCustomer" not in edge_values
+
+
+def test_schema_to_drawio_qualified_case_collision_is_ambiguous():
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    schema = Schema(
+        tables=[Table("dbo", "Customer"), Table("DBO", "customer"), Table("dbo", "Order")],
+        relationships=[
+            Relationship(parent_table="dbo.customer", child_table="Order", label="ShouldSkip")
+        ],
+    )
+    drawio = diagram_view.schema_to_drawio(schema)
+    root = ET.fromstring(drawio)
+    edge_values = [cell.attrib.get("value", "") for cell in root.findall(".//mxCell[@edge='1']")]
+    assert "ShouldSkip" not in edge_values
 
 
 def _png_size(path: str) -> tuple[int, int]:
@@ -209,6 +253,91 @@ def test_diagram_screenshot(tmp_path):
     assert text.lstrip().startswith("<svg")
     # The rendered diagram should mention the tables from the sample.
     assert "OrderLine" in text and "Customer" in text
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_shortest_path_popup_for_more_than_two_selected(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer", "Order", "Product"])
+
+    calls = []
+
+    def _fake_get_item(_parent, title, _label, items, _index, _editable):
+        calls.append((title, list(items)))
+        if "starting" in title.lower():
+            return ("Customer", True)
+        return ("Product", True)
+
+    monkeypatch.setattr(app_module.QInputDialog, "getItem", _fake_get_item)
+    window._find_shortest_path()
+
+    selected = set(window._selector.selected_tables())
+    assert "OrderLine" in selected
+    assert len(calls) == 2
+    assert calls[0][1] == ["Customer", "Order", "Product"]
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_shortest_path_popup_cancel_start_keeps_selection(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer", "Order", "Product"])
+    before = set(window._selector.selected_tables())
+
+    def _cancel_start(_parent, _title, _label, _items, _index, _editable):
+        return ("", False)
+
+    monkeypatch.setattr(app_module.QInputDialog, "getItem", _cancel_start)
+    window._find_shortest_path()
+    after = set(window._selector.selected_tables())
+    assert after == before
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_shortest_path_popup_cancel_destination_keeps_selection(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer", "Order", "Product"])
+    before = set(window._selector.selected_tables())
+
+    calls = {"count": 0}
+
+    def _cancel_destination(_parent, title, _label, _items, _index, _editable):
+        calls["count"] += 1
+        if "starting" in title.lower():
+            return ("Customer", True)
+        return ("", False)
+
+    monkeypatch.setattr(app_module.QInputDialog, "getItem", _cancel_destination)
+    window._find_shortest_path()
+    after = set(window._selector.selected_tables())
+    assert calls["count"] == 2
+    assert after == before
 
     window._diagram_view.cleanup()
     del app

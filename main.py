@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -76,7 +77,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diagram_view import DiagramView, RenderStyle, resource_path
+from diagram_view import DiagramView, RenderStyle, resource_path, schema_to_drawio
 from excel_to_mermaid import (
     EXPECTED_HEADERS,
     DiagramOptions,
@@ -90,6 +91,7 @@ from excel_to_mermaid import (
     shortest_path,
     wrap_mermaid_html,
 )
+from selection_preset import dump_selection_toml, load_selection_toml
 
 # Above this many tables we don't auto-render the whole diagram (it's slow and
 # Mermaid chokes); the user picks a subset instead.
@@ -411,6 +413,14 @@ class TableSelector(QWidget):
         self._list.blockSignals(False)
         self._update_count()
         return newly
+
+    def set_selected_tables(self, names) -> tuple[int, list[str]]:
+        wanted = [str(name).strip() for name in names if str(name).strip()]
+        present = {item.text().lower() for item in self._items()}
+        missing = [name for name in wanted if name.lower() not in present]
+        self.clear_selection()
+        applied = self.check_tables(wanted)
+        return applied, missing
 
     def _update_count(self):
         total = self._list.count()
@@ -885,6 +895,7 @@ class MainWindow(QMainWindow):
         self._loaded_name: str = ""
         self._rendering: bool = False
         self._diagram_rendered: bool = False
+        self._drawio_schema: Schema | None = None
 
         central = QWidget()
         outer = QVBoxLayout(central)
@@ -973,6 +984,8 @@ class MainWindow(QMainWindow):
         self._copy_btn = QPushButton("Copy Mermaid")
         self._save_mmd_btn = QPushButton("Save .mmd")
         self._save_md_btn = QPushButton("Save .md")
+        self._save_selection_btn = QPushButton("Save table list .toml")
+        self._load_selection_btn = QPushButton("Load table list .toml")
         self._save_drawio_btn = QPushButton("Save diagram .drawio")
         self._save_png_btn = QPushButton("Save diagram PNG")
         self._save_svg_btn = QPushButton("Save diagram SVG")
@@ -981,6 +994,8 @@ class MainWindow(QMainWindow):
             self._copy_btn,
             self._save_mmd_btn,
             self._save_md_btn,
+            self._save_selection_btn,
+            self._load_selection_btn,
             self._save_drawio_btn,
             self._save_png_btn,
             self._save_svg_btn,
@@ -1025,6 +1040,8 @@ class MainWindow(QMainWindow):
         self._copy_btn.clicked.connect(self.copy_mermaid)
         self._save_mmd_btn.clicked.connect(self.save_mmd)
         self._save_md_btn.clicked.connect(self.save_md)
+        self._save_selection_btn.clicked.connect(self.save_table_selection_toml)
+        self._load_selection_btn.clicked.connect(self.load_table_selection_toml)
         self._save_drawio_btn.clicked.connect(self.save_diagram_drawio)
         self._save_png_btn.clicked.connect(self.save_diagram_png)
         self._save_svg_btn.clicked.connect(self.save_diagram_svg)
@@ -1186,12 +1203,35 @@ class MainWindow(QMainWindow):
         if self._schema is None:
             return
         names = self._selector.selected_tables()
-        if len(names) != 2:
+        if len(names) < 2:
             self._status.setText(
-                "Check exactly two tables, then find the shortest path between them."
+                "Check at least two tables, then find the shortest path between them."
             )
             return
-        start, end = names
+        if len(names) == 2:
+            start, end = names
+        else:
+            start, ok = QInputDialog.getItem(
+                self,
+                "Pick starting table",
+                "More than two tables are selected.\nChoose the starting table:",
+                names,
+                0,
+                False,
+            )
+            if not ok or not start:
+                return
+            ends = [name for name in names if name != start]
+            end, ok = QInputDialog.getItem(
+                self,
+                "Pick destination table",
+                "Choose the destination table:",
+                ends,
+                0,
+                False,
+            )
+            if not ok or not end:
+                return
         path = shortest_path(self._schema, start, end)
         if not path:
             self._status.setText(
@@ -1209,8 +1249,10 @@ class MainWindow(QMainWindow):
     def _render_selection(self):
         """Render the currently-selected tables (Mermaid source + diagram)."""
         if self._schema is None:
+            self._drawio_schema = None
             return
 
+        self._drawio_schema = None
         names = self._selector.selected_tables()
         if len(names) > RENDER_WARN_LIMIT:
             answer = QMessageBox.question(
@@ -1230,6 +1272,7 @@ class MainWindow(QMainWindow):
         # user's column choices on top of the table filter.
         self._columns.set_tables(filtered.tables)
         final = filter_columns(filtered, self._columns.excluded_pairs())
+        self._drawio_schema = final
 
         mermaid_text = generate_mermaid(final, self._options_bar.diagram_options())
         self._mermaid_text = mermaid_text
@@ -1238,6 +1281,7 @@ class MainWindow(QMainWindow):
         total = len(self._schema.tables)
         shown = len(final.tables)
         if shown == 0:
+            self._drawio_schema = None
             self._diagram_rendered = False
             self._render_status.clear()
             self._diagram_view.show_message(
@@ -1322,6 +1366,98 @@ class MainWindow(QMainWindow):
                 handle.write(content)
             self._status.setText(f"Saved {path}")
 
+    def save_table_selection_toml(self):
+        if self._schema is None:
+            QMessageBox.information(
+                self,
+                "No schema loaded",
+                "Load a schema file first, then save selected tables to TOML.",
+            )
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save selected tables",
+            "table-selection.toml",
+            "TOML files (*.toml);;All files (*)",
+        )
+        if not path:
+            return
+        text = dump_selection_toml(
+            self._loaded_name,
+            self._selector.selected_tables(),
+        )
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        self._status.setText(f"Saved selected tables to {path}")
+
+    def load_table_selection_toml(self):
+        if self._schema is None:
+            QMessageBox.information(
+                self,
+                "No schema loaded",
+                "Load a schema file first, then load a table-selection TOML file.",
+            )
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load selected tables",
+            "",
+            "TOML files (*.toml);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+            source_name, selected = load_selection_toml(text)
+        except OSError:
+            preset_name = os.path.basename(path) or "selected preset"
+            QMessageBox.critical(
+                self,
+                "Could not load table list",
+                f"Could not read '{preset_name}'.",
+            )
+            return
+        except ValueError as exc:
+            message = str(exc).strip() or "Invalid table-selection TOML file."
+            preset_name = os.path.basename(path) or "selected preset"
+            QMessageBox.critical(
+                self,
+                "Could not load table list",
+                f"Could not load '{preset_name}': {message}",
+            )
+            return
+
+        current_name = self._loaded_name or ""
+        source_base = os.path.basename(source_name.strip())
+        current_base = os.path.basename(current_name.strip())
+        if source_base and current_base and source_base.lower() != current_base.lower():
+            answer = QMessageBox.question(
+                self,
+                "Different source file",
+                f"This preset was saved for '{source_base}', but you loaded "
+                f"'{current_base}'. Apply anyway?",
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        available = {table.name.lower() for table in self._schema.tables}
+        matched = [name for name in selected if name.lower() in available]
+        if not matched:
+            self._status.setText(
+                f"Loaded table list from {path} — no matching tables in the current schema."
+            )
+            return
+
+        applied, missing = self._selector.set_selected_tables(matched)
+        self._render_selection()
+        if missing:
+            self._status.setText(
+                f"Loaded table list from {path} — applied {applied}, missing {len(missing)}."
+            )
+        else:
+            self._status.setText(f"Loaded table list from {path}")
+
     def preview_browser(self):
         html = wrap_mermaid_html(self._mermaid_text)
         tmp = tempfile.NamedTemporaryFile(
@@ -1377,21 +1513,27 @@ class MainWindow(QMainWindow):
             self._status.setText(f"Saved rendered diagram to {path}{note}")
 
     def save_diagram_drawio(self):
-        if self._rendering or self._nothing_to_export():
+        if self._rendering:
+            return
+        if self._drawio_schema is None or not self._drawio_schema.tables:
+            QMessageBox.information(
+                self,
+                "Nothing to export",
+                "There are no selected tables to export to Draw.io yet.",
+            )
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save diagram Draw.io file", "diagram.drawio", "Draw.io file (*.drawio)"
         )
         if path:
-            self._begin_render("Rendering diagram to Draw.io…")
             try:
-                self._diagram_view.save_drawio(path)
+                content = schema_to_drawio(self._drawio_schema)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(content)
             except Exception as exc:  # noqa: BLE001
-                self._end_render()
                 QMessageBox.critical(self, "Could not save diagram", str(exc))
                 return
-            self._end_render()
-            self._status.setText(f"Saved rendered diagram to {path}")
+            self._status.setText(f"Saved Draw.io diagram to {path}")
 
     def save_diagram_svg(self):
         if self._rendering or self._nothing_to_export():

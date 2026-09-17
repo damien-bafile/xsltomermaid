@@ -263,6 +263,189 @@ def svg_to_drawio(svg: str, page_name: str = "Page-1") -> str:
     return ET.tostring(mxfile, encoding="unicode")
 
 
+def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
+    """Build a native Draw.io ER-like diagram from schema tables + relationships."""
+    mxfile = ET.Element(
+        "mxfile",
+        {
+            "host": "app.diagrams.net",
+            "compressed": "false",
+        },
+    )
+    diagram = ET.SubElement(mxfile, "diagram", {"id": "diagram-1", "name": page_name})
+    graph = ET.SubElement(
+        diagram,
+        "mxGraphModel",
+        {
+            "dx": "1200",
+            "dy": "800",
+            "grid": "1",
+            "gridSize": "10",
+            "guides": "1",
+            "tooltips": "1",
+            "connect": "1",
+            "arrows": "1",
+            "fold": "1",
+            "page": "1",
+            "pageScale": "1",
+            "pageWidth": "827",
+            "pageHeight": "1169",
+            "math": "0",
+            "shadow": "0",
+        },
+    )
+    root = ET.SubElement(graph, "root")
+    ET.SubElement(root, "mxCell", {"id": "0"})
+    ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
+
+    tables = list(getattr(schema, "tables", []) or [])
+    rels = list(getattr(schema, "relationships", []) or [])
+    if not tables:
+        return ET.tostring(mxfile, encoding="unicode")
+
+    def _column_line(column) -> str:
+        keys = []
+        if getattr(column, "is_primary_key", False):
+            keys.append("PK")
+        if getattr(column, "foreign_key_reference", ""):
+            keys.append("FK")
+        key_part = f" [{' '.join(keys)}]" if keys else ""
+        data_type = (getattr(column, "data_type", "") or "").strip()
+        if hasattr(column, "rendered_type"):
+            data_type = column.rendered_type()
+        typed = f" : {data_type}" if data_type else ""
+        return f"{column.name}{typed}{key_part}"
+
+    def _table_value(table) -> str:
+        lines: list[str] = []
+        for column in table.columns:
+            line = html.escape(_column_line(column))
+            lines.append(line)
+        body = "<br/>".join(lines) if lines else " "
+        return f"<b>{html.escape(table.name)}</b><hr/>{body}"
+
+    def _table_size(table) -> tuple[int, int]:
+        line_texts = [table.name] + [_column_line(col) for col in table.columns]
+        longest = max((len(text) for text in line_texts), default=10)
+        width = min(max(220, longest * 7 + 48), 520)
+        height = max(80, 40 + len(table.columns) * 18)
+        return width, height
+
+    columns = max(1, int(math.ceil(math.sqrt(len(tables)))))
+    x_spacing = 80
+    y_spacing = 60
+    x = 40
+    y = 40
+    max_height_in_row = 0
+
+    table_ids_exact: dict[str, str | None] = {}
+    table_ids_lower: dict[str, str | None] = {}
+    table_ids_qualified: dict[str, str | None] = {}
+    table_ids_qualified_lower: dict[str, str | None] = {}
+    for pos, table in enumerate(tables):
+        width, height = _table_size(table)
+        table_id = str(pos + 2)
+        if table.name in table_ids_exact and table_ids_exact[table.name] != table_id:
+            table_ids_exact[table.name] = None
+        else:
+            table_ids_exact[table.name] = table_id
+        lowered = table.name.lower()
+        if lowered in table_ids_lower and table_ids_lower[lowered] != table_id:
+            table_ids_lower[lowered] = None
+        else:
+            table_ids_lower[lowered] = table_id
+        qualified = getattr(table, "full_name", None) or (
+            f"{table.schema}.{table.name}" if getattr(table, "schema", "") else table.name
+        )
+        qualified = str(qualified)
+        if qualified in table_ids_qualified and table_ids_qualified[qualified] != table_id:
+            table_ids_qualified[qualified] = None
+        else:
+            table_ids_qualified[qualified] = table_id
+        qualified_lower = qualified.lower()
+        if (
+            qualified_lower in table_ids_qualified_lower
+            and table_ids_qualified_lower[qualified_lower] != table_id
+        ):
+            table_ids_qualified_lower[qualified_lower] = None
+        else:
+            table_ids_qualified_lower[qualified_lower] = table_id
+        style = (
+            "shape=mxgraph.er.entity;whiteSpace=wrap;html=1;align=left;verticalAlign=top;"
+            "spacing=8;rounded=0;strokeColor=#36393d;fillColor=#ffffff;"
+        )
+        cell = ET.SubElement(
+            root,
+            "mxCell",
+            {
+                "id": table_id,
+                "value": _table_value(table),
+                "style": style,
+                "vertex": "1",
+                "parent": "1",
+            },
+        )
+        ET.SubElement(
+            cell,
+            "mxGeometry",
+            {
+                "x": str(x),
+                "y": str(y),
+                "width": str(width),
+                "height": str(height),
+                "as": "geometry",
+            },
+        )
+
+        max_height_in_row = max(max_height_in_row, height)
+        if (pos + 1) % columns == 0:
+            x = 40
+            y += max_height_in_row + y_spacing
+            max_height_in_row = 0
+        else:
+            x += width + x_spacing
+
+    def _lookup_table_id(value) -> str | None:
+        if not isinstance(value, str):
+            return None
+        table_id = table_ids_qualified.get(value)
+        if table_id is not None:
+            return table_id
+        table_id = table_ids_qualified_lower.get(value.lower())
+        if table_id is not None:
+            return table_id
+        table_id = table_ids_exact.get(value)
+        if table_id is not None:
+            return table_id
+        return table_ids_lower.get(value.lower())
+
+    edge_id = len(tables) + 2
+    for rel in rels:
+        parent_id = _lookup_table_id(getattr(rel, "parent_table", None))
+        child_id = _lookup_table_id(getattr(rel, "child_table", None))
+        if not parent_id or not child_id:
+            continue
+        ET.SubElement(
+            root,
+            "mxCell",
+            {
+                "id": str(edge_id),
+                "value": getattr(rel, "label", "") or "",
+                "style": (
+                    "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
+                    "html=1;startArrow=ERone;endArrow=ERmany;startFill=1;endFill=1;"
+                ),
+                "edge": "1",
+                "parent": "1",
+                "source": parent_id,
+                "target": child_id,
+            },
+        )
+        edge_id += 1
+
+    return ET.tostring(mxfile, encoding="unicode")
+
+
 class DiagramView(QWidget):
     """A tab that renders a Mermaid ER diagram and can export it as SVG/PNG."""
 
