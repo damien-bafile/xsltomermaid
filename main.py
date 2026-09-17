@@ -46,12 +46,14 @@ def _configure_headless_env(argv: list[str] | None = None) -> None:
 
 _configure_headless_env()
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont, QGuiApplication
+from PySide6.QtCore import QEvent, Qt, QThread, Signal
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -62,6 +64,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -72,9 +75,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diagram_view import DiagramView
+from diagram_view import DiagramView, RenderStyle
 from excel_to_mermaid import (
     EXPECTED_HEADERS,
+    DiagramOptions,
     Schema,
     Table,
     build_schema,
@@ -100,6 +104,62 @@ COLUMN_TREE_LIMIT = 4000
 
 _ACCEPTED_SUFFIXES = (".xlsx", ".xlsm", ".xltx", ".xltm")
 
+# A blue accent that reads well on both light and dark backgrounds.
+_ACCENT = "#2f81f7"
+
+
+def _muted_hex(widget) -> str:
+    """A subdued text colour for the current palette (adapts light/dark)."""
+    return widget.palette().color(QPalette.Disabled, QPalette.WindowText).name()
+
+
+def _line_hex(widget) -> str:
+    """A subtle border/divider colour for the current palette."""
+    return widget.palette().color(QPalette.Mid).name()
+
+
+def _dark_palette() -> QPalette:
+    """A Fusion-style dark palette used when the system is in dark mode."""
+    p = QPalette()
+    window = QColor(0x2B, 0x2D, 0x31)
+    base = QColor(0x1E, 0x1F, 0x22)
+    text = QColor(0xE6, 0xE6, 0xE6)
+    disabled = QColor(0x80, 0x84, 0x8C)
+    p.setColor(QPalette.Window, window)
+    p.setColor(QPalette.WindowText, text)
+    p.setColor(QPalette.Base, base)
+    p.setColor(QPalette.AlternateBase, window)
+    p.setColor(QPalette.ToolTipBase, window)
+    p.setColor(QPalette.ToolTipText, text)
+    p.setColor(QPalette.Text, text)
+    p.setColor(QPalette.Button, window)
+    p.setColor(QPalette.ButtonText, text)
+    p.setColor(QPalette.BrightText, QColor(0xFF, 0x6B, 0x6B))
+    p.setColor(QPalette.Link, QColor(_ACCENT))
+    p.setColor(QPalette.Highlight, QColor(_ACCENT))
+    p.setColor(QPalette.HighlightedText, QColor(0xFF, 0xFF, 0xFF))
+    p.setColor(QPalette.PlaceholderText, disabled)
+    p.setColor(QPalette.Mid, QColor(0x4A, 0x4D, 0x54))
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        p.setColor(QPalette.Disabled, role, disabled)
+    return p
+
+
+def system_is_dark(app) -> bool:
+    """Whether the OS is currently asking for a dark colour scheme (Qt 6.5+)."""
+    hints = app.styleHints()
+    scheme = getattr(hints, "colorScheme", None)
+    if scheme is None:  # pragma: no cover - very old Qt
+        return False
+    return scheme() == Qt.ColorScheme.Dark
+
+
+def apply_system_palette(app) -> bool:
+    """Apply a light or dark palette to match the OS. Returns True if dark."""
+    dark = system_is_dark(app)
+    app.setPalette(_dark_palette() if dark else app.style().standardPalette())
+    return dark
+
 
 class DropArea(QLabel):
     """A large label that accepts a dragged spreadsheet file."""
@@ -116,14 +176,7 @@ class DropArea(QLabel):
         )
         self.setObjectName("dropArea")
         self.setMinimumHeight(120)
-        self.setStyleSheet(
-            "#dropArea {"
-            "  border: 2px dashed #8a8f98;"
-            "  border-radius: 12px;"
-            "  color: #6b7078;"
-            "  font-size: 15px;"
-            "}"
-        )
+        self._reset_style()
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt naming)
         path, _ = QFileDialog.getOpenFileName(
@@ -140,9 +193,9 @@ class DropArea(QLabel):
             event.acceptProposedAction()
             self.setStyleSheet(
                 "#dropArea {"
-                "  border: 2px solid #2f81f7;"
+                f"  border: 2px solid {_ACCENT};"
                 "  border-radius: 12px;"
-                "  color: #2f81f7;"
+                f"  color: {_ACCENT};"
                 "  font-size: 15px;"
                 "  background: rgba(47,129,247,0.08);"
                 "}"
@@ -176,12 +229,16 @@ class DropArea(QLabel):
     def _reset_style(self):
         self.setStyleSheet(
             "#dropArea {"
-            "  border: 2px dashed #8a8f98;"
+            f"  border: 2px dashed {_line_hex(self)};"
             "  border-radius: 12px;"
-            "  color: #6b7078;"
+            f"  color: {_muted_hex(self)};"
             "  font-size: 15px;"
             "}"
         )
+
+    def retheme(self):
+        """Re-apply the idle style for the current palette (light/dark)."""
+        self._reset_style()
 
 
 class LoadWorker(QThread):
@@ -251,7 +308,7 @@ class TableSelector(QWidget):
         layout.addWidget(self._list, 1)
 
         self._count = QLabel("0 of 0 selected")
-        self._count.setStyleSheet("color: #6b7078;")
+        self._count.setStyleSheet(f"color: {_muted_hex(self)};")
         layout.addWidget(self._count)
 
         button_row = QHBoxLayout()
@@ -323,6 +380,9 @@ class TableSelector(QWidget):
         selected = sum(1 for item in self._items() if item.checkState() == Qt.Checked)
         self._count.setText(f"{selected} of {total} selected")
 
+    def retheme(self):
+        self._count.setStyleSheet(f"color: {_muted_hex(self)};")
+
 
 class ColumnSelector(QWidget):
     """A tab with a checkable tree (table → columns) to choose diagram columns.
@@ -353,7 +413,7 @@ class ColumnSelector(QWidget):
             "include here."
         )
         self._hint.setWordWrap(True)
-        self._hint.setStyleSheet("color: #6b7078;")
+        self._hint.setStyleSheet(f"color: {_muted_hex(self)};")
         layout.addWidget(self._hint)
 
         self._filter = QLineEdit()
@@ -369,7 +429,7 @@ class ColumnSelector(QWidget):
         layout.addWidget(self._tree, 1)
 
         self._count = QLabel("0 of 0 columns included")
-        self._count.setStyleSheet("color: #6b7078;")
+        self._count.setStyleSheet(f"color: {_muted_hex(self)};")
         layout.addWidget(self._count)
 
         button_row = QHBoxLayout()
@@ -510,6 +570,149 @@ class ColumnSelector(QWidget):
                     included += 1
         self._count.setText(f"{included} of {total} columns included")
 
+    def retheme(self):
+        muted = f"color: {_muted_hex(self)};"
+        self._hint.setStyleSheet(muted)
+        self._count.setStyleSheet(muted)
+
+
+class DiagramOptionsBar(QWidget):
+    """A compact bar of controls for how the diagram looks and reads.
+
+    Emits :attr:`changed` whenever any option is touched; the window reads
+    :meth:`render_style` and :meth:`diagram_options` to re-render.
+    """
+
+    changed = Signal()
+
+    # (label, value) pairs for the dropdowns.
+    _ORIENTATIONS = [
+        ("Top → Bottom", "TB"),
+        ("Left → Right", "LR"),
+        ("Bottom → Top", "BT"),
+        ("Right → Left", "RL"),
+    ]
+    _SPACINGS = [
+        ("Compact", (6, 60, 40)),  # entity_padding, min_width, min_height
+        ("Normal", (15, 100, 75)),
+        ("Spacious", (28, 140, 100)),
+    ]
+    _THEMES = [
+        ("Default", "default"),
+        ("Neutral", "neutral"),
+        ("Dark", "dark"),
+        ("Forest", "forest"),
+        ("Base", "base"),
+    ]
+    _BACKGROUNDS = [
+        ("White", "#ffffff"),
+        ("Transparent", "transparent"),
+        ("Dark", "#16181d"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setSpacing(4)
+
+        # Row 1 — appearance / layout (all applied via Mermaid config).
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        self._orientation = self._combo(self._ORIENTATIONS)
+        self._spacing = self._combo(self._SPACINGS)
+        self._theme = self._combo(self._THEMES)
+        self._background = self._combo(self._BACKGROUNDS)
+        self._font = QSpinBox()
+        self._font.setRange(8, 28)
+        self._font.setValue(12)
+        self._font.setSuffix(" px")
+        self._font.valueChanged.connect(lambda _v: self.changed.emit())
+        self._fit_width = QCheckBox("Fit width")
+        self._fit_width.setChecked(True)
+        self._fit_width.toggled.connect(lambda _v: self.changed.emit())
+
+        for label, widget in [
+            ("Orientation", self._orientation),
+            ("Spacing", self._spacing),
+            ("Theme", self._theme),
+            ("Background", self._background),
+            ("Font", self._font),
+        ]:
+            row1.addWidget(QLabel(label + ":"))
+            row1.addWidget(widget)
+        row1.addWidget(self._fit_width)
+        row1.addStretch(1)
+        outer.addLayout(row1)
+
+        # Row 2 — content toggles (applied by regenerating the Mermaid source).
+        row2 = QHBoxLayout()
+        row2.setSpacing(8)
+        self._show_comments = QCheckBox("Descriptions/notes")
+        self._show_comments.setChecked(True)
+        self._show_rel_labels = QCheckBox("Relationship labels")
+        self._show_rel_labels.setChecked(True)
+        self._prefix_schema = QCheckBox("Prefix schema name")
+        self._keys_only = QCheckBox("Keys only")
+        for chk in (
+            self._show_comments,
+            self._show_rel_labels,
+            self._prefix_schema,
+            self._keys_only,
+        ):
+            chk.toggled.connect(lambda _v: self.changed.emit())
+            row2.addWidget(chk)
+        row2.addStretch(1)
+        outer.addLayout(row2)
+
+    def _combo(self, pairs) -> QComboBox:
+        combo = QComboBox()
+        for label, value in pairs:
+            combo.addItem(label, value)
+        combo.currentIndexChanged.connect(lambda _i: self.changed.emit())
+        return combo
+
+    # -- read the current choices ------------------------------------------
+    def render_style(self) -> RenderStyle:
+        padding, min_w, min_h = self._spacing.currentData()
+        return RenderStyle(
+            theme=self._theme.currentData(),
+            background=self._background.currentData(),
+            layout_direction=self._orientation.currentData(),
+            entity_padding=padding,
+            min_entity_width=min_w,
+            min_entity_height=min_h,
+            use_max_width=self._fit_width.isChecked(),
+            font_size=self._font.value(),
+        )
+
+    def diagram_options(self) -> DiagramOptions:
+        return DiagramOptions(
+            show_comments=self._show_comments.isChecked(),
+            show_rel_labels=self._show_rel_labels.isChecked(),
+            prefix_schema=self._prefix_schema.isChecked(),
+            keys_only=self._keys_only.isChecked(),
+        )
+
+    def background_value(self) -> str:
+        return self._background.currentData()
+
+    def retheme(self):
+        # All labels here use the default palette text colour, which already
+        # follows the light/dark scheme — nothing hand-coloured to update.
+        pass
+
+    def apply_system_defaults(self, dark: bool):
+        """Default the diagram's own theme + background to match the OS."""
+        blocked = [
+            (w, w.blockSignals(True))
+            for w in (self._theme, self._background)
+        ]
+        self._theme.setCurrentIndex(2 if dark else 0)  # Dark : Default
+        self._background.setCurrentIndex(2 if dark else 0)  # Dark : White
+        for widget, _ in blocked:
+            widget.blockSignals(False)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -532,7 +735,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(self._drop)
 
         self._status = QLabel("No file loaded.")
-        self._status.setStyleSheet("color: #6b7078;")
+        self._status.setStyleSheet(f"color: {_muted_hex(self)};")
         outer.addWidget(self._status)
 
         # Progress bar for loading a file; hidden until a load is in flight.
@@ -564,8 +767,21 @@ class MainWindow(QMainWindow):
         self._columns.applied.connect(self._render_selection)
         tabs.addTab(self._columns, "Columns")
 
+        # Rendered diagram tab = an options bar above the actual diagram view.
         self._diagram_view = DiagramView()
-        tabs.addTab(self._diagram_view, "Rendered diagram")
+        self._options_bar = DiagramOptionsBar()
+        self._options_bar.changed.connect(self._render_selection)
+        diagram_tab = QWidget()
+        diagram_layout = QVBoxLayout(diagram_tab)
+        diagram_layout.setContentsMargins(0, 0, 0, 0)
+        diagram_layout.setSpacing(4)
+        diagram_layout.addWidget(self._options_bar)
+        self._divider = QFrame()
+        self._divider.setFrameShape(QFrame.HLine)
+        self._divider.setStyleSheet(f"color: {_line_hex(self)};")
+        diagram_layout.addWidget(self._divider)
+        diagram_layout.addWidget(self._diagram_view, 1)
+        tabs.addTab(diagram_tab, "Rendered diagram")
 
         self._tabs = tabs
 
@@ -600,6 +816,22 @@ class MainWindow(QMainWindow):
         for btn in self._action_buttons:
             btn.setEnabled(False)
             buttons.addWidget(btn)
+
+        # PNG export options, grouped next to the Save buttons.
+        self._png_scale = QComboBox()
+        for label, value in [("1×", 1.0), ("2×", 2.0), ("3×", 3.0), ("4×", 4.0)]:
+            self._png_scale.addItem(label, value)
+        self._png_scale.setCurrentIndex(1)  # 2×
+        self._png_scale.setToolTip("Resolution multiplier for the saved PNG.")
+        self._png_transparent = QCheckBox("Transparent PNG")
+        self._png_export_widgets = [
+            QLabel("PNG:"),
+            self._png_scale,
+            self._png_transparent,
+        ]
+        for widget in self._png_export_widgets:
+            buttons.addWidget(widget)
+
         buttons.addStretch(1)
         outer.addLayout(buttons)
 
@@ -607,6 +839,8 @@ class MainWindow(QMainWindow):
         if not self._diagram_view.available:
             self._save_png_btn.setVisible(False)
             self._save_svg_btn.setVisible(False)
+            for widget in self._png_export_widgets:
+                widget.setVisible(False)
 
         self._copy_btn.clicked.connect(self.copy_mermaid)
         self._save_mmd_btn.clicked.connect(self.save_mmd)
@@ -616,6 +850,34 @@ class MainWindow(QMainWindow):
         self._preview_btn.clicked.connect(self.preview_browser)
 
         self.setCentralWidget(central)
+
+        # Match the OS: default the diagram's own theme/background to dark when
+        # the app starts dark, and apply palette-derived colours everywhere.
+        app = QApplication.instance()
+        if app is not None:
+            self._options_bar.apply_system_defaults(system_is_dark(app))
+        self.retheme()
+
+    def retheme(self):
+        """Re-apply palette-derived colours after a light/dark scheme change."""
+        muted = f"color: {_muted_hex(self)};"
+        self._status.setStyleSheet(muted)
+        self._divider.setStyleSheet(f"color: {_line_hex(self)};")
+        self._drop.retheme()
+        self._selector.retheme()
+        self._columns.retheme()
+        self._options_bar.retheme()
+
+    def changeEvent(self, event):  # noqa: N802 (Qt naming)
+        # The palette swap (light↔dark) arrives as a PaletteChange; restyle the
+        # widgets whose colours we set by hand.
+        if event.type() in (
+            QEvent.PaletteChange,
+            QEvent.ApplicationPaletteChange,
+            QEvent.ThemeChange,
+        ):
+            self.retheme()
+        super().changeEvent(event)
 
     # -- loading -----------------------------------------------------------
     def load_file(self, path: str):
@@ -720,7 +982,7 @@ class MainWindow(QMainWindow):
         self._columns.set_tables(filtered.tables)
         final = filter_columns(filtered, self._columns.excluded_pairs())
 
-        mermaid_text = generate_mermaid(final)
+        mermaid_text = generate_mermaid(final, self._options_bar.diagram_options())
         self._mermaid_text = mermaid_text
         self._mermaid_view.setPlainText(mermaid_text)
 
@@ -759,7 +1021,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self._diagram_view.set_diagram(mermaid_text)
+        self._diagram_view.set_diagram(mermaid_text, self._options_bar.render_style())
         self._status.setText(
             f"Loaded {self._loaded_name} — showing {scope} table(s), "
             f"{col_count} column(s), {rel_count} relationship(s)."
@@ -823,8 +1085,15 @@ class MainWindow(QMainWindow):
             self, "Save diagram PNG", "diagram.png", "PNG image (*.png)"
         )
         if path:
+            scale = self._png_scale.currentData()
+            if self._png_transparent.isChecked():
+                background = "transparent"
+            else:
+                background = self._options_bar.background_value()
+                if background == "transparent":
+                    background = "white"
             try:
-                self._diagram_view.save_png(path)
+                self._diagram_view.save_png(path, scale=scale, background=background)
             except Exception as exc:  # noqa: BLE001
                 QMessageBox.critical(self, "Could not save diagram", str(exc))
                 return
@@ -903,6 +1172,14 @@ def main(argv: list[str] | None = None):
     _configure_headless_env(normalized_argv)
 
     app = QApplication(sys.argv[:1])
+    # Follow the OS light/dark scheme, and keep following it if the user flips
+    # the system theme while the app is open.
+    app.setStyle("Fusion")
+    apply_system_palette(app)
+    hints = app.styleHints()
+    if hasattr(hints, "colorSchemeChanged"):
+        hints.colorSchemeChanged.connect(lambda _scheme: apply_system_palette(app))
+
     window = MainWindow()
     if args.file:
         window.load_file(args.file)
