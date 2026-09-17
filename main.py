@@ -64,6 +64,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSlider,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -990,15 +991,21 @@ class MainWindow(QMainWindow):
             buttons.addWidget(btn)
 
         # PNG export options, grouped next to the Save buttons.
-        self._png_scale = QComboBox()
-        for label, value in [("1×", 1.0), ("2×", 2.0), ("3×", 3.0), ("4×", 4.0)]:
-            self._png_scale.addItem(label, value)
-        self._png_scale.setCurrentIndex(1)  # 2×
-        self._png_scale.setToolTip("Resolution multiplier for the saved PNG.")
+        self._png_scale = QSlider(Qt.Horizontal)
+        self._png_scale.setRange(1, 10)
+        self._png_scale.setValue(2)
+        self._png_scale.setFixedWidth(130)
+        self._png_scale.setToolTip("Resolution multiplier for the saved PNG (1× to 10×).")
+        self._png_scale_value = QLabel("2×")
+        self._png_scale_value.setMinimumWidth(30)
+        self._png_scale.valueChanged.connect(
+            lambda value: self._png_scale_value.setText(f"{value}×")
+        )
         self._png_transparent = QCheckBox("Transparent PNG")
         self._png_export_widgets = [
             QLabel("PNG:"),
             self._png_scale,
+            self._png_scale_value,
             self._png_transparent,
         ]
         for widget in self._png_export_widgets:
@@ -1347,7 +1354,7 @@ class MainWindow(QMainWindow):
             self, "Save diagram PNG", "diagram.png", "PNG image (*.png)"
         )
         if path:
-            scale = self._png_scale.currentData()
+            scale = float(self._png_scale.value())
             if self._png_transparent.isChecked():
                 background = "transparent"
             else:

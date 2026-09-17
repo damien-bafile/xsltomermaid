@@ -140,6 +140,9 @@ def test_window_screenshot(tmp_path):
     window.load_file(str(sample))
     window.resize(1100, 760)
     assert window._options_bar.render_style().layout_direction == "LR"
+    assert window._png_scale.minimum() == 1
+    assert window._png_scale.maximum() == 10
+    assert window._png_scale.value() == 2
 
     out = tmp_path / "window.png"
     window.capture(str(out))
