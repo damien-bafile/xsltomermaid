@@ -1410,7 +1410,15 @@ class MainWindow(QMainWindow):
             with open(path, encoding="utf-8") as handle:
                 text = handle.read()
             source_name, selected = load_selection_toml(text)
-        except (OSError, ValueError) as exc:
+        except OSError:
+            preset_name = os.path.basename(path) or "selected preset"
+            QMessageBox.critical(
+                self,
+                "Could not load table list",
+                f"Could not read '{preset_name}'.",
+            )
+            return
+        except ValueError as exc:
             message = str(exc).strip() or "Invalid table-selection TOML file."
             preset_name = os.path.basename(path) or "selected preset"
             QMessageBox.critical(
@@ -1432,6 +1440,14 @@ class MainWindow(QMainWindow):
             )
             if answer != QMessageBox.Yes:
                 return
+
+        available = {table.name.lower() for table in self._schema.tables}
+        matched = [name for name in selected if name.lower() in available]
+        if not matched:
+            self._status.setText(
+                f"Loaded table list from {path} — no matching tables in the current schema."
+            )
+            return
 
         applied, missing = self._selector.set_selected_tables(selected)
         self._render_selection()
