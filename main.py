@@ -1295,6 +1295,15 @@ class MainWindow(QMainWindow):
             return
 
         self._diagram_rendered = True
+        if not self._diagram_view.available:
+            self._diagram_rendered = False
+            self._render_status.clear()
+            self._status.setText(
+                f"Loaded {self._loaded_name} — showing {scope} table(s), "
+                f"{col_count} column(s), {rel_count} relationship(s). "
+                "Rendered exports require PySide6 WebEngine."
+            )
+            return
         self._diagram_view.set_diagram(mermaid_text, self._options_bar.render_style())
         self._status.setText(
             f"Loaded {self._loaded_name} — showing {scope} table(s), "
@@ -1515,16 +1524,12 @@ class MainWindow(QMainWindow):
         if export_kind not in file_specs:
             return
 
+        rendered_export_kinds = {"pdf", "png", "svg"}
         if export_kind in {"drawio", "visio"}:
             schema = self._schema_for_export()
             if schema is None:
                 return
-        elif not self._diagram_view.available:
-            QMessageBox.information(
-                self,
-                "Export unavailable",
-                "PNG, SVG, and PDF exports need PySide6 WebEngine (PySide6-Addons).",
-            )
+        elif export_kind in rendered_export_kinds and self._nothing_to_export():
             return
 
         title, default_name, file_filter = file_specs[export_kind]
@@ -1545,9 +1550,6 @@ class MainWindow(QMainWindow):
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(content)
                 self._status.setText(f"Saved Visio diagram to {path}")
-                return
-
-            if self._nothing_to_export():
                 return
 
             if export_kind == "svg":

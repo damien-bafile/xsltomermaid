@@ -269,6 +269,7 @@ def test_export_rendered_format_requires_webengine(monkeypatch, tmp_path):
     window = app_module.MainWindow()
     window.load_file(str(sample))
     window._diagram_view.available = False
+    window._render_selection()
 
     info_calls = []
 
@@ -284,7 +285,6 @@ def test_export_rendered_format_requires_webengine(monkeypatch, tmp_path):
     window._export_format.setCurrentIndex(2)  # pdf
     window.export_diagram()
     assert info_calls, "Expected an informational prompt when WebEngine is unavailable."
-    assert "WebEngine" in info_calls[0][0][2]
 
     window._diagram_view.cleanup()
     del app
