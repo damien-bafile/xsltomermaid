@@ -1,12 +1,12 @@
 """In-app Mermaid rendering: a Qt widget that draws the ER diagram and can save
-it as SVG or PNG.
+it as SVG, PNG, or PDF.
 
 Rendering is done by a headless-capable ``QWebEngineView`` running a locally
 vendored ``mermaid.min.js`` (no network needed). The rendered ``<svg>`` is read
 back out of the page, which lets us:
 
 * show the diagram live in a tab, and
-* save it as a crisp ``.svg`` or rasterise it to ``.png`` with ``QtSvg`` — which
+* save it as a crisp ``.svg`` or rasterise it to ``.png`` / ``.pdf`` with Qt —
   works even headless (``QWebEngineView.grab()`` does not capture web content in
   offscreen mode, so we deliberately avoid it).
 
@@ -45,8 +45,17 @@ class RenderStyle:
     use_max_width: bool = True
     font_size: int = 12
 
-from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtCore import (
+    QByteArray,
+    QEventLoop,
+    QMarginsF,
+    QRectF,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
+from PySide6.QtGui import QColor, QImage, QPainter, QPageSize, QPdfWriter
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 
@@ -158,6 +167,30 @@ def svg_to_png(
     if not image.save(path, "PNG"):
         raise RuntimeError(f"Failed to save PNG to {path}")
     return effective
+
+
+def svg_to_pdf(svg: str, path: str, background: str = "white") -> str:
+    """Render an SVG string to a PDF file."""
+    from PySide6.QtSvg import QSvgRenderer
+
+    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+    size = renderer.defaultSize()
+    width = max(float(size.width()), 1.0)
+    height = max(float(size.height()), 1.0)
+    if width <= 1.0 or height <= 1.0:
+        fallback_width, fallback_height = _svg_dimensions(svg)
+        width = max(fallback_width, 1.0)
+        height = max(fallback_height, 1.0)
+
+    writer = QPdfWriter(path)
+    writer.setPageMargins(QMarginsF(0, 0, 0, 0))
+    writer.setPageSize(QPageSize(QRectF(0, 0, width, height).size(), QPageSize.Point))
+    painter = QPainter(writer)
+    if background != "transparent":
+        painter.fillRect(QRectF(0, 0, width, height), QColor(background))
+    renderer.render(painter, QRectF(0, 0, width, height))
+    painter.end()
+    return path
 
 
 def _svg_dimensions(svg: str) -> tuple[float, float]:
@@ -446,8 +479,164 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
     return ET.tostring(mxfile, encoding="unicode")
 
 
+def schema_to_visio(schema, page_name: str = "Page-1") -> str:
+    """Build a Visio VDX document from schema tables + relationships."""
+    ns = "urn:schemas-microsoft-com:office:visio"
+    ET.register_namespace("", ns)
+    root = ET.Element(f"{{{ns}}}VisioDocument")
+    pages = ET.SubElement(root, f"{{{ns}}}Pages")
+    page = ET.SubElement(
+        pages,
+        f"{{{ns}}}Page",
+        {"ID": "0", "Name": page_name, "NameU": page_name},
+    )
+    shapes = ET.SubElement(page, f"{{{ns}}}Shapes")
+    connects = ET.SubElement(page, f"{{{ns}}}Connects")
+
+    tables = list(getattr(schema, "tables", []) or [])
+    rels = list(getattr(schema, "relationships", []) or [])
+    if not tables:
+        return ET.tostring(root, encoding="unicode")
+
+    def _line(column) -> str:
+        keys = []
+        if getattr(column, "is_primary_key", False):
+            keys.append("PK")
+        if getattr(column, "foreign_key_reference", ""):
+            keys.append("FK")
+        key_part = f" [{' '.join(keys)}]" if keys else ""
+        data_type = (getattr(column, "data_type", "") or "").strip()
+        if hasattr(column, "rendered_type"):
+            data_type = column.rendered_type()
+        typed = f" : {data_type}" if data_type else ""
+        return f"{column.name}{typed}{key_part}"
+
+    def _size(table) -> tuple[float, float]:
+        line_texts = [table.name] + [_line(col) for col in table.columns]
+        longest = max((len(text) for text in line_texts), default=10)
+        width = min(max(2.8, longest * 0.09 + 0.7), 7.0)
+        height = max(1.0, 0.6 + len(table.columns) * 0.22)
+        return width, height
+
+    columns = max(1, int(math.ceil(math.sqrt(len(tables)))))
+    x = 1.0
+    y = 10.0
+    x_spacing = 1.0
+    y_spacing = 0.8
+    max_height = 0.0
+    table_ids_exact: dict[str, int | None] = {}
+    table_ids_lower: dict[str, int | None] = {}
+    table_ids_qualified: dict[str, int | None] = {}
+    table_ids_qualified_lower: dict[str, int | None] = {}
+    centers: dict[int, tuple[float, float]] = {}
+
+    for pos, table in enumerate(tables, start=1):
+        width, height = _size(table)
+        center_x = x + width / 2.0
+        center_y = y - height / 2.0
+        centers[pos] = (center_x, center_y)
+        if table.name in table_ids_exact and table_ids_exact[table.name] != pos:
+            table_ids_exact[table.name] = None
+        else:
+            table_ids_exact[table.name] = pos
+        lowered = table.name.lower()
+        if lowered in table_ids_lower and table_ids_lower[lowered] != pos:
+            table_ids_lower[lowered] = None
+        else:
+            table_ids_lower[lowered] = pos
+        qualified = getattr(table, "full_name", None) or (
+            f"{table.schema}.{table.name}" if getattr(table, "schema", "") else table.name
+        )
+        qualified = str(qualified)
+        if qualified in table_ids_qualified and table_ids_qualified[qualified] != pos:
+            table_ids_qualified[qualified] = None
+        else:
+            table_ids_qualified[qualified] = pos
+        qualified_lower = qualified.lower()
+        if (
+            qualified_lower in table_ids_qualified_lower
+            and table_ids_qualified_lower[qualified_lower] != pos
+        ):
+            table_ids_qualified_lower[qualified_lower] = None
+        else:
+            table_ids_qualified_lower[qualified_lower] = pos
+
+        shape = ET.SubElement(
+            shapes,
+            f"{{{ns}}}Shape",
+            {"ID": str(pos), "Name": table.name, "NameU": table.name, "Type": "Shape"},
+        )
+        xform = ET.SubElement(shape, f"{{{ns}}}XForm")
+        ET.SubElement(xform, f"{{{ns}}}PinX").text = f"{center_x:.4f}"
+        ET.SubElement(xform, f"{{{ns}}}PinY").text = f"{center_y:.4f}"
+        ET.SubElement(xform, f"{{{ns}}}Width").text = f"{width:.4f}"
+        ET.SubElement(xform, f"{{{ns}}}Height").text = f"{height:.4f}"
+        text = [table.name, ""] + [_line(col) for col in table.columns]
+        ET.SubElement(shape, f"{{{ns}}}Text").text = "\n".join(text)
+
+        max_height = max(max_height, height)
+        if pos % columns == 0:
+            x = 1.0
+            y -= max_height + y_spacing
+            max_height = 0.0
+        else:
+            x += width + x_spacing
+
+    def _lookup(value) -> int | None:
+        if not isinstance(value, str):
+            return None
+        table_id = table_ids_qualified.get(value)
+        if table_id is not None:
+            return table_id
+        table_id = table_ids_qualified_lower.get(value.lower())
+        if table_id is not None:
+            return table_id
+        table_id = table_ids_exact.get(value)
+        if table_id is not None:
+            return table_id
+        return table_ids_lower.get(value.lower())
+
+    edge_id = len(tables) + 1
+    for rel in rels:
+        parent = _lookup(getattr(rel, "parent_table", None))
+        child = _lookup(getattr(rel, "child_table", None))
+        if not parent or not child:
+            continue
+        begin_x, begin_y = centers[parent]
+        end_x, end_y = centers[child]
+        connector = ET.SubElement(
+            shapes,
+            f"{{{ns}}}Shape",
+            {
+                "ID": str(edge_id),
+                "Name": f"Relation{edge_id}",
+                "NameU": f"Relation{edge_id}",
+                "Type": "Shape",
+            },
+        )
+        xform1d = ET.SubElement(connector, f"{{{ns}}}XForm1D")
+        ET.SubElement(xform1d, f"{{{ns}}}BeginX").text = f"{begin_x:.4f}"
+        ET.SubElement(xform1d, f"{{{ns}}}BeginY").text = f"{begin_y:.4f}"
+        ET.SubElement(xform1d, f"{{{ns}}}EndX").text = f"{end_x:.4f}"
+        ET.SubElement(xform1d, f"{{{ns}}}EndY").text = f"{end_y:.4f}"
+        ET.SubElement(connector, f"{{{ns}}}Text").text = getattr(rel, "label", "") or ""
+        ET.SubElement(
+            connects,
+            f"{{{ns}}}Connect",
+            {"FromSheet": str(edge_id), "ToSheet": str(parent)},
+        )
+        ET.SubElement(
+            connects,
+            f"{{{ns}}}Connect",
+            {"FromSheet": str(edge_id), "ToSheet": str(child)},
+        )
+        edge_id += 1
+
+    return ET.tostring(root, encoding="unicode")
+
+
 class DiagramView(QWidget):
-    """A tab that renders a Mermaid ER diagram and can export it as SVG/PNG."""
+    """A tab that renders a Mermaid ER diagram and can export it as SVG/PNG/PDF."""
 
     # Emitted when a diagram starts loading, and when Mermaid finishes (or
     # fails) rendering it — so the UI can show a spinner then a tick.
@@ -594,6 +783,13 @@ class DiagramView(QWidget):
         if not svg:
             raise RuntimeError("No rendered diagram available to save.")
         return svg_to_png(svg, path, scale=scale, background=background)
+
+    def save_pdf(self, path: str, background: str = "white") -> str:
+        """Save the rendered diagram as PDF."""
+        svg = self.current_svg()
+        if not svg:
+            raise RuntimeError("No rendered diagram available to save.")
+        return svg_to_pdf(svg, path, background=background)
 
     def save_drawio(self, path: str) -> str:
         """Save the rendered diagram as a Draw.io (.drawio) file."""

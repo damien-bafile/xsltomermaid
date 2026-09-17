@@ -107,6 +107,22 @@ def test_schema_to_drawio_includes_table_names_and_fk_labels():
     assert "CustomerID" in edge_values
 
 
+def test_schema_to_visio_includes_tables_and_relationship_labels():
+    import diagram_view
+    from excel_to_mermaid import build_schema
+
+    records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
+    schema = build_schema(records)
+    visio = diagram_view.schema_to_visio(schema)
+    root = ET.fromstring(visio)
+    ns = {"v": "urn:schemas-microsoft-com:office:visio"}
+    texts = [node.text or "" for node in root.findall(".//v:Text", ns)]
+    joined = "\n".join(texts)
+    assert "Customer" in joined
+    assert "Order" in joined
+    assert "CustomerID" in joined
+
+
 def test_schema_to_drawio_relationship_matching_is_case_insensitive():
     import diagram_view
     from excel_to_mermaid import Relationship, Schema, Table
@@ -201,16 +217,12 @@ def test_window_screenshot(tmp_path):
     window.load_file(str(sample))
     window.resize(1100, 760)
     assert window._options_bar.render_style().layout_direction == "LR"
-    assert window._png_scale.minimum() == 1
-    assert window._png_scale.maximum() == 10
-    assert window._png_scale.value() == 2
-    assert window._png_scale_value.text() == "2×"
-    window._png_scale.setValue(7)
-    assert window._png_scale_value.text() == "7×"
-    if window._diagram_view.available:
-        assert not window._save_drawio_btn.isHidden()
-    else:
-        assert window._save_drawio_btn.isHidden()
+    assert not window._export_btn.isHidden()
+    kinds = [
+        window._export_format.itemData(i)
+        for i in range(window._export_format.count())
+    ]
+    assert kinds == ["drawio", "visio", "pdf", "png", "svg"]
 
     out = tmp_path / "window.png"
     window.capture(str(out))
