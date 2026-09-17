@@ -87,6 +87,25 @@ def test_filter_schema_include_related_pulls_in_neighbours():
     assert len(filtered.relationships) == 1
 
 
+def test_filter_schema_include_related_is_single_layer():
+    # Chain: A -> B -> C. Selecting A with related should pull in B (one hop),
+    # but not C (which is two hops away), regardless of relationship order.
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    schema = Schema(
+        tables=[Table("", "A"), Table("", "B"), Table("", "C")],
+        relationships=[
+            Relationship(parent_table="A", child_table="B", label="a"),
+            Relationship(parent_table="B", child_table="C", label="b"),
+        ],
+    )
+    filtered = filter_schema(schema, ["A"], include_related=True)
+    assert {t.name for t in filtered.tables} == {"A", "B"}
+    # Only the A–B edge survives (C isn't present).
+    assert len(filtered.relationships) == 1
+    assert filtered.relationships[0].child_table == "B"
+
+
 def test_filter_schema_empty_selection():
     schema = build_schema(SAMPLE_ROWS)
     filtered = filter_schema(schema, [])

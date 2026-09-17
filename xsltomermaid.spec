@@ -19,8 +19,14 @@ import os
 
 ONEFILE = os.environ.get("XSLTOMERMAID_ONEFILE", "1") != "0"
 
-# Bundle the vendored mermaid.js next to the app as vendor/mermaid.min.js.
-datas = [("vendor/mermaid.min.js", "vendor")]
+# Bundle the vendored mermaid.js and the app icon next to the app.
+datas = [
+    ("vendor/mermaid.min.js", "vendor"),
+    ("assets/app_icon.ico", "assets"),
+    ("assets/app_icon.png", "assets"),
+]
+
+ICON = "assets/app_icon.ico"
 
 a = Analysis(
     ["main.py"],
@@ -56,6 +62,7 @@ if ONEFILE:
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
+        icon=ICON,
     )
 else:
     exe = EXE(
@@ -74,6 +81,7 @@ else:
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
+        icon=ICON,
     )
     coll = COLLECT(
         exe,
