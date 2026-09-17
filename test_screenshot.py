@@ -59,6 +59,13 @@ def test_render_style_defaults_to_left_to_right():
     assert RenderStyle().layout_direction == "LR"
 
 
+def test_diagram_options_bar_constructs_headlessly():
+    app = QApplication.instance() or QApplication([])
+    bar = app_module.DiagramOptionsBar()
+
+    assert bar.render_style().layout_direction == "LR"
+
+
 def test_schema_to_drawio_creates_table_vertices_and_edges():
     import diagram_view
     from excel_to_mermaid import build_schema
@@ -99,11 +106,14 @@ def test_schema_to_drawio_includes_table_names_and_fk_labels():
     schema = build_schema(records)
     drawio = diagram_view.schema_to_drawio(schema)
     root = ET.fromstring(drawio)
+    vertex_values = [
+        cell.attrib.get("value", "") for cell in root.findall(".//mxCell[@vertex='1']")
+    ]
     edge_values = [
         cell.attrib.get("value", "") for cell in root.findall(".//mxCell[@edge='1']")
     ]
-    assert "<b>Customer</b>" in drawio
-    assert "<b>Order</b>" in drawio
+    assert any("<b>Customer</b>" in value for value in vertex_values)
+    assert any("<b>Order</b>" in value for value in vertex_values)
     assert "CustomerID" in edge_values
 
 
