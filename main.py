@@ -5,6 +5,7 @@ Run with:  python main.py
 
 from __future__ import annotations
 
+import html
 import os
 import sys
 import tempfile
@@ -97,6 +98,7 @@ from excel_to_mermaid import (
     shortest_path,
     wrap_mermaid_html,
 )
+from make_sample import write_sample
 from selection_preset import dump_selection_toml, load_selection_toml
 
 # Above this many tables we don't auto-render the whole diagram (it's slow and
@@ -136,6 +138,16 @@ def _muted_hex(widget) -> str:
 def _line_hex(widget) -> str:
     """A subtle border/divider colour for the current palette."""
     return widget.palette().color(QPalette.Mid).name()
+
+
+def _text_hex(widget) -> str:
+    """The normal (full-contrast) text colour for the current palette."""
+    return widget.palette().color(QPalette.WindowText).name()
+
+
+def _plural(n: int, word: str) -> str:
+    """"3, 'table'" -> "3 tables"; "1, 'table'" -> "1 table" (regular +s)."""
+    return f"{n:,} {word}" if n == 1 else f"{n:,} {word}s"
 
 
 def _dark_palette() -> QPalette:
@@ -986,7 +998,39 @@ class MainWindow(QMainWindow):
 
         self._status = QLabel("No file loaded.")
         self._status.setStyleSheet(f"color: {_muted_hex(self)};")
+        # AutoText (the default) renders the <span> success summary as rich text
+        # while keeping plain status messages plain — so a filename with & or <
+        # in a plain message can't be mis-parsed as markup.
         outer.addWidget(self._status)
+
+        # First-run nudge: say what the app produces, and offer a one-click
+        # sample so a newcomer can see real output without hunting for a file.
+        # Hidden the moment a schema loads (see _apply_loaded).
+        self._onboard = QWidget()
+        onboard_row = QHBoxLayout(self._onboard)
+        onboard_row.setContentsMargins(0, 0, 0, 0)
+        self._onboard_hint = QLabel(
+            "New here? Load a schema to get an ER diagram you can export to "
+            "Draw.io, Visio, PDF, PNG or SVG —"
+        )
+        self._onboard_hint.setStyleSheet(f"color: {_muted_hex(self)};")
+        self._sample_btn = QPushButton("try a sample")
+        self._sample_btn.setCursor(Qt.PointingHandCursor)
+        self._sample_btn.setStyleSheet(
+            "QPushButton {"
+            f"  color: {_ACCENT};"
+            "  border: none;"
+            "  background: transparent;"
+            "  padding: 0 2px;"
+            "  text-decoration: underline;"
+            "}"
+            "QPushButton:hover { color: #4a92f9; }"
+        )
+        self._sample_btn.clicked.connect(self.load_sample)
+        onboard_row.addWidget(self._onboard_hint)
+        onboard_row.addWidget(self._sample_btn)
+        onboard_row.addStretch(1)
+        outer.addWidget(self._onboard)
 
         # Progress bar for loading a file; hidden until a load is in flight.
         self._progress = QProgressBar()
@@ -1177,6 +1221,7 @@ class MainWindow(QMainWindow):
         """Re-apply palette-derived colours after a light/dark scheme change."""
         muted = f"color: {_muted_hex(self)};"
         self._status.setStyleSheet(muted)
+        self._onboard_hint.setStyleSheet(muted)
         line = f"color: {_line_hex(self)};"
         self._divider.setStyleSheet(line)
         for sep in self._button_seps:
@@ -1199,6 +1244,21 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
 
     # -- loading -----------------------------------------------------------
+    def load_sample(self):
+        """Write the bundled sample schema to a temp file and load it.
+
+        Lets a first-time user see real output in one click without hunting
+        for a spreadsheet. Errors surface the same way a normal load would.
+        """
+        try:
+            path = write_sample(
+                os.path.join(tempfile.gettempdir(), "sample_schema.xlsx")
+            )
+        except Exception as exc:  # noqa: BLE001 - surface to the user, don't crash
+            QMessageBox.critical(self, "Could not create sample", str(exc))
+            return
+        self.load_file_async(path)
+
     def load_file(self, path: str):
         """Load a file synchronously (used by tests and the CLI)."""
         try:
@@ -1293,6 +1353,7 @@ class MainWindow(QMainWindow):
         # The big drop target has done its job; shrink it to a file chip so the
         # tabs get the height, and wake up the (until now inert) table picker.
         self._drop.set_loaded(self._loaded_name)
+        self._onboard.setVisible(False)  # onboarding is a first-run nudge only
         self._selector.set_ready(True)
 
         names = [t.name for t in schema.tables]
@@ -1420,14 +1481,18 @@ class MainWindow(QMainWindow):
                 "Tick the tables you want on the left, then click “Render selected”."
             )
             self._status.setText(
-                f"Loaded {self._loaded_name} — {total} table(s). "
+                f"Loaded {self._loaded_name} — {_plural(total, 'table')}. "
                 "Select tables on the left to render a diagram."
             )
             return
 
         col_count = sum(len(t.columns) for t in final.tables)
         rel_count = len(final.relationships)
-        scope = f"{shown} of {total}" if shown != total else f"{total}"
+        tables_phrase = (
+            _plural(total, "table")
+            if shown == total
+            else f"{shown:,} of {total:,} tables"
+        )
 
         # Too big for Mermaid to render inline — show guidance instead of letting
         # it fail with "Maximum text size in diagram exceeded". The Mermaid source
@@ -1437,15 +1502,16 @@ class MainWindow(QMainWindow):
             self._render_status.clear()
             self._diagram_view.show_message(
                 f"This selection is too large to render as a diagram "
-                f"({shown} tables, {col_count} columns — about "
+                f"({_plural(shown, 'table')}, {_plural(col_count, 'column')} — about "
                 f"{len(mermaid_text) // 1000:,} KB of Mermaid).\n\n"
                 "Narrow it down with the filter and pick fewer tables, then click "
                 "“Render selected”. The full selection is still available in the "
                 "“Mermaid source” tab and via Save .mmd / .md."
             )
             self._status.setText(
-                f"Loaded {self._loaded_name} — {scope} table(s) selected, "
-                f"{col_count} column(s): too large to render (select fewer tables)."
+                f"Loaded {self._loaded_name} — {tables_phrase} selected, "
+                f"{_plural(col_count, 'column')}: too large to render "
+                "(select fewer tables)."
             )
             return
 
@@ -1454,15 +1520,22 @@ class MainWindow(QMainWindow):
             self._diagram_rendered = False
             self._render_status.clear()
             self._status.setText(
-                f"Loaded {self._loaded_name} — showing {scope} table(s), "
-                f"{col_count} column(s), {rel_count} relationship(s). "
+                f"Loaded {self._loaded_name} — showing {tables_phrase}, "
+                f"{_plural(col_count, 'column')}, {_plural(rel_count, 'relationship')}. "
                 "Rendered exports require PySide6 WebEngine."
             )
             return
         self._diagram_view.set_diagram(mermaid_text, self._options_bar.render_style())
+        # A brighter, scannable success summary: dim the "Loaded <file> —" lead
+        # (the name is already in the file chip) and give the counts full contrast.
+        stats = (
+            f"{tables_phrase} · {_plural(col_count, 'column')} · "
+            f"{_plural(rel_count, 'relationship')}"
+        )
         self._status.setText(
-            f"Loaded {self._loaded_name} — showing {scope} table(s), "
-            f"{col_count} column(s), {rel_count} relationship(s)."
+            f'<span style="color:{_muted_hex(self)}">Loaded '
+            f'{html.escape(self._loaded_name)} —</span> '
+            f'<span style="color:{_text_hex(self)}">{stats}</span>'
         )
 
     def _populate_table(self, rows: list[dict]):

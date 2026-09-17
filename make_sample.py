@@ -28,15 +28,21 @@ ROWS = [
 ]
 
 
-def main():
+def write_sample(path: str = "sample_schema.xlsx") -> str:
+    """Write the sample schema workbook to *path* and return the path."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Schema"
     ws.append(EXPECTED_HEADERS)
     for row in ROWS:
         ws.append(row)
-    wb.save("sample_schema.xlsx")
-    print("Wrote sample_schema.xlsx")
+    wb.save(path)
+    return path
+
+
+def main():
+    path = write_sample()
+    print(f"Wrote {path}")
 
 
 if __name__ == "__main__":
