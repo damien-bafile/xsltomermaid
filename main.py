@@ -332,7 +332,8 @@ class TableSelector(QWidget):
 
         self._related = QCheckBox("Include related tables")
         self._related.setToolTip(
-            "Also draw tables connected by a foreign key to the ones you picked."
+            "Also draw tables directly connected by a foreign key to the ones "
+            "you picked (one hop out)."
         )
         layout.addWidget(self._related)
 

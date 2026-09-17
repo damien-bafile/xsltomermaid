@@ -351,17 +351,21 @@ def filter_schema(
     Relationships are kept only when *both* endpoints are in the result, so the
     filtered diagram never dangles an edge to a table that isn't drawn.
 
-    When ``include_related`` is true, any table connected by a foreign key to a
-    selected table (in either direction) is pulled in as well, so a picked table
-    is shown together with what it references and what references it.
+    When ``include_related`` is true, the *direct* foreign-key neighbours of the
+    selected tables (in either direction) are pulled in as well — a single layer
+    out, so a picked table is shown with what it references and what references
+    it, but not those tables' further neighbours.
     """
     wanted = {name.strip().lower() for name in selected_names if name.strip()}
 
     if include_related and wanted:
+        # Match against the frozen original selection so neighbours-of-neighbours
+        # aren't dragged in; this expands by exactly one hop.
+        selected = set(wanted)
         for rel in schema.relationships:
             parent = rel.parent_table.lower()
             child = rel.child_table.lower()
-            if parent in wanted or child in wanted:
+            if parent in selected or child in selected:
                 wanted.add(parent)
                 wanted.add(child)
 
