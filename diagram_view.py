@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import html
 import math
+import re
 import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
+import xml.etree.ElementTree as ET
 
 
 @dataclass
@@ -35,7 +38,7 @@ class RenderStyle:
 
     theme: str = "default"  # default | neutral | dark | forest | base
     background: str = "#ffffff"  # page background (CSS colour or "transparent")
-    layout_direction: str = "TB"  # TB | LR | BT | RL
+    layout_direction: str = "LR"  # TB | LR | BT | RL
     entity_padding: int = 15
     min_entity_width: int = 100
     min_entity_height: int = 75
@@ -155,6 +158,101 @@ def svg_to_png(
     if not image.save(path, "PNG"):
         raise RuntimeError(f"Failed to save PNG to {path}")
     return effective
+
+
+def _svg_dimensions(svg: str) -> tuple[float, float]:
+    """Best-effort width/height read from SVG attributes or viewBox."""
+
+    def _number(text: str | None) -> float | None:
+        if not text:
+            return None
+        match = re.match(r"\s*([0-9]+(?:\.[0-9]+)?)", text)
+        if not match:
+            return None
+        return float(match.group(1))
+
+    width = height = None
+    try:
+        root = ET.fromstring(svg)
+        width = _number(root.attrib.get("width"))
+        height = _number(root.attrib.get("height"))
+        if not width or not height:
+            view_box = root.attrib.get("viewBox", "")
+            parts = [p for p in re.split(r"[\s,]+", view_box.strip()) if p]
+            if len(parts) == 4:
+                width = width or _number(parts[2])
+                height = height or _number(parts[3])
+    except ET.ParseError:
+        pass
+    return (width or 1200.0, height or 800.0)
+
+
+def svg_to_drawio(svg: str, page_name: str = "Page-1") -> str:
+    """Wrap an SVG as a Draw.io diagram containing one image cell."""
+    width, height = _svg_dimensions(svg)
+    encoded_svg = quote(svg)
+    style = (
+        "shape=image;verticalLabelPosition=bottom;verticalAlign=top;aspect=fixed;"
+        "imageAspect=0;image=data:image/svg+xml,"
+        f"{encoded_svg};"
+    )
+
+    mxfile = ET.Element(
+        "mxfile",
+        {
+            "host": "app.diagrams.net",
+            "version": "24.7.17",
+            "compressed": "false",
+        },
+    )
+    diagram = ET.SubElement(mxfile, "diagram", {"id": "diagram-1", "name": page_name})
+    graph = ET.SubElement(
+        diagram,
+        "mxGraphModel",
+        {
+            "dx": "1200",
+            "dy": "800",
+            "grid": "1",
+            "gridSize": "10",
+            "guides": "1",
+            "tooltips": "1",
+            "connect": "1",
+            "arrows": "1",
+            "fold": "1",
+            "page": "1",
+            "pageScale": "1",
+            "pageWidth": "827",
+            "pageHeight": "1169",
+            "math": "0",
+            "shadow": "0",
+        },
+    )
+    root = ET.SubElement(graph, "root")
+    ET.SubElement(root, "mxCell", {"id": "0"})
+    ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
+    image = ET.SubElement(
+        root,
+        "mxCell",
+        {
+            "id": "2",
+            "value": "",
+            "style": style,
+            "vertex": "1",
+            "parent": "1",
+        },
+    )
+    ET.SubElement(
+        image,
+        "mxGeometry",
+        {
+            "x": "0",
+            "y": "0",
+            "width": str(max(int(width), 1)),
+            "height": str(max(int(height), 1)),
+            "as": "geometry",
+        },
+    )
+    return ET.tostring(mxfile, encoding="unicode")
 
 
 class DiagramView(QWidget):
@@ -305,6 +403,14 @@ class DiagramView(QWidget):
         if not svg:
             raise RuntimeError("No rendered diagram available to save.")
         return svg_to_png(svg, path, scale=scale, background=background)
+
+    def save_drawio(self, path: str) -> str:
+        """Save the rendered diagram as a Draw.io (.drawio) file."""
+        svg = self.current_svg()
+        if not svg:
+            raise RuntimeError("No rendered diagram available to save.")
+        Path(path).write_text(svg_to_drawio(svg), encoding="utf-8")
+        return path
 
     def cleanup(self):
         if self._workdir:

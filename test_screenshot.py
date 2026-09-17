@@ -22,6 +22,7 @@ os.environ.setdefault(
 
 import struct
 import tempfile
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -50,6 +51,33 @@ def test_fit_scale_caps_large_exports():
 
     # Degenerate sizes don't blow up.
     assert _fit_scale(0, 0, 3.0) == 3.0
+
+
+def test_render_style_defaults_to_left_to_right():
+    from diagram_view import RenderStyle
+
+    assert RenderStyle().layout_direction == "LR"
+
+
+def test_svg_to_drawio_wraps_svg_image():
+    import diagram_view
+
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480">'
+        '<rect width="640" height="480" fill="white"/></svg>'
+    )
+    drawio = diagram_view.svg_to_drawio(svg)
+    root = ET.fromstring(drawio)
+    image_cell = root.find(".//mxCell[@id='2']")
+    geometry = root.find(".//mxCell[@id='2']/mxGeometry")
+
+    assert root.tag == "mxfile"
+    assert image_cell is not None
+    assert "shape=image;" in image_cell.attrib.get("style", "")
+    assert "data:image/svg+xml," in image_cell.attrib.get("style", "")
+    assert geometry is not None
+    assert geometry.attrib.get("width") == "640"
+    assert geometry.attrib.get("height") == "480"
 
 
 def _png_size(path: str) -> tuple[int, int]:
@@ -85,6 +113,7 @@ def test_window_screenshot(tmp_path):
     window = app_module.MainWindow()
     window.load_file(str(sample))
     window.resize(1100, 760)
+    assert window._options_bar.render_style().layout_direction == "LR"
 
     out = tmp_path / "window.png"
     window.capture(str(out))
