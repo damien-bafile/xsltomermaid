@@ -1034,21 +1034,40 @@ class MainWindow(QMainWindow):
         body.setSizes([280, 820])
         outer.addWidget(body, 1)
 
-        # Action buttons.
+        # Action buttons. Labels follow one convention: a trailing "…" marks the
+        # actions that open a file dialog; immediate actions (copy, preview) omit
+        # it. Tooltips disambiguate the near-identical .mmd / .md pair.
         buttons = QHBoxLayout()
         self._copy_btn = QPushButton("Copy Mermaid")
-        self._save_mmd_btn = QPushButton("Save .mmd")
-        self._save_md_btn = QPushButton("Save .md")
-        self._save_selection_btn = QPushButton("Save table list .toml")
-        self._load_selection_btn = QPushButton("Load table list .toml")
+        self._copy_btn.setToolTip("Copy the Mermaid diagram source to the clipboard.")
+        self._save_mmd_btn = QPushButton("Save .mmd…")
+        self._save_mmd_btn.setToolTip("Save the raw Mermaid diagram source (.mmd).")
+        self._save_md_btn = QPushButton("Save .md…")
+        self._save_md_btn.setToolTip(
+            "Save as Markdown with the diagram in a ```mermaid code block (.md)."
+        )
+        self._save_selection_btn = QPushButton("Save table list…")
+        self._save_selection_btn.setToolTip(
+            "Save the current table selection as a .toml preset."
+        )
+        self._load_selection_btn = QPushButton("Load table list…")
+        self._load_selection_btn.setToolTip(
+            "Restore a table selection from a .toml preset."
+        )
         self._export_format = QComboBox()
         self._export_format.addItem("Draw.io (.drawio)", "drawio")
         self._export_format.addItem("MS Visio (.vdx)", "visio")
         self._export_format.addItem("PDF (.pdf)", "pdf")
         self._export_format.addItem("PNG (.png)", "png")
         self._export_format.addItem("SVG (.svg)", "svg")
-        self._export_btn = QPushButton("Export diagram…")
+        self._export_format.setToolTip("Choose the diagram export format.")
+        # The button names the format the combo has selected, so the pair reads
+        # as one pick-then-export control rather than two rival export widgets.
+        self._export_btn = QPushButton("Export…")
+        self._export_format.currentIndexChanged.connect(self._sync_export_label)
         self._preview_btn = QPushButton("Preview in browser")
+        self._preview_btn.setToolTip("Open the rendered diagram in your web browser.")
+        self._sync_export_label()
         self._action_buttons = [
             self._copy_btn,
             self._save_mmd_btn,
@@ -1609,6 +1628,22 @@ class MainWindow(QMainWindow):
         if background == "transparent":
             background = "white"
         return float(scale), background
+
+    def _sync_export_label(self):
+        """Name the export button after the format the combo has selected.
+
+        Keeps the format picker and the trigger reading as a single
+        pick-then-export control (e.g. "Export .drawio…").
+        """
+        exts = {
+            "drawio": ".drawio",
+            "visio": ".vdx",
+            "pdf": ".pdf",
+            "png": ".png",
+            "svg": ".svg",
+        }
+        ext = exts.get(str(self._export_format.currentData() or ""))
+        self._export_btn.setText(f"Export {ext}…" if ext else "Export…")
 
     def export_diagram(self):
         if self._rendering:
