@@ -39,34 +39,35 @@ def load_selection_toml(text: str) -> tuple[str, list[str]]:
 
 
 def _load_toml(text: str) -> dict:
+    invalid_message = "Invalid TOML preset content."
     if tomllib is not None:
         try:
             data = tomllib.loads(text)
         except Exception as exc:
             if exc.__class__.__name__ == "TOMLDecodeError":
-                raise ValueError("Invalid TOML preset content.") from exc
+                raise ValueError(invalid_message) from exc
             raise
         if not isinstance(data, dict):
-            raise ValueError("Invalid TOML preset content.")
+            raise ValueError(invalid_message)
         return data
 
     # Lightweight fallback for Python 3.10: supports the exact format we write.
     data: dict[str, object] = {}
     for raw_line in text.splitlines():
         line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+        if not line or line.startswith("#"):
             continue
+        if "=" not in line:
+            raise ValueError(invalid_message)
         key, rhs = line.split("=", 1)
         key = key.strip()
         rhs = rhs.strip()
         if key not in {"filename", "selected_tables"}:
-            continue
+            raise ValueError(invalid_message)
         try:
             data[key] = json.loads(rhs)
         except json.JSONDecodeError as exc:
-            raise ValueError(
-                "Invalid TOML preset content for Python 3.10 fallback parser."
-            ) from exc
+            raise ValueError(invalid_message) from exc
     return data
 
 

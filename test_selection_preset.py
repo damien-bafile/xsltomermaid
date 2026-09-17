@@ -37,3 +37,13 @@ def test_selection_preset_dump_rejects_non_string_entries():
         assert "selected_tables" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("Expected ValueError for non-string selected table")
+
+
+def test_selection_preset_rejects_malformed_content():
+    bad = 'filename = "x.xlsx"\nthis is not valid toml\nselected_tables = ["A"]\n'
+    try:
+        load_selection_toml(bad)
+    except ValueError as exc:
+        assert str(exc) == "Invalid TOML preset content."
+    else:  # pragma: no cover
+        raise AssertionError("Expected ValueError for malformed TOML")
