@@ -511,6 +511,14 @@ class ColumnSelector(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
+        # Frame this tab as a refinement of the tables picked on the left, not a
+        # second place to select tables. Palette-coloured (no stylesheet) so it
+        # tracks light/dark on its own.
+        self._header = QLabel()
+        self._header.setWordWrap(True)
+        self._header.setVisible(False)
+        layout.addWidget(self._header)
+
         # A dropdown to focus on one table's columns (fast for huge schemas).
         scope_row = QHBoxLayout()
         scope_row.addWidget(QLabel("Show:"))
@@ -520,7 +528,7 @@ class ColumnSelector(QWidget):
         layout.addLayout(scope_row)
 
         self._hint = QLabel(
-            "Load a file and render some tables, then choose which columns to "
+            "Select tables at left, then refine which of their columns to "
             "include here."
         )
         self._hint.setWordWrap(True)
@@ -561,9 +569,14 @@ class ColumnSelector(QWidget):
         button_row.addWidget(keys_btn)
         layout.addLayout(button_row)
 
-        apply_btn = QPushButton("Apply to diagram")
-        apply_btn.clicked.connect(lambda: self.applied.emit())
-        layout.addWidget(apply_btn)
+        # Same verb as the left panel: one "Render selected" commits the whole
+        # table + column selection, from whichever surface you're on.
+        render_btn = QPushButton("Render selected")
+        render_btn.setToolTip(
+            "Render the diagram with the current table and column selection."
+        )
+        render_btn.clicked.connect(lambda: self.applied.emit())
+        layout.addWidget(render_btn)
 
     # -- population --------------------------------------------------------
     def set_tables(self, tables: list[Table]):
@@ -604,16 +617,24 @@ class ColumnSelector(QWidget):
     def _rebuild_view(self):
         """(Re)build the tree for the current dropdown scope."""
         if not self._tables:
+            self._header.setVisible(False)
             self._tree.clear()
             self._tree.setVisible(False)
             self._filter.setVisible(False)
             self._hint.setText(
-                "Load a file and render some tables, then choose which columns "
-                "to include here."
+                "Select tables at left, then refine which of their columns to "
+                "include here."
             )
             self._hint.setVisible(True)
             self._update_count()
             return
+
+        n = len(self._tables)
+        self._header.setText(
+            f"Columns for the {n} table{'' if n == 1 else 's'} selected at left. "
+            "Untick a column to leave it out, then Render selected."
+        )
+        self._header.setVisible(True)
 
         scope = self._scope_tables()
         is_all = self._scope.currentData() in (None, -1)
@@ -642,7 +663,10 @@ class ColumnSelector(QWidget):
         self._tree.clear()
         for table in scope:
             key = table.name.lower()
-            parent = QTreeWidgetItem(self._tree, [table.name])
+            # Show the column count so a table row reads as an "all columns of
+            # this table" group toggle, distinct from the plain table names in
+            # the left picker.
+            parent = QTreeWidgetItem(self._tree, [f"{table.name}  ({len(table.columns)})"])
             parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
             parent.setData(0, self._ROLE_KIND, "table")
             for column in table.columns:
