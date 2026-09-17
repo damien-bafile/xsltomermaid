@@ -243,7 +243,7 @@ def test_window_screenshot(tmp_path):
 
     # Sanity: the load actually populated the model.
     assert len(window._schema.tables) == 4
-    assert window._table.rowCount() == len(ROWS)
+    assert window._table.model().rowCount() == len(ROWS)
 
     del app  # keep linters quiet; app is a singleton
 

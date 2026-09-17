@@ -56,7 +56,7 @@ from PySide6.QtCore import (
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QColor, QImage, QPainter, QPageSize, QPdfWriter
+from PySide6.QtGui import QColor, QImage, QPainter, QPageSize, QPalette, QPdfWriter
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 
@@ -711,7 +711,7 @@ class DiagramView(QWidget):
             )
             label.setAlignment(Qt.AlignCenter)
             label.setWordWrap(True)
-            label.setStyleSheet("color: #6b7078;")
+            # Use the palette text colour so it stays legible in dark mode.
             layout.addWidget(label)
 
     # -- rendering ---------------------------------------------------------
@@ -799,9 +799,21 @@ class DiagramView(QWidget):
         self._shell_loaded = False
         self._loading_shell = False
         self._pending_render = None
+        # Theme the message page from the palette so it matches the app in dark
+        # mode instead of flashing a white panel.
+        pal = self.palette()
+        base = pal.color(QPalette.Base)
+        text = pal.color(QPalette.WindowText)
+        window = pal.color(QPalette.Window)
+        muted = QColor(
+            round(text.red() * 0.6 + window.red() * 0.4),
+            round(text.green() * 0.6 + window.green() * 0.4),
+            round(text.blue() * 0.6 + window.blue() * 0.4),
+        )
         page = (
             "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
-            "html,body{margin:0;padding:32px;background:#ffffff;color:#6b7078;"
+            f"html,body{{margin:0;padding:32px;background:{base.name()};"
+            f"color:{muted.name()};"
             "font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;"
             "font-size:15px;line-height:1.5}</style></head><body>"
             f"{html.escape(message)}</body></html>"

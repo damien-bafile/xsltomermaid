@@ -47,7 +47,15 @@ def _configure_headless_env(argv: list[str] | None = None) -> None:
 
 _configure_headless_env()
 
-from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QEvent,
+    QModelIndex,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -58,6 +66,7 @@ from PySide6.QtGui import (
     QPalette,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -77,8 +86,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QHeaderView,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
@@ -138,9 +146,26 @@ def app_icon() -> QIcon:
     return QIcon()
 
 
+def _blend(a: QColor, b: QColor, f: float) -> QColor:
+    """Mix colour ``a`` toward ``b`` by fraction ``f`` (0..1)."""
+    return QColor(
+        round(a.red() * (1 - f) + b.red() * f),
+        round(a.green() * (1 - f) + b.green() * f),
+        round(a.blue() * (1 - f) + b.blue() * f),
+    )
+
+
 def _muted_hex(widget) -> str:
-    """A subdued text colour for the current palette (adapts light/dark)."""
-    return widget.palette().color(QPalette.Disabled, QPalette.WindowText).name()
+    """A subdued but legible secondary-text colour for the current palette.
+
+    Blends the normal text colour ~30% toward the window background: softer than
+    body text, but still meets WCAG AA (~4.5:1). The palette's Disabled role is
+    only ~3.7:1, so it must not be reused for active secondary text.
+    """
+    palette = widget.palette()
+    return _blend(
+        palette.color(QPalette.WindowText), palette.color(QPalette.Window), 0.30
+    ).name()
 
 
 def _line_hex(widget) -> str:
@@ -1001,12 +1026,54 @@ class RenderStatus(QWidget):
         self._text.setStyleSheet(f"color: {_muted_hex(self)};")
 
 
+class ExtractedDataModel(QAbstractTableModel):
+    """Read-only model for the raw extracted rows.
+
+    Backing the Extracted-data tab with a model + ``QTableView`` means only the
+    visible cells are realised, instead of building a widget item for every cell
+    (which was ~n_rows × 17 items on the UI thread for large sheets). The cell
+    string doubles as its tooltip, so the full value is available on hover for
+    elided cells without any per-cell allocation.
+    """
+
+    def __init__(self, headers: list[str], parent=None):
+        super().__init__(parent)
+        self._headers = list(headers)
+        self._rows: list[list[str]] = []
+
+    def set_rows(self, rows: list[list[str]]):
+        self.beginResetModel()
+        self._rows = rows
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._headers)
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid() or role not in (Qt.DisplayRole, Qt.ToolTipRole):
+            return None
+        return self._rows[index.row()][index.column()] or None
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role != Qt.DisplayRole:
+            return None
+        if orientation == Qt.Horizontal:
+            return self._headers[section]
+        return section + 1  # 1-based row numbers, like the old vertical header
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Excel Schema → Mermaid ER Diagram")
         self.setWindowIcon(app_icon())
         self.resize(1100, 760)
+        # A floor so the window can't shrink small enough to clip the action bar
+        # or collapse the panels; every action is also reachable from the menu.
+        self.setMinimumSize(960, 600)
 
         self._schema: Schema | None = None
         self._mermaid_text: str = ""
@@ -1073,18 +1140,23 @@ class MainWindow(QMainWindow):
         # Tabs: extracted data table + generated Mermaid text.
         tabs = QTabWidget()
 
-        self._table = QTableWidget(0, len(EXPECTED_HEADERS))
-        self._table.setHorizontalHeaderLabels(EXPECTED_HEADERS)
-        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        # A model + view (not per-cell widgets) so only visible rows are realised.
+        self._table_model = ExtractedDataModel(EXPECTED_HEADERS, self)
+        self._table = QTableView()
+        self._table.setModel(self._table_model)
+        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
         # Keep rows single-line and let long free-text cells elide rather than
-        # wrap into tall rows; a per-cell tooltip carries the full value.
+        # wrap into tall rows; the model serves the full value as the tooltip.
         self._table.setWordWrap(False)
         self._table.setTextElideMode(Qt.ElideRight)
         table_header = self._table.horizontalHeader()
         table_header.setSectionResizeMode(QHeaderView.Interactive)
         table_header.setStretchLastSection(True)  # Description soaks up spare width
         table_header.setMinimumSectionSize(44)
+        # Size columns from a sample of rows, not all of them, so auto-sizing a
+        # huge sheet stays fast.
+        table_header.setResizeContentsPrecision(50)
         tabs.addTab(self._table, "Extracted data")
 
         self._columns = ColumnSelector()
@@ -1650,27 +1722,27 @@ class MainWindow(QMainWindow):
         )
 
     def _populate_table(self, rows: list[dict]):
-        self._table.setRowCount(0)
-        # Loose header matching so extra/renamed columns still line up.
-        norm_map = {self._key(h): h for h in EXPECTED_HEADERS}
-        self._table.setRowCount(len(rows))
-        for r, row in enumerate(rows):
+        # Build a plain 2-D grid of strings (loose header matching so extra or
+        # renamed columns still line up) and hand it to the model in one reset —
+        # no per-cell widgets.
+        keyed_headers = [self._key(h) for h in EXPECTED_HEADERS]
+        data: list[list[str]] = []
+        for row in rows:
             row_by_key = {self._key(k): v for k, v in row.items()}
-            for c, header in enumerate(EXPECTED_HEADERS):
-                value = row_by_key.get(self._key(header))
-                text = "" if value is None else str(value)
-                item = QTableWidgetItem(text)
-                if text:
-                    # Full value on hover, since wide cells elide.
-                    item.setToolTip(text)
-                self._table.setItem(r, c, item)
+            data.append(
+                [
+                    "" if row_by_key.get(k) is None else str(row_by_key.get(k))
+                    for k in keyed_headers
+                ]
+            )
+        self._table_model.set_rows(data)
         self._table.resizeColumnsToContents()
         # Keep any single long free-text cell (Description, DefaultValue, …) from
         # blowing a column out to the point it shoves the rest off-screen; the
         # value is still readable via elision + tooltip, or by widening the column.
         _MAX_COL_WIDTH = 320
         header = self._table.horizontalHeader()
-        for c in range(self._table.columnCount()):
+        for c in range(self._table_model.columnCount()):
             if c == header.count() - 1:
                 continue  # last column stretches; don't fight it
             if self._table.columnWidth(c) > _MAX_COL_WIDTH:
