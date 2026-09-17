@@ -90,6 +90,9 @@ def test_svg_dimensions_handles_fractional_and_exponent_sizes():
     w, h = diagram_view._svg_dimensions('<svg width=".5" height="1e3"></svg>')
     assert w == 0.5
     assert h == 1000.0
+    w0, h0 = diagram_view._svg_dimensions('<svg width="0" height="0"></svg>')
+    assert w0 == 0.0
+    assert h0 == 0.0
 
 
 def _png_size(path: str) -> tuple[int, int]:

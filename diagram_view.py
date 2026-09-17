@@ -178,15 +178,18 @@ def _svg_dimensions(svg: str) -> tuple[float, float]:
         root = ET.fromstring(svg)
         width = _number(root.attrib.get("width"))
         height = _number(root.attrib.get("height"))
-        if not width or not height:
+        if width is None or height is None:
             view_box = root.attrib.get("viewBox", "")
             parts = [p for p in re.split(r"[\s,]+", view_box.strip()) if p]
             if len(parts) == 4:
-                width = width or _number(parts[2])
-                height = height or _number(parts[3])
+                width = width if width is not None else _number(parts[2])
+                height = height if height is not None else _number(parts[3])
     except ET.ParseError:
         pass
-    return (width or 1200.0, height or 800.0)
+    return (
+        width if width is not None else 1200.0,
+        height if height is not None else 800.0,
+    )
 
 
 def svg_to_drawio(svg: str, page_name: str = "Page-1") -> str:
@@ -194,10 +197,8 @@ def svg_to_drawio(svg: str, page_name: str = "Page-1") -> str:
     width, height = _svg_dimensions(svg)
     encoded_svg = quote(svg, safe="")
     style = (
-        "shape=image;verticalLabelPosition=bottom;verticalAlign=top;aspect=fixed;"
-        + "imageAspect=0;image=data:image/svg+xml,"
-        + encoded_svg
-        + ";"
+        f"shape=image;verticalLabelPosition=bottom;verticalAlign=top;aspect=fixed;"
+        f"imageAspect=0;image=data:image/svg+xml,{encoded_svg};"
     )
 
     mxfile = ET.Element(
