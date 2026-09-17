@@ -50,7 +50,6 @@ from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -65,7 +64,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QSlider,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -77,7 +75,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diagram_view import DiagramView, RenderStyle, resource_path, schema_to_drawio
+from diagram_view import (
+    DiagramView,
+    RenderStyle,
+    resource_path,
+    schema_to_drawio,
+    schema_to_visio,
+)
 from excel_to_mermaid import (
     EXPECTED_HEADERS,
     DiagramOptions,
@@ -986,9 +990,13 @@ class MainWindow(QMainWindow):
         self._save_md_btn = QPushButton("Save .md")
         self._save_selection_btn = QPushButton("Save table list .toml")
         self._load_selection_btn = QPushButton("Load table list .toml")
-        self._save_drawio_btn = QPushButton("Save diagram .drawio")
-        self._save_png_btn = QPushButton("Save diagram PNG")
-        self._save_svg_btn = QPushButton("Save diagram SVG")
+        self._export_format = QComboBox()
+        self._export_format.addItem("Draw.io (.drawio)", "drawio")
+        self._export_format.addItem("MS Visio (.vdx)", "visio")
+        self._export_format.addItem("PDF (.pdf)", "pdf")
+        self._export_format.addItem("PNG (.png)", "png")
+        self._export_format.addItem("SVG (.svg)", "svg")
+        self._export_btn = QPushButton("Export diagram…")
         self._preview_btn = QPushButton("Preview in browser")
         self._action_buttons = [
             self._copy_btn,
@@ -996,55 +1004,23 @@ class MainWindow(QMainWindow):
             self._save_md_btn,
             self._save_selection_btn,
             self._load_selection_btn,
-            self._save_drawio_btn,
-            self._save_png_btn,
-            self._save_svg_btn,
+            self._export_format,
+            self._export_btn,
             self._preview_btn,
         ]
         for btn in self._action_buttons:
             btn.setEnabled(False)
             buttons.addWidget(btn)
 
-        # PNG export options, grouped next to the Save buttons.
-        self._png_scale = QSlider(Qt.Horizontal)
-        self._png_scale.setRange(1, 10)
-        self._png_scale.setValue(2)
-        self._png_scale.setFixedWidth(130)
-        self._png_scale.setToolTip("Resolution multiplier for the saved PNG (1× to 10×).")
-        self._png_scale_value = QLabel("2×")
-        self._png_scale_value.setMinimumWidth(30)
-        self._png_scale.valueChanged.connect(
-            lambda value: self._png_scale_value.setText(f"{value}×")
-        )
-        self._png_transparent = QCheckBox("Transparent PNG")
-        self._png_export_widgets = [
-            QLabel("PNG:"),
-            self._png_scale,
-            self._png_scale_value,
-            self._png_transparent,
-        ]
-        for widget in self._png_export_widgets:
-            buttons.addWidget(widget)
-
         buttons.addStretch(1)
         outer.addLayout(buttons)
-
-        # Diagram export needs WebEngine; hide those buttons if it's unavailable.
-        if not self._diagram_view.available:
-            self._save_drawio_btn.setVisible(False)
-            self._save_png_btn.setVisible(False)
-            self._save_svg_btn.setVisible(False)
-            for widget in self._png_export_widgets:
-                widget.setVisible(False)
 
         self._copy_btn.clicked.connect(self.copy_mermaid)
         self._save_mmd_btn.clicked.connect(self.save_mmd)
         self._save_md_btn.clicked.connect(self.save_md)
         self._save_selection_btn.clicked.connect(self.save_table_selection_toml)
         self._load_selection_btn.clicked.connect(self.load_table_selection_toml)
-        self._save_drawio_btn.clicked.connect(self.save_diagram_drawio)
-        self._save_png_btn.clicked.connect(self.save_diagram_png)
-        self._save_svg_btn.clicked.connect(self.save_diagram_svg)
+        self._export_btn.clicked.connect(self.export_diagram)
         self._preview_btn.clicked.connect(self.preview_browser)
 
         self.setCentralWidget(central)
@@ -1147,8 +1123,8 @@ class MainWindow(QMainWindow):
         self._progress.setRange(0, 0)  # 0..0 == busy indicator
         self._progress.setVisible(True)
         self._status.setText(message)
-        for btn in (self._save_drawio_btn, self._save_png_btn, self._save_svg_btn):
-            btn.setEnabled(False)
+        self._export_btn.setEnabled(False)
+        self._export_format.setEnabled(False)
         app = QApplication.instance()
         if app is not None:
             app.processEvents()  # paint the bar before we block
@@ -1156,8 +1132,8 @@ class MainWindow(QMainWindow):
     def _end_render(self):
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
-        for btn in (self._save_drawio_btn, self._save_png_btn, self._save_svg_btn):
-            btn.setEnabled(True)
+        self._export_btn.setEnabled(True)
+        self._export_format.setEnabled(True)
         self._rendering = False
 
     def _apply_loaded(self, path: str, rows: list[dict], schema: Schema, mermaid_text: str):
@@ -1319,6 +1295,15 @@ class MainWindow(QMainWindow):
             return
 
         self._diagram_rendered = True
+        if not self._diagram_view.available:
+            self._diagram_rendered = False
+            self._render_status.clear()
+            self._status.setText(
+                f"Loaded {self._loaded_name} — showing {scope} table(s), "
+                f"{col_count} column(s), {rel_count} relationship(s). "
+                "Rendered exports require PySide6 WebEngine."
+            )
+            return
         self._diagram_view.set_diagram(mermaid_text, self._options_bar.render_style())
         self._status.setText(
             f"Loaded {self._loaded_name} — showing {scope} table(s), "
@@ -1483,74 +1468,131 @@ class MainWindow(QMainWindow):
             return True
         return False
 
-    def save_diagram_png(self):
-        if self._rendering or self._nothing_to_export():
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save diagram PNG", "diagram.png", "PNG image (*.png)"
+    def _schema_for_export(self):
+        if self._drawio_schema is not None and self._drawio_schema.tables:
+            return self._drawio_schema
+        QMessageBox.information(
+            self,
+            "Nothing to export",
+            "There are no selected tables to export yet.",
         )
-        if path:
-            scale = float(self._png_scale.value())
-            if self._png_transparent.isChecked():
-                background = "transparent"
-            else:
+        return None
+
+    def _png_export_options(self) -> tuple[float, str] | None:
+        scale, ok = QInputDialog.getDouble(
+            self,
+            "PNG scale",
+            "Scale multiplier (1.0–10.0):",
+            2.0,
+            1.0,
+            10.0,
+            1,
+        )
+        if not ok:
+            return None
+        transparent = (
+            QMessageBox.question(
+                self,
+                "PNG background",
+                "Use transparent background?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            == QMessageBox.Yes
+        )
+        if transparent:
+            return float(scale), "transparent"
+        background = self._options_bar.background_value()
+        if background == "transparent":
+            background = "white"
+        return float(scale), background
+
+    def export_diagram(self):
+        if self._rendering:
+            return
+
+        render_started = False
+        schema = None
+        export_kind = str(self._export_format.currentData() or "")
+        file_specs = {
+            "drawio": ("Save Draw.io diagram", "diagram.drawio", "Draw.io file (*.drawio)"),
+            "visio": ("Save Visio diagram", "diagram.vdx", "Visio XML Drawing (*.vdx)"),
+            "pdf": ("Save diagram PDF", "diagram.pdf", "PDF document (*.pdf)"),
+            "png": ("Save diagram PNG", "diagram.png", "PNG image (*.png)"),
+            "svg": ("Save diagram SVG", "diagram.svg", "SVG image (*.svg)"),
+        }
+        if export_kind not in file_specs:
+            return
+
+        rendered_export_kinds = {"pdf", "png", "svg"}
+        if export_kind in {"drawio", "visio"}:
+            schema = self._schema_for_export()
+            if schema is None:
+                return
+        elif export_kind in rendered_export_kinds and self._nothing_to_export():
+            return
+
+        png_options: tuple[float, str] | None = None
+        if export_kind == "png":
+            png_options = self._png_export_options()
+            if png_options is None:
+                return
+
+        title, default_name, file_filter = file_specs[export_kind]
+        path, _ = QFileDialog.getSaveFileName(self, title, default_name, file_filter)
+        if not path:
+            return
+
+        try:
+            if export_kind == "drawio":
+                content = schema_to_drawio(schema)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(content)
+                self._status.setText(f"Saved Draw.io diagram to {path}")
+                return
+
+            if export_kind == "visio":
+                content = schema_to_visio(schema)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(content)
+                self._status.setText(f"Saved Visio diagram to {path}")
+                return
+
+            if export_kind == "svg":
+                self._begin_render("Rendering diagram to SVG…")
+                render_started = True
+                self._diagram_view.save_svg(path)
+                self._end_render()
+                render_started = False
+                self._status.setText(f"Saved rendered diagram to {path}")
+                return
+
+            if export_kind == "pdf":
                 background = self._options_bar.background_value()
                 if background == "transparent":
                     background = "white"
-            self._begin_render("Rendering diagram to PNG…")
-            try:
-                used = self._diagram_view.save_png(
-                    path, scale=scale, background=background
-                )
-            except Exception as exc:  # noqa: BLE001
+                self._begin_render("Rendering diagram to PDF…")
+                render_started = True
+                self._diagram_view.save_pdf(path, background=background)
                 self._end_render()
-                QMessageBox.critical(self, "Could not save diagram", str(exc))
+                render_started = False
+                self._status.setText(f"Saved rendered diagram to {path}")
                 return
+
+            scale, background = png_options
+            self._begin_render("Rendering diagram to PNG…")
+            render_started = True
+            used = self._diagram_view.save_png(path, scale=scale, background=background)
             self._end_render()
+            render_started = False
             note = ""
             if used < scale - 1e-6:
                 note = f" (scaled to {used:.2f}× to keep it within size limits)"
             self._status.setText(f"Saved rendered diagram to {path}{note}")
-
-    def save_diagram_drawio(self):
-        if self._rendering:
-            return
-        if self._drawio_schema is None or not self._drawio_schema.tables:
-            QMessageBox.information(
-                self,
-                "Nothing to export",
-                "There are no selected tables to export to Draw.io yet.",
-            )
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save diagram Draw.io file", "diagram.drawio", "Draw.io file (*.drawio)"
-        )
-        if path:
-            try:
-                content = schema_to_drawio(self._drawio_schema)
-                with open(path, "w", encoding="utf-8") as handle:
-                    handle.write(content)
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.critical(self, "Could not save diagram", str(exc))
-                return
-            self._status.setText(f"Saved Draw.io diagram to {path}")
-
-    def save_diagram_svg(self):
-        if self._rendering or self._nothing_to_export():
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save diagram SVG", "diagram.svg", "SVG image (*.svg)"
-        )
-        if path:
-            self._begin_render("Rendering diagram to SVG…")
-            try:
-                self._diagram_view.save_svg(path)
-            except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            if render_started:
                 self._end_render()
-                QMessageBox.critical(self, "Could not save diagram", str(exc))
-                return
-            self._end_render()
-            self._status.setText(f"Saved rendered diagram to {path}")
+            QMessageBox.critical(self, "Could not save diagram", str(exc))
 
     # -- testing helpers ---------------------------------------------------
     def capture(self, path: str) -> str:
