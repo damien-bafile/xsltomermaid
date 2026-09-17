@@ -338,17 +338,27 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
     y = 40
     max_height_in_row = 0
 
-    table_ids_exact: dict[str, str] = {}
+    table_ids_exact: dict[str, str | None] = {}
     table_ids_lower: dict[str, str | None] = {}
+    table_ids_qualified: dict[str, str] = {}
+    table_ids_qualified_lower: dict[str, str] = {}
     for pos, table in enumerate(tables):
         width, height = _table_size(table)
         table_id = str(pos + 2)
-        table_ids_exact[table.name] = table_id
+        if table.name in table_ids_exact and table_ids_exact[table.name] != table_id:
+            table_ids_exact[table.name] = None
+        else:
+            table_ids_exact[table.name] = table_id
         lowered = table.name.lower()
         if lowered in table_ids_lower and table_ids_lower[lowered] != table_id:
             table_ids_lower[lowered] = None
         else:
             table_ids_lower[lowered] = table_id
+        qualified = getattr(table, "full_name", None) or (
+            f"{table.schema}.{table.name}" if getattr(table, "schema", "") else table.name
+        )
+        table_ids_qualified[str(qualified)] = table_id
+        table_ids_qualified_lower[str(qualified).lower()] = table_id
         style = (
             "shape=mxgraph.er.entity;whiteSpace=wrap;html=1;align=left;verticalAlign=top;"
             "spacing=8;rounded=0;strokeColor=#36393d;fillColor=#ffffff;"
@@ -384,14 +394,24 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
         else:
             x += width + x_spacing
 
+    def _lookup_table_id(value) -> str | None:
+        if not isinstance(value, str):
+            return None
+        table_id = table_ids_qualified.get(value)
+        if table_id is not None:
+            return table_id
+        table_id = table_ids_qualified_lower.get(value.lower())
+        if table_id is not None:
+            return table_id
+        table_id = table_ids_exact.get(value)
+        if table_id is not None:
+            return table_id
+        return table_ids_lower.get(value.lower())
+
     edge_id = len(tables) + 2
     for rel in rels:
-        parent_id = table_ids_exact.get(rel.parent_table)
-        if parent_id is None and isinstance(rel.parent_table, str):
-            parent_id = table_ids_lower.get(rel.parent_table.lower())
-        child_id = table_ids_exact.get(rel.child_table)
-        if child_id is None and isinstance(rel.child_table, str):
-            child_id = table_ids_lower.get(rel.child_table.lower())
+        parent_id = _lookup_table_id(getattr(rel, "parent_table", None))
+        child_id = _lookup_table_id(getattr(rel, "child_table", None))
         if not parent_id or not child_id:
             continue
         ET.SubElement(

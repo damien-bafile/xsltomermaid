@@ -129,6 +129,28 @@ def test_schema_to_drawio_relationship_matching_is_case_insensitive():
     assert target in vertices and "<b>Order</b>" in vertices[target]
 
 
+def test_schema_to_drawio_qualified_names_avoid_ambiguous_table_matches():
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    schema = Schema(
+        tables=[
+            Table("dbo", "Customer"),
+            Table("sales", "Customer"),
+            Table("dbo", "Order"),
+        ],
+        relationships=[
+            Relationship(parent_table="dbo.Customer", child_table="Order", label="CustomerID"),
+            Relationship(parent_table="Customer", child_table="Order", label="AmbiguousCustomer"),
+        ],
+    )
+    drawio = diagram_view.schema_to_drawio(schema)
+    root = ET.fromstring(drawio)
+    edge_values = [cell.attrib.get("value", "") for cell in root.findall(".//mxCell[@edge='1']")]
+    assert "CustomerID" in edge_values
+    assert "AmbiguousCustomer" not in edge_values
+
+
 def _png_size(path: str) -> tuple[int, int]:
     """Return (width, height) read from a PNG header, or (0, 0) if invalid."""
     with open(path, "rb") as handle:
