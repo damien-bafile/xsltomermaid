@@ -5,6 +5,7 @@ Run with:  python main.py
 
 from __future__ import annotations
 
+import html
 import os
 import sys
 import tempfile
@@ -67,6 +68,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
+    QHeaderView,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -96,6 +98,7 @@ from excel_to_mermaid import (
     shortest_path,
     wrap_mermaid_html,
 )
+from make_sample import write_sample
 from selection_preset import dump_selection_toml, load_selection_toml
 
 # Above this many tables we don't auto-render the whole diagram (it's slow and
@@ -135,6 +138,16 @@ def _muted_hex(widget) -> str:
 def _line_hex(widget) -> str:
     """A subtle border/divider colour for the current palette."""
     return widget.palette().color(QPalette.Mid).name()
+
+
+def _text_hex(widget) -> str:
+    """The normal (full-contrast) text colour for the current palette."""
+    return widget.palette().color(QPalette.WindowText).name()
+
+
+def _plural(n: int, word: str) -> str:
+    """"3, 'table'" -> "3 tables"; "1, 'table'" -> "1 table" (regular +s)."""
+    return f"{n:,} {word}" if n == 1 else f"{n:,} {word}s"
 
 
 def _dark_palette() -> QPalette:
@@ -183,18 +196,35 @@ def apply_system_palette(app) -> bool:
 class DropArea(QLabel):
     """A large label that accepts a dragged spreadsheet file."""
 
+    _IDLE_TEXT = (
+        "\n\n⬇  Drag an Excel schema file here\n\n"
+        "(.xlsx / .xlsm)  —  or click to browse\n\n"
+    )
+
     def __init__(self, on_file, parent=None):
         super().__init__(parent)
         self._on_file = on_file
+        self._compact = False
         self.setAcceptDrops(True)
         self.setAlignment(Qt.AlignCenter)
         self.setWordWrap(True)
-        self.setText(
-            "\n\n⬇  Drag an Excel schema file here\n\n"
-            "(.xlsx / .xlsm)  —  or click to browse\n\n"
-        )
+        self.setText(self._IDLE_TEXT)
         self.setObjectName("dropArea")
         self.setMinimumHeight(120)
+        self._reset_style()
+
+    def set_loaded(self, name: str):
+        """Shrink to a slim file chip once a schema is loaded.
+
+        The big idle target is worth its height only until a file is in; after
+        that it becomes a compact bar so the tabs get the room. The whole area
+        stays a drop target and click-to-browse, so replacing the file is a
+        drop or a click away.
+        """
+        self._compact = True
+        self.setText(f"📄  {name}     ·     drop or click to load another file")
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(46)
         self._reset_style()
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt naming)
@@ -246,14 +276,25 @@ class DropArea(QLabel):
         )
 
     def _reset_style(self):
-        self.setStyleSheet(
-            "#dropArea {"
-            f"  border: 2px dashed {_line_hex(self)};"
-            "  border-radius: 12px;"
-            f"  color: {_muted_hex(self)};"
-            "  font-size: 15px;"
-            "}"
-        )
+        if self._compact:
+            self.setStyleSheet(
+                "#dropArea {"
+                f"  border: 1px solid {_line_hex(self)};"
+                "  border-radius: 8px;"
+                f"  color: {_muted_hex(self)};"
+                "  font-size: 13px;"
+                "  padding: 4px 12px;"
+                "}"
+            )
+        else:
+            self.setStyleSheet(
+                "#dropArea {"
+                f"  border: 2px dashed {_line_hex(self)};"
+                "  border-radius: 12px;"
+                f"  color: {_muted_hex(self)};"
+                "  font-size: 15px;"
+                "}"
+            )
 
     def retheme(self):
         """Re-apply the idle style for the current palette (light/dark)."""
@@ -333,13 +374,13 @@ class TableSelector(QWidget):
         layout.addWidget(self._count)
 
         button_row = QHBoxLayout()
-        select_shown = QPushButton("Select shown")
-        clear_btn = QPushButton("Clear")
-        select_shown.setToolTip("Tick every table currently visible in the list.")
-        select_shown.clicked.connect(self.check_shown)
-        clear_btn.clicked.connect(self.clear_selection)
-        button_row.addWidget(select_shown)
-        button_row.addWidget(clear_btn)
+        self._select_shown_btn = QPushButton("Select shown")
+        self._clear_btn = QPushButton("Clear")
+        self._select_shown_btn.setToolTip("Tick every table currently visible in the list.")
+        self._select_shown_btn.clicked.connect(self.check_shown)
+        self._clear_btn.clicked.connect(self.clear_selection)
+        button_row.addWidget(self._select_shown_btn)
+        button_row.addWidget(self._clear_btn)
         layout.addLayout(button_row)
 
         self._related_btn = QPushButton("Add related tables")
@@ -358,9 +399,30 @@ class TableSelector(QWidget):
         self._path_btn.clicked.connect(lambda: self.path_requested.emit())
         layout.addWidget(self._path_btn)
 
-        render_btn = QPushButton("Render selected")
-        render_btn.clicked.connect(lambda: self.applied.emit())
-        layout.addWidget(render_btn)
+        self._render_btn = QPushButton("Render selected")
+        self._render_btn.clicked.connect(lambda: self.applied.emit())
+        layout.addWidget(self._render_btn)
+
+        # Nothing to act on until a schema is loaded.
+        self.set_ready(False)
+
+    def set_ready(self, ready: bool):
+        """Enable the selection controls only once a schema is loaded.
+
+        With no file open there are no tables to pick, so the filter, the list
+        and every action button are disabled to match the (already disabled)
+        export bar rather than inviting dead clicks at "0 of 0 selected".
+        """
+        for widget in (
+            self._filter,
+            self._list,
+            self._select_shown_btn,
+            self._clear_btn,
+            self._related_btn,
+            self._path_btn,
+            self._render_btn,
+        ):
+            widget.setEnabled(ready)
 
     # -- population --------------------------------------------------------
     def set_tables(self, names: list[str]):
@@ -461,6 +523,14 @@ class ColumnSelector(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
+        # Frame this tab as a refinement of the tables picked on the left, not a
+        # second place to select tables. Palette-coloured (no stylesheet) so it
+        # tracks light/dark on its own.
+        self._header = QLabel()
+        self._header.setWordWrap(True)
+        self._header.setVisible(False)
+        layout.addWidget(self._header)
+
         # A dropdown to focus on one table's columns (fast for huge schemas).
         scope_row = QHBoxLayout()
         scope_row.addWidget(QLabel("Show:"))
@@ -470,7 +540,7 @@ class ColumnSelector(QWidget):
         layout.addLayout(scope_row)
 
         self._hint = QLabel(
-            "Load a file and render some tables, then choose which columns to "
+            "Select tables at left, then refine which of their columns to "
             "include here."
         )
         self._hint.setWordWrap(True)
@@ -511,9 +581,14 @@ class ColumnSelector(QWidget):
         button_row.addWidget(keys_btn)
         layout.addLayout(button_row)
 
-        apply_btn = QPushButton("Apply to diagram")
-        apply_btn.clicked.connect(lambda: self.applied.emit())
-        layout.addWidget(apply_btn)
+        # Same verb as the left panel: one "Render selected" commits the whole
+        # table + column selection, from whichever surface you're on.
+        render_btn = QPushButton("Render selected")
+        render_btn.setToolTip(
+            "Render the diagram with the current table and column selection."
+        )
+        render_btn.clicked.connect(lambda: self.applied.emit())
+        layout.addWidget(render_btn)
 
     # -- population --------------------------------------------------------
     def set_tables(self, tables: list[Table]):
@@ -554,16 +629,24 @@ class ColumnSelector(QWidget):
     def _rebuild_view(self):
         """(Re)build the tree for the current dropdown scope."""
         if not self._tables:
+            self._header.setVisible(False)
             self._tree.clear()
             self._tree.setVisible(False)
             self._filter.setVisible(False)
             self._hint.setText(
-                "Load a file and render some tables, then choose which columns "
-                "to include here."
+                "Select tables at left, then refine which of their columns to "
+                "include here."
             )
             self._hint.setVisible(True)
             self._update_count()
             return
+
+        n = len(self._tables)
+        self._header.setText(
+            f"Columns for the {n} table{'' if n == 1 else 's'} selected at left. "
+            "Untick a column to leave it out, then Render selected."
+        )
+        self._header.setVisible(True)
 
         scope = self._scope_tables()
         is_all = self._scope.currentData() in (None, -1)
@@ -592,7 +675,10 @@ class ColumnSelector(QWidget):
         self._tree.clear()
         for table in scope:
             key = table.name.lower()
-            parent = QTreeWidgetItem(self._tree, [table.name])
+            # Show the column count so a table row reads as an "all columns of
+            # this table" group toggle, distinct from the plain table names in
+            # the left picker.
+            parent = QTreeWidgetItem(self._tree, [f"{table.name}  ({len(table.columns)})"])
             parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
             parent.setData(0, self._ROLE_KIND, "table")
             for column in table.columns:
@@ -912,7 +998,39 @@ class MainWindow(QMainWindow):
 
         self._status = QLabel("No file loaded.")
         self._status.setStyleSheet(f"color: {_muted_hex(self)};")
+        # AutoText (the default) renders the <span> success summary as rich text
+        # while keeping plain status messages plain — so a filename with & or <
+        # in a plain message can't be mis-parsed as markup.
         outer.addWidget(self._status)
+
+        # First-run nudge: say what the app produces, and offer a one-click
+        # sample so a newcomer can see real output without hunting for a file.
+        # Hidden the moment a schema loads (see _apply_loaded).
+        self._onboard = QWidget()
+        onboard_row = QHBoxLayout(self._onboard)
+        onboard_row.setContentsMargins(0, 0, 0, 0)
+        self._onboard_hint = QLabel(
+            "New here? Load a schema to get an ER diagram you can export to "
+            "Draw.io, Visio, PDF, PNG or SVG —"
+        )
+        self._onboard_hint.setStyleSheet(f"color: {_muted_hex(self)};")
+        self._sample_btn = QPushButton("try a sample")
+        self._sample_btn.setCursor(Qt.PointingHandCursor)
+        self._sample_btn.setStyleSheet(
+            "QPushButton {"
+            f"  color: {_ACCENT};"
+            "  border: none;"
+            "  background: transparent;"
+            "  padding: 0 2px;"
+            "  text-decoration: underline;"
+            "}"
+            "QPushButton:hover { color: #4a92f9; }"
+        )
+        self._sample_btn.clicked.connect(self.load_sample)
+        onboard_row.addWidget(self._onboard_hint)
+        onboard_row.addWidget(self._sample_btn)
+        onboard_row.addStretch(1)
+        outer.addWidget(self._onboard)
 
         # Progress bar for loading a file; hidden until a load is in flight.
         self._progress = QProgressBar()
@@ -928,6 +1046,14 @@ class MainWindow(QMainWindow):
         self._table.setHorizontalHeaderLabels(EXPECTED_HEADERS)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
+        # Keep rows single-line and let long free-text cells elide rather than
+        # wrap into tall rows; a per-cell tooltip carries the full value.
+        self._table.setWordWrap(False)
+        self._table.setTextElideMode(Qt.ElideRight)
+        table_header = self._table.horizontalHeader()
+        table_header.setSectionResizeMode(QHeaderView.Interactive)
+        table_header.setStretchLastSection(True)  # Description soaks up spare width
+        table_header.setMinimumSectionSize(44)
         tabs.addTab(self._table, "Extracted data")
 
         self._columns = ColumnSelector()
@@ -969,6 +1095,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(diagram_tab, "Rendered diagram")
 
         self._tabs = tabs
+        self._diagram_tab = diagram_tab
 
         # Left: table picker to limit what gets rendered. Right: the tabs.
         self._selector = TableSelector()
@@ -984,21 +1111,40 @@ class MainWindow(QMainWindow):
         body.setSizes([280, 820])
         outer.addWidget(body, 1)
 
-        # Action buttons.
+        # Action buttons. Labels follow one convention: a trailing "…" marks the
+        # actions that open a file dialog; immediate actions (copy, preview) omit
+        # it. Tooltips disambiguate the near-identical .mmd / .md pair.
         buttons = QHBoxLayout()
         self._copy_btn = QPushButton("Copy Mermaid")
-        self._save_mmd_btn = QPushButton("Save .mmd")
-        self._save_md_btn = QPushButton("Save .md")
-        self._save_selection_btn = QPushButton("Save table list .toml")
-        self._load_selection_btn = QPushButton("Load table list .toml")
+        self._copy_btn.setToolTip("Copy the Mermaid diagram source to the clipboard.")
+        self._save_mmd_btn = QPushButton("Save .mmd…")
+        self._save_mmd_btn.setToolTip("Save the raw Mermaid diagram source (.mmd).")
+        self._save_md_btn = QPushButton("Save .md…")
+        self._save_md_btn.setToolTip(
+            "Save as Markdown with the diagram in a ```mermaid code block (.md)."
+        )
+        self._save_selection_btn = QPushButton("Save table list…")
+        self._save_selection_btn.setToolTip(
+            "Save the current table selection as a .toml preset."
+        )
+        self._load_selection_btn = QPushButton("Load table list…")
+        self._load_selection_btn.setToolTip(
+            "Restore a table selection from a .toml preset."
+        )
         self._export_format = QComboBox()
         self._export_format.addItem("Draw.io (.drawio)", "drawio")
         self._export_format.addItem("MS Visio (.vdx)", "visio")
         self._export_format.addItem("PDF (.pdf)", "pdf")
         self._export_format.addItem("PNG (.png)", "png")
         self._export_format.addItem("SVG (.svg)", "svg")
-        self._export_btn = QPushButton("Export diagram…")
+        self._export_format.setToolTip("Choose the diagram export format.")
+        # The button names the format the combo has selected, so the pair reads
+        # as one pick-then-export control rather than two rival export widgets.
+        self._export_btn = QPushButton("Export…")
+        self._export_format.currentIndexChanged.connect(self._sync_export_label)
         self._preview_btn = QPushButton("Preview in browser")
+        self._preview_btn.setToolTip("Open the rendered diagram in your web browser.")
+        self._sync_export_label()
         self._action_buttons = [
             self._copy_btn,
             self._save_mmd_btn,
@@ -1011,7 +1157,45 @@ class MainWindow(QMainWindow):
         ]
         for btn in self._action_buttons:
             btn.setEnabled(False)
-            buttons.addWidget(btn)
+
+        # "Copy Mermaid" is the most-reached-for action, so it leads as the one
+        # filled/accent button; the rest stay quiet.
+        self._copy_btn.setStyleSheet(
+            "QPushButton {"
+            f"  background: {_ACCENT};"
+            "  color: white;"
+            "  font-weight: 600;"
+            "  border: none;"
+            "  border-radius: 6px;"
+            "  padding: 6px 14px;"
+            "}"
+            "QPushButton:hover:enabled { background: #4a92f9; }"
+            "QPushButton:pressed:enabled { background: #1f6fe0; }"
+            "QPushButton:disabled {"
+            "  background: rgba(128,128,128,0.18);"
+            "  color: rgba(128,128,128,0.75);"
+            "}"
+        )
+
+        # The row reads as three jobs, not eight equal buttons: get the Mermaid
+        # text · save/load the table selection · export or preview the diagram.
+        self._button_seps: list[QFrame] = []
+        groups = [
+            [self._copy_btn, self._save_mmd_btn, self._save_md_btn],
+            [self._save_selection_btn, self._load_selection_btn],
+            [self._export_format, self._export_btn, self._preview_btn],
+        ]
+        for i, group in enumerate(groups):
+            if i > 0:
+                sep = QFrame()
+                sep.setFrameShape(QFrame.VLine)
+                sep.setFixedHeight(24)
+                self._button_seps.append(sep)
+                buttons.addSpacing(4)
+                buttons.addWidget(sep)
+                buttons.addSpacing(4)
+            for widget in group:
+                buttons.addWidget(widget)
 
         buttons.addStretch(1)
         outer.addLayout(buttons)
@@ -1037,7 +1221,11 @@ class MainWindow(QMainWindow):
         """Re-apply palette-derived colours after a light/dark scheme change."""
         muted = f"color: {_muted_hex(self)};"
         self._status.setStyleSheet(muted)
-        self._divider.setStyleSheet(f"color: {_line_hex(self)};")
+        self._onboard_hint.setStyleSheet(muted)
+        line = f"color: {_line_hex(self)};"
+        self._divider.setStyleSheet(line)
+        for sep in self._button_seps:
+            sep.setStyleSheet(line)
         self._drop.retheme()
         self._selector.retheme()
         self._columns.retheme()
@@ -1056,6 +1244,21 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
 
     # -- loading -----------------------------------------------------------
+    def load_sample(self):
+        """Write the bundled sample schema to a temp file and load it.
+
+        Lets a first-time user see real output in one click without hunting
+        for a spreadsheet. Errors surface the same way a normal load would.
+        """
+        try:
+            path = write_sample(
+                os.path.join(tempfile.gettempdir(), "sample_schema.xlsx")
+            )
+        except Exception as exc:  # noqa: BLE001 - surface to the user, don't crash
+            QMessageBox.critical(self, "Could not create sample", str(exc))
+            return
+        self.load_file_async(path)
+
     def load_file(self, path: str):
         """Load a file synchronously (used by tests and the CLI)."""
         try:
@@ -1147,6 +1350,11 @@ class MainWindow(QMainWindow):
         self._schema = schema
         self._loaded_name = os.path.basename(path)
         self._populate_table(rows)
+        # The big drop target has done its job; shrink it to a file chip so the
+        # tabs get the height, and wake up the (until now inert) table picker.
+        self._drop.set_loaded(self._loaded_name)
+        self._onboard.setVisible(False)  # onboarding is a first-run nudge only
+        self._selector.set_ready(True)
 
         names = [t.name for t in schema.tables]
         self._selector.set_tables(names)
@@ -1157,6 +1365,13 @@ class MainWindow(QMainWindow):
 
         for btn in self._action_buttons:
             btn.setEnabled(True)
+
+        # Land on the diagram — the reason they opened the file — once one is
+        # actually rendered. Only in the live window: headless captures, the CLI
+        # and tests grab the window before it's shown and should keep landing on
+        # the data table.
+        if self.isVisible() and self._diagram_rendered:
+            self._tabs.setCurrentWidget(self._diagram_tab)
 
     def _add_related_tables(self):
         """Tick the one-hop foreign-key neighbours of the checked tables, render."""
@@ -1266,14 +1481,18 @@ class MainWindow(QMainWindow):
                 "Tick the tables you want on the left, then click “Render selected”."
             )
             self._status.setText(
-                f"Loaded {self._loaded_name} — {total} table(s). "
+                f"Loaded {self._loaded_name} — {_plural(total, 'table')}. "
                 "Select tables on the left to render a diagram."
             )
             return
 
         col_count = sum(len(t.columns) for t in final.tables)
         rel_count = len(final.relationships)
-        scope = f"{shown} of {total}" if shown != total else f"{total}"
+        tables_phrase = (
+            _plural(total, "table")
+            if shown == total
+            else f"{shown:,} of {total:,} tables"
+        )
 
         # Too big for Mermaid to render inline — show guidance instead of letting
         # it fail with "Maximum text size in diagram exceeded". The Mermaid source
@@ -1283,15 +1502,16 @@ class MainWindow(QMainWindow):
             self._render_status.clear()
             self._diagram_view.show_message(
                 f"This selection is too large to render as a diagram "
-                f"({shown} tables, {col_count} columns — about "
+                f"({_plural(shown, 'table')}, {_plural(col_count, 'column')} — about "
                 f"{len(mermaid_text) // 1000:,} KB of Mermaid).\n\n"
                 "Narrow it down with the filter and pick fewer tables, then click "
                 "“Render selected”. The full selection is still available in the "
                 "“Mermaid source” tab and via Save .mmd / .md."
             )
             self._status.setText(
-                f"Loaded {self._loaded_name} — {scope} table(s) selected, "
-                f"{col_count} column(s): too large to render (select fewer tables)."
+                f"Loaded {self._loaded_name} — {tables_phrase} selected, "
+                f"{_plural(col_count, 'column')}: too large to render "
+                "(select fewer tables)."
             )
             return
 
@@ -1300,15 +1520,22 @@ class MainWindow(QMainWindow):
             self._diagram_rendered = False
             self._render_status.clear()
             self._status.setText(
-                f"Loaded {self._loaded_name} — showing {scope} table(s), "
-                f"{col_count} column(s), {rel_count} relationship(s). "
+                f"Loaded {self._loaded_name} — showing {tables_phrase}, "
+                f"{_plural(col_count, 'column')}, {_plural(rel_count, 'relationship')}. "
                 "Rendered exports require PySide6 WebEngine."
             )
             return
         self._diagram_view.set_diagram(mermaid_text, self._options_bar.render_style())
+        # A brighter, scannable success summary: dim the "Loaded <file> —" lead
+        # (the name is already in the file chip) and give the counts full contrast.
+        stats = (
+            f"{tables_phrase} · {_plural(col_count, 'column')} · "
+            f"{_plural(rel_count, 'relationship')}"
+        )
         self._status.setText(
-            f"Loaded {self._loaded_name} — showing {scope} table(s), "
-            f"{col_count} column(s), {rel_count} relationship(s)."
+            f'<span style="color:{_muted_hex(self)}">Loaded '
+            f'{html.escape(self._loaded_name)} —</span> '
+            f'<span style="color:{_text_hex(self)}">{stats}</span>'
         )
 
     def _populate_table(self, rows: list[dict]):
@@ -1320,9 +1547,23 @@ class MainWindow(QMainWindow):
             row_by_key = {self._key(k): v for k, v in row.items()}
             for c, header in enumerate(EXPECTED_HEADERS):
                 value = row_by_key.get(self._key(header))
-                item = QTableWidgetItem("" if value is None else str(value))
+                text = "" if value is None else str(value)
+                item = QTableWidgetItem(text)
+                if text:
+                    # Full value on hover, since wide cells elide.
+                    item.setToolTip(text)
                 self._table.setItem(r, c, item)
         self._table.resizeColumnsToContents()
+        # Keep any single long free-text cell (Description, DefaultValue, …) from
+        # blowing a column out to the point it shoves the rest off-screen; the
+        # value is still readable via elision + tooltip, or by widening the column.
+        _MAX_COL_WIDTH = 320
+        header = self._table.horizontalHeader()
+        for c in range(self._table.columnCount()):
+            if c == header.count() - 1:
+                continue  # last column stretches; don't fight it
+            if self._table.columnWidth(c) > _MAX_COL_WIDTH:
+                self._table.setColumnWidth(c, _MAX_COL_WIDTH)
 
     @staticmethod
     def _key(text: str) -> str:
@@ -1507,6 +1748,22 @@ class MainWindow(QMainWindow):
         if background == "transparent":
             background = "white"
         return float(scale), background
+
+    def _sync_export_label(self):
+        """Name the export button after the format the combo has selected.
+
+        Keeps the format picker and the trigger reading as a single
+        pick-then-export control (e.g. "Export .drawio…").
+        """
+        exts = {
+            "drawio": ".drawio",
+            "visio": ".vdx",
+            "pdf": ".pdf",
+            "png": ".png",
+            "svg": ".svg",
+        }
+        ext = exts.get(str(self._export_format.currentData() or ""))
+        self._export_btn.setText(f"Export {ext}…" if ext else "Export…")
 
     def export_diagram(self):
         if self._rendering:
