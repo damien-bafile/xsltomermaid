@@ -166,10 +166,12 @@ def _svg_dimensions(svg: str) -> tuple[float, float]:
     def _number(text: str | None) -> float | None:
         if not text:
             return None
-        match = re.match(r"\s*([0-9]+(?:\.[0-9]+)?)", text)
-        if not match:
+        value = str(text).strip()
+        value = re.sub(r"(px|pt|pc|cm|mm|in)$", "", value, flags=re.IGNORECASE)
+        try:
+            return float(value)
+        except ValueError:
             return None
-        return float(match.group(1))
 
     width = height = None
     try:
@@ -190,7 +192,7 @@ def _svg_dimensions(svg: str) -> tuple[float, float]:
 def svg_to_drawio(svg: str, page_name: str = "Page-1") -> str:
     """Wrap an SVG as a Draw.io diagram containing one image cell."""
     width, height = _svg_dimensions(svg)
-    encoded_svg = quote(svg)
+    encoded_svg = quote(svg, safe="")
     style = (
         "shape=image;verticalLabelPosition=bottom;verticalAlign=top;aspect=fixed;"
         + "imageAspect=0;image=data:image/svg+xml,"

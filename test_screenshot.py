@@ -81,6 +81,15 @@ def test_svg_to_drawio_wraps_svg_image():
     assert geometry is not None
     assert geometry.attrib.get("width") == "640"
     assert geometry.attrib.get("height") == "480"
+    assert "%2Fsvg%3E" in style
+
+
+def test_svg_dimensions_handles_fractional_and_exponent_sizes():
+    import diagram_view
+
+    w, h = diagram_view._svg_dimensions('<svg width=".5" height="1e3"></svg>')
+    assert w == 0.5
+    assert h == 1000.0
 
 
 def _png_size(path: str) -> tuple[int, int]:
