@@ -42,7 +42,7 @@ class RenderStyle:
     use_max_width: bool = True
     font_size: int = 12
 
-from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QUrl
+from PySide6.QtCore import QByteArray, QEventLoop, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
@@ -160,11 +160,18 @@ def svg_to_png(
 class DiagramView(QWidget):
     """A tab that renders a Mermaid ER diagram and can export it as SVG/PNG."""
 
+    # Emitted when a diagram starts loading, and when Mermaid finishes (or
+    # fails) rendering it — so the UI can show a spinner then a tick.
+    render_started = Signal()
+    render_finished = Signal(bool)  # True on success, False on error/timeout
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.available = WEBENGINE_AVAILABLE
         self._workdir: str | None = None
         self._view = None
+        self._render_gen = 0  # bumped per load so stale polls are ignored
+        self._expect_render = False  # True for a diagram, False for a message
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -176,6 +183,7 @@ class DiagramView(QWidget):
             self._view.settings().setAttribute(
                 QWebEngineSettings.LocalContentCanAccessFileUrls, True
             )
+            self._view.loadFinished.connect(self._on_load_finished)
             layout.addWidget(self._view)
         else:
             label = QLabel(
@@ -193,14 +201,51 @@ class DiagramView(QWidget):
         """Load a diagram into the view (async render)."""
         if not self.available or self._view is None or self._workdir is None:
             return
+        self._render_gen += 1
+        self._expect_render = True
+        self.render_started.emit()
         html_path = Path(self._workdir) / "diagram.html"
         html_path.write_text(_diagram_html(mermaid_text, style), encoding="utf-8")
         self._view.load(QUrl.fromLocalFile(str(html_path)))
+
+    def _on_load_finished(self, ok: bool):
+        """Once the diagram page has loaded, poll until Mermaid signals done."""
+        if not self._expect_render:
+            return  # a message page, not a diagram
+        if not ok:
+            self.render_finished.emit(False)
+            return
+        self._poll_mermaid(self._render_gen, 0)
+
+    def _poll_mermaid(self, gen: int, elapsed: int):
+        if gen != self._render_gen or self._view is None:
+            return  # superseded by a newer render
+        if elapsed >= 60000:  # give up after 60s
+            self.render_finished.emit(False)
+            return
+
+        def on_done(done):
+            if gen != self._render_gen:
+                return
+            if done:
+                self._view.page().runJavaScript(
+                    "window._mermaidError || ''",
+                    lambda err: self.render_finished.emit(not err),
+                )
+            else:
+                QTimer.singleShot(
+                    150, lambda: self._poll_mermaid(gen, elapsed + 150)
+                )
+
+        self._view.page().runJavaScript("window._mermaidDone === true", on_done)
 
     def show_message(self, message: str):
         """Show a plain text message in place of a diagram (e.g. a hint)."""
         if not self.available or self._view is None or self._workdir is None:
             return
+        # Invalidate any in-flight render poll; this isn't a diagram.
+        self._render_gen += 1
+        self._expect_render = False
         page = (
             "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
             "html,body{margin:0;padding:32px;background:#ffffff;color:#6b7078;"

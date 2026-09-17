@@ -46,7 +46,7 @@ def _configure_headless_env(argv: list[str] | None = None) -> None:
 
 _configure_headless_env()
 
-from PySide6.QtCore import QEvent, Qt, QThread, Signal
+from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -812,6 +812,64 @@ class DiagramOptionsBar(QWidget):
             widget.blockSignals(False)
 
 
+class RenderStatus(QWidget):
+    """A small spinner while the diagram renders, then a tick when it's done."""
+
+    _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # braille spinner
+    _OK = "#2e9e57"
+    _ERR = "#d9822b"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        self._icon = QLabel()
+        self._icon.setFixedWidth(16)
+        self._icon.setAlignment(Qt.AlignCenter)
+        self._text = QLabel()
+        self._text.setStyleSheet(f"color: {_muted_hex(self)};")
+        row.addWidget(self._icon)
+        row.addWidget(self._text)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(90)
+        self._timer.timeout.connect(self._spin)
+        self._frame = 0
+        self.setVisible(False)
+
+    def _spin(self):
+        self._frame = (self._frame + 1) % len(self._FRAMES)
+        self._icon.setText(self._FRAMES[self._frame])
+
+    def start(self):
+        self._icon.setStyleSheet(f"color: {_ACCENT}; font-weight: 600;")
+        self._icon.setText(self._FRAMES[0])
+        self._text.setText("Rendering…")
+        self.setVisible(True)
+        self._timer.start()
+
+    def finish(self, ok: bool = True):
+        self._timer.stop()
+        if ok:
+            self._icon.setStyleSheet(f"color: {self._OK}; font-weight: 700;")
+            self._icon.setText("✓")
+            self._text.setText("Rendered")
+        else:
+            self._icon.setStyleSheet(f"color: {self._ERR}; font-weight: 700;")
+            self._icon.setText("⚠")
+            self._text.setText("Render failed")
+        self.setVisible(True)
+
+    def clear(self):
+        self._timer.stop()
+        self.setVisible(False)
+
+    def retheme(self):
+        self._text.setStyleSheet(f"color: {_muted_hex(self)};")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -872,6 +930,9 @@ class MainWindow(QMainWindow):
         self._diagram_view = DiagramView()
         self._options_bar = DiagramOptionsBar()
         self._options_bar.changed.connect(self._render_selection)
+        self._render_status = RenderStatus()
+        self._diagram_view.render_started.connect(self._render_status.start)
+        self._diagram_view.render_finished.connect(self._render_status.finish)
         diagram_tab = QWidget()
         diagram_layout = QVBoxLayout(diagram_tab)
         diagram_layout.setContentsMargins(0, 0, 0, 0)
@@ -881,6 +942,12 @@ class MainWindow(QMainWindow):
         self._divider.setFrameShape(QFrame.HLine)
         self._divider.setStyleSheet(f"color: {_line_hex(self)};")
         diagram_layout.addWidget(self._divider)
+        # A right-aligned render status (spinner → tick) just above the diagram.
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(4, 0, 6, 0)
+        status_row.addStretch(1)
+        status_row.addWidget(self._render_status)
+        diagram_layout.addLayout(status_row)
         diagram_layout.addWidget(self._diagram_view, 1)
         tabs.addTab(diagram_tab, "Rendered diagram")
 
@@ -970,6 +1037,7 @@ class MainWindow(QMainWindow):
         self._selector.retheme()
         self._columns.retheme()
         self._options_bar.retheme()
+        self._render_status.retheme()
 
     def changeEvent(self, event):  # noqa: N802 (Qt naming)
         # The palette swap (light↔dark) arrives as a PaletteChange; restyle the
@@ -1160,6 +1228,7 @@ class MainWindow(QMainWindow):
         shown = len(final.tables)
         if shown == 0:
             self._diagram_rendered = False
+            self._render_status.clear()
             self._diagram_view.show_message(
                 "No tables selected.\n\n"
                 "Tick the tables you want on the left, then click “Render selected”."
@@ -1179,6 +1248,7 @@ class MainWindow(QMainWindow):
         # tab and the text/markdown exports still hold the full selection.
         if len(mermaid_text) > MAX_RENDER_CHARS:
             self._diagram_rendered = False
+            self._render_status.clear()
             self._diagram_view.show_message(
                 f"This selection is too large to render as a diagram "
                 f"({shown} tables, {col_count} columns — about "
