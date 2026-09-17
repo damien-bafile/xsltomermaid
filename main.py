@@ -1569,6 +1569,8 @@ class MainWindow(QMainWindow):
 
             if export_kind == "pdf":
                 background = self._options_bar.background_value()
+                if background == "transparent":
+                    background = "white"
                 self._begin_render("Rendering diagram to PDF…")
                 render_started = True
                 self._diagram_view.save_pdf(path, background=background)

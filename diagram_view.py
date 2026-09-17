@@ -186,6 +186,8 @@ def svg_to_pdf(svg: str, path: str, background: str = "white") -> str:
     writer.setPageMargins(QMarginsF(0, 0, 0, 0))
     writer.setPageSize(QPageSize(QRectF(0, 0, width, height).size(), QPageSize.Point))
     painter = QPainter(writer)
+    if not painter.isActive():
+        raise RuntimeError(f"Failed to start PDF painter for {path}")
     if background != "transparent":
         painter.fillRect(QRectF(0, 0, width, height), QColor(background))
     renderer.render(painter, QRectF(0, 0, width, height))
