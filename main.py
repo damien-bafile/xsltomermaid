@@ -67,6 +67,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
+    QHeaderView,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -977,6 +978,14 @@ class MainWindow(QMainWindow):
         self._table.setHorizontalHeaderLabels(EXPECTED_HEADERS)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
+        # Keep rows single-line and let long free-text cells elide rather than
+        # wrap into tall rows; a per-cell tooltip carries the full value.
+        self._table.setWordWrap(False)
+        self._table.setTextElideMode(Qt.ElideRight)
+        table_header = self._table.horizontalHeader()
+        table_header.setSectionResizeMode(QHeaderView.Interactive)
+        table_header.setStretchLastSection(True)  # Description soaks up spare width
+        table_header.setMinimumSectionSize(44)
         tabs.addTab(self._table, "Extracted data")
 
         self._columns = ColumnSelector()
@@ -1441,9 +1450,23 @@ class MainWindow(QMainWindow):
             row_by_key = {self._key(k): v for k, v in row.items()}
             for c, header in enumerate(EXPECTED_HEADERS):
                 value = row_by_key.get(self._key(header))
-                item = QTableWidgetItem("" if value is None else str(value))
+                text = "" if value is None else str(value)
+                item = QTableWidgetItem(text)
+                if text:
+                    # Full value on hover, since wide cells elide.
+                    item.setToolTip(text)
                 self._table.setItem(r, c, item)
         self._table.resizeColumnsToContents()
+        # Keep any single long free-text cell (Description, DefaultValue, …) from
+        # blowing a column out to the point it shoves the rest off-screen; the
+        # value is still readable via elision + tooltip, or by widening the column.
+        _MAX_COL_WIDTH = 320
+        header = self._table.horizontalHeader()
+        for c in range(self._table.columnCount()):
+            if c == header.count() - 1:
+                continue  # last column stretches; don't fight it
+            if self._table.columnWidth(c) > _MAX_COL_WIDTH:
+                self._table.setColumnWidth(c, _MAX_COL_WIDTH)
 
     @staticmethod
     def _key(text: str) -> str:
