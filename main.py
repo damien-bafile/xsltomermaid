@@ -47,7 +47,7 @@ def _configure_headless_env(argv: list[str] | None = None) -> None:
 _configure_headless_env()
 
 from PySide6.QtCore import QEvent, Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPalette
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -75,7 +75,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diagram_view import DiagramView, RenderStyle
+from diagram_view import DiagramView, RenderStyle, resource_path
 from excel_to_mermaid import (
     EXPECTED_HEADERS,
     DiagramOptions,
@@ -106,6 +106,15 @@ _ACCEPTED_SUFFIXES = (".xlsx", ".xlsm", ".xltx", ".xltm")
 
 # A blue accent that reads well on both light and dark backgrounds.
 _ACCENT = "#2f81f7"
+
+
+def app_icon() -> QIcon:
+    """The application icon, or an empty icon if the asset is missing."""
+    for name in ("assets/app_icon.ico", "assets/app_icon.png"):
+        path = resource_path(name)
+        if path.exists():
+            return QIcon(str(path))
+    return QIcon()
 
 
 def _muted_hex(widget) -> str:
@@ -718,6 +727,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Excel Schema → Mermaid ER Diagram")
+        self.setWindowIcon(app_icon())
         self.resize(1100, 760)
 
         self._schema: Schema | None = None
@@ -754,6 +764,10 @@ class MainWindow(QMainWindow):
         self._table.setAlternatingRowColors(True)
         tabs.addTab(self._table, "Extracted data")
 
+        self._columns = ColumnSelector()
+        self._columns.applied.connect(self._render_selection)
+        tabs.addTab(self._columns, "Columns")
+
         self._mermaid_view = QPlainTextEdit()
         self._mermaid_view.setReadOnly(True)
         self._mermaid_view.setFont(QFont("Menlo, Consolas, monospace"))
@@ -762,10 +776,6 @@ class MainWindow(QMainWindow):
             "The generated Mermaid erDiagram will appear here."
         )
         tabs.addTab(self._mermaid_view, "Mermaid source")
-
-        self._columns = ColumnSelector()
-        self._columns.applied.connect(self._render_selection)
-        tabs.addTab(self._columns, "Columns")
 
         # Rendered diagram tab = an options bar above the actual diagram view.
         self._diagram_view = DiagramView()
@@ -1172,6 +1182,7 @@ def main(argv: list[str] | None = None):
     _configure_headless_env(normalized_argv)
 
     app = QApplication(sys.argv[:1])
+    app.setWindowIcon(app_icon())
     # Follow the OS light/dark scheme, and keep following it if the user flips
     # the system theme while the app is open.
     app.setStyle("Fusion")

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b8bff"/>
+      <stop offset="1" stop-color="#1f5fd0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded badge background -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+
+  <!-- Relationship connector from entity A (one) to entity B (many) -->
+  <g fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" opacity="0.92">
+    <path d="M92 118 L92 176 Q92 190 108 190 L128 190"/>
+    <!-- one-side bars near A -->
+    <path d="M80 132 L104 132"/>
+    <path d="M80 144 L104 144"/>
+    <!-- crow's foot (many) into B -->
+    <path d="M128 190 L146 176"/>
+    <path d="M128 190 L146 190"/>
+    <path d="M128 190 L146 204"/>
+  </g>
+
+  <!-- Entity A (top-left) -->
+  <g>
+    <rect x="44" y="54" width="92" height="62" rx="11" fill="#ffffff"/>
+    <rect x="44" y="54" width="92" height="22" rx="11" fill="#e8f0ff"/>
+    <rect x="44" y="66" width="92" height="10" fill="#e8f0ff"/>
+    <rect x="58" y="88" width="64" height="7" rx="3.5" fill="#9db8e6"/>
+    <rect x="58" y="101" width="44" height="7" rx="3.5" fill="#c6d6f2"/>
+  </g>
+
+  <!-- Entity B (bottom-right) -->
+  <g>
+    <rect x="146" y="150" width="92" height="62" rx="11" fill="#ffffff"/>
+    <rect x="146" y="150" width="92" height="22" rx="11" fill="#e8f0ff"/>
+    <rect x="146" y="162" width="92" height="10" fill="#e8f0ff"/>
+    <rect x="160" y="184" width="64" height="7" rx="3.5" fill="#9db8e6"/>
+    <rect x="160" y="197" width="44" height="7" rx="3.5" fill="#c6d6f2"/>
+  </g>
+</svg>
