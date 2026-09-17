@@ -133,8 +133,15 @@ COLUMN_TREE_LIMIT = 10000
 
 _ACCEPTED_SUFFIXES = (".xlsx", ".xlsm", ".xltx", ".xltm")
 
-# A blue accent that reads well on both light and dark backgrounds.
-_ACCENT = "#2f81f7"
+# Accent family and state colours, kept together so a tweak lives in one place
+# rather than scattered across widget stylesheets.
+_ACCENT = "#2f81f7"  # blue accent, reads well on light and dark
+_ACCENT_HOVER = "#4a92f9"  # accent, hover
+_ACCENT_PRESSED = "#1f6fe0"  # accent, pressed
+_ACCENT_RING = "#cfe0ff"  # light focus ring on a filled accent button
+_ACCENT_WASH = "rgba(47,129,247,0.08)"  # translucent accent fill (drag-hover)
+_DISABLED_BG = "rgba(128,128,128,0.18)"  # filled button, disabled
+_DISABLED_FG = "rgba(128,128,128,0.75)"  # filled button text, disabled
 
 
 def app_icon() -> QIcon:
@@ -296,7 +303,7 @@ class DropArea(QLabel):
                 "  border-radius: 12px;"
                 f"  color: {_ACCENT};"
                 "  font-size: 15px;"
-                "  background: rgba(47,129,247,0.08);"
+                f"  background: {_ACCENT_WASH};"
                 "}"
             )
         else:
@@ -1121,7 +1128,7 @@ class MainWindow(QMainWindow):
             "  padding: 0 2px;"
             "  text-decoration: underline;"
             "}"
-            "QPushButton:hover { color: #4a92f9; }"
+            f"QPushButton:hover {{ color: {_ACCENT_HOVER}; }}"
             f"QPushButton:focus {{ border-color: {_ACCENT}; }}"
         )
         self._sample_btn.clicked.connect(self.load_sample)
@@ -1275,12 +1282,12 @@ class MainWindow(QMainWindow):
             "  border-radius: 6px;"
             "  padding: 4px 12px;"
             "}"
-            "QPushButton:hover:enabled { background: #4a92f9; }"
-            "QPushButton:pressed:enabled { background: #1f6fe0; }"
-            "QPushButton:focus { border-color: #cfe0ff; }"
+            f"QPushButton:hover:enabled {{ background: {_ACCENT_HOVER}; }}"
+            f"QPushButton:pressed:enabled {{ background: {_ACCENT_PRESSED}; }}"
+            f"QPushButton:focus {{ border-color: {_ACCENT_RING}; }}"
             "QPushButton:disabled {"
-            "  background: rgba(128,128,128,0.18);"
-            "  color: rgba(128,128,128,0.75);"
+            f"  background: {_DISABLED_BG};"
+            f"  color: {_DISABLED_FG};"
             "}"
         )
 
