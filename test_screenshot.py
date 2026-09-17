@@ -90,6 +90,9 @@ def test_svg_dimensions_handles_fractional_and_exponent_sizes():
     w, h = diagram_view._svg_dimensions('<svg width=".5" height="1e3"></svg>')
     assert w == 0.5
     assert h == 1000.0
+    w1, h1 = diagram_view._svg_dimensions('<svg width="1e3px" height="2.5e2pt"></svg>')
+    assert w1 == 1000.0
+    assert h1 == 250.0
     w0, h0 = diagram_view._svg_dimensions('<svg width="0" height="0"></svg>')
     assert w0 == 0.0
     assert h0 == 0.0
@@ -104,6 +107,20 @@ def test_svg_to_drawio_keeps_non_integer_geometry():
     assert geometry is not None
     assert geometry.attrib.get("width") == "640.5"
     assert geometry.attrib.get("height") == "480.25"
+
+
+def test_save_drawio_writes_file(tmp_path):
+    from diagram_view import DiagramView
+
+    class _DummyView:
+        def current_svg(self):
+            return '<svg width="10" height="20"></svg>'
+
+    out = tmp_path / "diagram.drawio"
+    DiagramView.save_drawio(_DummyView(), str(out))
+    text = out.read_text(encoding="utf-8")
+    assert "<mxfile" in text
+    assert "data:image/svg+xml," in text
 
 
 def _png_size(path: str) -> tuple[int, int]:

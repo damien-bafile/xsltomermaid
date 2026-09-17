@@ -167,9 +167,14 @@ def _svg_dimensions(svg: str) -> tuple[float, float]:
         if not text:
             return None
         value = str(text).strip()
-        value = re.sub(r"(px|pt|pc|cm|mm|in)$", "", value, flags=re.IGNORECASE)
+        match = re.fullmatch(
+            r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)([A-Za-z%]*)",
+            value,
+        )
+        if not match:
+            return None
         try:
-            return float(value)
+            return float(match.group(1))
         except ValueError:
             return None
 
