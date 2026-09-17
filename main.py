@@ -64,6 +64,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSlider,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -685,8 +686,8 @@ class DiagramOptionsBar(QWidget):
 
     # (label, value) pairs for the dropdowns.
     _ORIENTATIONS = [
-        ("Top → Bottom", "TB"),
         ("Left → Right", "LR"),
+        ("Top → Bottom", "TB"),
         ("Bottom → Top", "BT"),
         ("Right → Left", "RL"),
     ]
@@ -972,6 +973,7 @@ class MainWindow(QMainWindow):
         self._copy_btn = QPushButton("Copy Mermaid")
         self._save_mmd_btn = QPushButton("Save .mmd")
         self._save_md_btn = QPushButton("Save .md")
+        self._save_drawio_btn = QPushButton("Save diagram .drawio")
         self._save_png_btn = QPushButton("Save diagram PNG")
         self._save_svg_btn = QPushButton("Save diagram SVG")
         self._preview_btn = QPushButton("Preview in browser")
@@ -979,6 +981,7 @@ class MainWindow(QMainWindow):
             self._copy_btn,
             self._save_mmd_btn,
             self._save_md_btn,
+            self._save_drawio_btn,
             self._save_png_btn,
             self._save_svg_btn,
             self._preview_btn,
@@ -988,15 +991,21 @@ class MainWindow(QMainWindow):
             buttons.addWidget(btn)
 
         # PNG export options, grouped next to the Save buttons.
-        self._png_scale = QComboBox()
-        for label, value in [("1×", 1.0), ("2×", 2.0), ("3×", 3.0), ("4×", 4.0)]:
-            self._png_scale.addItem(label, value)
-        self._png_scale.setCurrentIndex(1)  # 2×
-        self._png_scale.setToolTip("Resolution multiplier for the saved PNG.")
+        self._png_scale = QSlider(Qt.Horizontal)
+        self._png_scale.setRange(1, 10)
+        self._png_scale.setValue(2)
+        self._png_scale.setFixedWidth(130)
+        self._png_scale.setToolTip("Resolution multiplier for the saved PNG (1× to 10×).")
+        self._png_scale_value = QLabel("2×")
+        self._png_scale_value.setMinimumWidth(30)
+        self._png_scale.valueChanged.connect(
+            lambda value: self._png_scale_value.setText(f"{value}×")
+        )
         self._png_transparent = QCheckBox("Transparent PNG")
         self._png_export_widgets = [
             QLabel("PNG:"),
             self._png_scale,
+            self._png_scale_value,
             self._png_transparent,
         ]
         for widget in self._png_export_widgets:
@@ -1007,6 +1016,7 @@ class MainWindow(QMainWindow):
 
         # Diagram export needs WebEngine; hide those buttons if it's unavailable.
         if not self._diagram_view.available:
+            self._save_drawio_btn.setVisible(False)
             self._save_png_btn.setVisible(False)
             self._save_svg_btn.setVisible(False)
             for widget in self._png_export_widgets:
@@ -1015,6 +1025,7 @@ class MainWindow(QMainWindow):
         self._copy_btn.clicked.connect(self.copy_mermaid)
         self._save_mmd_btn.clicked.connect(self.save_mmd)
         self._save_md_btn.clicked.connect(self.save_md)
+        self._save_drawio_btn.clicked.connect(self.save_diagram_drawio)
         self._save_png_btn.clicked.connect(self.save_diagram_png)
         self._save_svg_btn.clicked.connect(self.save_diagram_svg)
         self._preview_btn.clicked.connect(self.preview_browser)
@@ -1119,7 +1130,7 @@ class MainWindow(QMainWindow):
         self._progress.setRange(0, 0)  # 0..0 == busy indicator
         self._progress.setVisible(True)
         self._status.setText(message)
-        for btn in (self._save_png_btn, self._save_svg_btn):
+        for btn in (self._save_drawio_btn, self._save_png_btn, self._save_svg_btn):
             btn.setEnabled(False)
         app = QApplication.instance()
         if app is not None:
@@ -1128,7 +1139,7 @@ class MainWindow(QMainWindow):
     def _end_render(self):
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
-        for btn in (self._save_png_btn, self._save_svg_btn):
+        for btn in (self._save_drawio_btn, self._save_png_btn, self._save_svg_btn):
             btn.setEnabled(True)
         self._rendering = False
 
@@ -1343,7 +1354,7 @@ class MainWindow(QMainWindow):
             self, "Save diagram PNG", "diagram.png", "PNG image (*.png)"
         )
         if path:
-            scale = self._png_scale.currentData()
+            scale = float(self._png_scale.value())
             if self._png_transparent.isChecked():
                 background = "transparent"
             else:
@@ -1364,6 +1375,23 @@ class MainWindow(QMainWindow):
             if used < scale - 1e-6:
                 note = f" (scaled to {used:.2f}× to keep it within size limits)"
             self._status.setText(f"Saved rendered diagram to {path}{note}")
+
+    def save_diagram_drawio(self):
+        if self._rendering or self._nothing_to_export():
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save diagram Draw.io file", "diagram.drawio", "Draw.io file (*.drawio)"
+        )
+        if path:
+            self._begin_render("Rendering diagram to Draw.io…")
+            try:
+                self._diagram_view.save_drawio(path)
+            except Exception as exc:  # noqa: BLE001
+                self._end_render()
+                QMessageBox.critical(self, "Could not save diagram", str(exc))
+                return
+            self._end_render()
+            self._status.setText(f"Saved rendered diagram to {path}")
 
     def save_diagram_svg(self):
         if self._rendering or self._nothing_to_export():
