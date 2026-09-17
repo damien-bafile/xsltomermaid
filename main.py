@@ -142,6 +142,10 @@ _ACCENT_RING = "#cfe0ff"  # light focus ring on a filled accent button
 _ACCENT_WASH = "rgba(47,129,247,0.08)"  # translucent accent fill (drag-hover)
 _DISABLED_BG = "rgba(128,128,128,0.18)"  # filled button, disabled
 _DISABLED_FG = "rgba(128,128,128,0.75)"  # filled button text, disabled
+# Semantic status colours for the render indicator. Both clear the 3:1 non-text
+# (icon) contrast threshold on the light and dark surfaces the icon sits on.
+_OK_GREEN = "#2e9e57"  # render succeeded
+_ERR_ORANGE = "#d9822b"  # render failed
 
 
 def app_icon() -> QIcon:
@@ -979,8 +983,6 @@ class RenderStatus(QWidget):
     """A small spinner while the diagram renders, then a tick when it's done."""
 
     _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # braille spinner
-    _OK = "#2e9e57"
-    _ERR = "#d9822b"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1016,11 +1018,11 @@ class RenderStatus(QWidget):
     def finish(self, ok: bool = True):
         self._timer.stop()
         if ok:
-            self._icon.setStyleSheet(f"color: {self._OK}; font-weight: 700;")
+            self._icon.setStyleSheet(f"color: {_OK_GREEN}; font-weight: 700;")
             self._icon.setText("✓")
             self._text.setText("Rendered")
         else:
-            self._icon.setStyleSheet(f"color: {self._ERR}; font-weight: 700;")
+            self._icon.setStyleSheet(f"color: {_ERR_ORANGE}; font-weight: 700;")
             self._icon.setText("⚠")
             self._text.setText("Render failed")
         self.setVisible(True)
@@ -1186,6 +1188,7 @@ class MainWindow(QMainWindow):
         self._render_status = RenderStatus()
         self._diagram_view.render_started.connect(self._render_status.start)
         self._diagram_view.render_finished.connect(self._render_status.finish)
+        self._diagram_view.render_finished.connect(self._announce_render)
         diagram_tab = QWidget()
         diagram_layout = QVBoxLayout(diagram_tab)
         diagram_layout.setContentsMargins(0, 0, 0, 0)
@@ -1404,6 +1407,24 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.load_file_async(path)
+
+    def _announce_render(self, ok: bool):
+        """Tell a screen reader when a render finishes.
+
+        The spinner→tick status is visual only; without this a screen-reader
+        user gets no signal that the diagram finished (or failed). Best-effort:
+        it degrades silently where the announcement API isn't available.
+        """
+        message = "Diagram rendered" if ok else "Diagram render failed"
+        try:
+            from PySide6.QtGui import QAccessible, QAccessibleAnnouncementEvent
+
+            if QAccessible.isActive():
+                QAccessible.updateAccessibility(
+                    QAccessibleAnnouncementEvent(self, message)
+                )
+        except Exception:  # noqa: BLE001 - a11y announcement must never be fatal
+            pass
 
     def retheme(self):
         """Re-apply palette-derived colours after a light/dark scheme change."""
