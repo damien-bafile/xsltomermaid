@@ -339,12 +339,16 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
     max_height_in_row = 0
 
     table_ids_exact: dict[str, str] = {}
-    table_ids_lower: dict[str, str] = {}
+    table_ids_lower: dict[str, str | None] = {}
     for pos, table in enumerate(tables):
         width, height = _table_size(table)
         table_id = str(pos + 2)
         table_ids_exact[table.name] = table_id
-        table_ids_lower.setdefault(table.name.lower(), table_id)
+        lowered = table.name.lower()
+        if lowered in table_ids_lower and table_ids_lower[lowered] != table_id:
+            table_ids_lower[lowered] = None
+        else:
+            table_ids_lower[lowered] = table_id
         style = (
             "shape=mxgraph.er.entity;whiteSpace=wrap;html=1;align=left;verticalAlign=top;"
             "spacing=8;rounded=0;strokeColor=#36393d;fillColor=#ffffff;"
@@ -383,10 +387,10 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
     edge_id = len(tables) + 2
     for rel in rels:
         parent_id = table_ids_exact.get(rel.parent_table)
-        if parent_id is None:
+        if parent_id is None and isinstance(rel.parent_table, str):
             parent_id = table_ids_lower.get(rel.parent_table.lower())
         child_id = table_ids_exact.get(rel.child_table)
-        if child_id is None:
+        if child_id is None and isinstance(rel.child_table, str):
             child_id = table_ids_lower.get(rel.child_table.lower())
         if not parent_id or not child_id:
             continue

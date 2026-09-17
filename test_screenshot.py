@@ -117,10 +117,16 @@ def test_schema_to_drawio_relationship_matching_is_case_insensitive():
     )
     drawio = diagram_view.schema_to_drawio(schema)
     root = ET.fromstring(drawio)
+    vertices = {
+        cell.attrib["id"]: cell.attrib.get("value", "")
+        for cell in root.findall(".//mxCell[@vertex='1']")
+    }
     edges = root.findall(".//mxCell[@edge='1']")
     assert len(edges) == 1
-    assert edges[0].attrib.get("source")
-    assert edges[0].attrib.get("target")
+    source = edges[0].attrib.get("source")
+    target = edges[0].attrib.get("target")
+    assert source in vertices and "<b>Customer</b>" in vertices[source]
+    assert target in vertices and "<b>Order</b>" in vertices[target]
 
 
 def _png_size(path: str) -> tuple[int, int]:
