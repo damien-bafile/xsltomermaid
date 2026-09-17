@@ -86,6 +86,7 @@ from excel_to_mermaid import (
     filter_schema,
     generate_mermaid,
     read_rows,
+    shortest_path,
     wrap_mermaid_html,
 )
 
@@ -296,6 +297,7 @@ class TableSelector(QWidget):
 
     applied = Signal()  # user asked to (re)render the current selection
     related_requested = Signal()  # user asked to also tick the related tables
+    path_requested = Signal()  # user asked for the shortest path between two tables
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -339,6 +341,14 @@ class TableSelector(QWidget):
         )
         self._related_btn.clicked.connect(lambda: self.related_requested.emit())
         layout.addWidget(self._related_btn)
+
+        self._path_btn = QPushButton("Shortest path between 2")
+        self._path_btn.setToolTip(
+            "Check exactly two tables, then tick every table on the shortest "
+            "foreign-key path connecting them and render it."
+        )
+        self._path_btn.clicked.connect(lambda: self.path_requested.emit())
+        layout.addWidget(self._path_btn)
 
         render_btn = QPushButton("Render selected")
         render_btn.clicked.connect(lambda: self.applied.emit())
@@ -880,6 +890,7 @@ class MainWindow(QMainWindow):
         self._selector = TableSelector()
         self._selector.applied.connect(self._render_selection)
         self._selector.related_requested.connect(self._add_related_tables)
+        self._selector.path_requested.connect(self._find_shortest_path)
 
         body = QSplitter(Qt.Horizontal)
         body.addWidget(self._selector)
@@ -1090,6 +1101,31 @@ class MainWindow(QMainWindow):
             self._render_selection()
         else:
             self._status.setText("No related tables to add.")
+
+    def _find_shortest_path(self):
+        """Tick every table on the shortest path between the two checked tables."""
+        if self._schema is None:
+            return
+        names = self._selector.selected_tables()
+        if len(names) != 2:
+            self._status.setText(
+                "Check exactly two tables, then find the shortest path between them."
+            )
+            return
+        start, end = names
+        path = shortest_path(self._schema, start, end)
+        if not path:
+            self._status.setText(
+                f"No foreign-key path connects {start} and {end}."
+            )
+            return
+        self._selector.check_tables(path)
+        self._render_selection()
+        hops = len(path) - 1
+        self._status.setText(
+            f"Shortest path ({hops} hop{'s' if hops != 1 else ''}): "
+            + " → ".join(path)
+        )
 
     def _render_selection(self):
         """Render the currently-selected tables (Mermaid source + diagram)."""

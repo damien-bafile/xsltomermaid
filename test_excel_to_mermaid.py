@@ -5,12 +5,53 @@ Run: python test_excel_to_mermaid.py   (or: python -m pytest test_excel_to_merma
 
 from excel_to_mermaid import (
     DiagramOptions,
+    Relationship,
+    Schema,
+    Table,
     _parse_reference_table,
     build_schema,
     filter_columns,
     filter_schema,
     generate_mermaid,
+    shortest_path,
 )
+
+
+def _chain_schema():
+    # A - B - C - D  (plus an isolated E), edges are undirected FK links.
+    tables = [Table("", n) for n in ["A", "B", "C", "D", "E"]]
+    rels = [
+        Relationship("A", "B", "ab"),
+        Relationship("B", "C", "bc"),
+        Relationship("C", "D", "cd"),
+    ]
+    return Schema(tables=tables, relationships=rels)
+
+
+def test_shortest_path_along_chain():
+    schema = _chain_schema()
+    assert shortest_path(schema, "A", "D") == ["A", "B", "C", "D"]
+    # Undirected: works the other way too.
+    assert shortest_path(schema, "D", "A") == ["D", "C", "B", "A"]
+
+
+def test_shortest_path_picks_shortcut():
+    schema = _chain_schema()
+    # Add a direct A-D edge; the shortest path is now just the two endpoints.
+    schema.relationships.append(Relationship("A", "D", "ad"))
+    assert shortest_path(schema, "A", "D") == ["A", "D"]
+
+
+def test_shortest_path_disconnected_and_self():
+    schema = _chain_schema()
+    assert shortest_path(schema, "A", "E") is None  # E is isolated
+    assert shortest_path(schema, "A", "Z") is None  # unknown table
+    assert shortest_path(schema, "B", "B") == ["B"]  # same endpoint
+
+
+def test_shortest_path_is_case_insensitive():
+    schema = _chain_schema()
+    assert shortest_path(schema, "a", "c") == ["A", "B", "C"]
 
 SAMPLE_ROWS = [
     {"SchemaName": "dbo", "TableName": "Customer", "ColumnOrder": 1,
