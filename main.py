@@ -1412,8 +1412,11 @@ class MainWindow(QMainWindow):
             source_name, selected = load_selection_toml(text)
         except Exception as exc:  # noqa: BLE001
             message = str(exc).strip() or "Invalid table-selection TOML file."
+            preset_name = os.path.basename(path) or "selected preset"
             QMessageBox.critical(
-                self, "Could not load table list", f"Could not load '{path}': {message}"
+                self,
+                "Could not load table list",
+                f"Could not load '{preset_name}': {message}",
             )
             return
 
