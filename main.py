@@ -1532,6 +1532,12 @@ class MainWindow(QMainWindow):
         elif export_kind in rendered_export_kinds and self._nothing_to_export():
             return
 
+        png_options: tuple[float, str] | None = None
+        if export_kind == "png":
+            png_options = self._png_export_options()
+            if png_options is None:
+                return
+
         title, default_name, file_filter = file_specs[export_kind]
         path, _ = QFileDialog.getSaveFileName(self, title, default_name, file_filter)
         if not path:
@@ -1571,9 +1577,6 @@ class MainWindow(QMainWindow):
                 self._status.setText(f"Saved rendered diagram to {path}")
                 return
 
-            png_options = self._png_export_options()
-            if png_options is None:
-                return
             scale, background = png_options
             self._begin_render("Rendering diagram to PNG…")
             render_started = True
