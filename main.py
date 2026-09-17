@@ -1410,7 +1410,7 @@ class MainWindow(QMainWindow):
             with open(path, encoding="utf-8") as handle:
                 text = handle.read()
             source_name, selected = load_selection_toml(text)
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, ValueError) as exc:
             message = str(exc).strip() or "Invalid table-selection TOML file."
             preset_name = os.path.basename(path) or "selected preset"
             QMessageBox.critical(

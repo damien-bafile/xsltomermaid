@@ -62,8 +62,6 @@ def _load_toml(text: str) -> dict:
         key, rhs = line.split("=", 1)
         key = key.strip()
         rhs = rhs.strip()
-        if key not in {"filename", "selected_tables"}:
-            continue
         try:
             data[key] = json.loads(rhs)
         except json.JSONDecodeError as exc:
