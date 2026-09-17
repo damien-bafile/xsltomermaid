@@ -183,18 +183,35 @@ def apply_system_palette(app) -> bool:
 class DropArea(QLabel):
     """A large label that accepts a dragged spreadsheet file."""
 
+    _IDLE_TEXT = (
+        "\n\n⬇  Drag an Excel schema file here\n\n"
+        "(.xlsx / .xlsm)  —  or click to browse\n\n"
+    )
+
     def __init__(self, on_file, parent=None):
         super().__init__(parent)
         self._on_file = on_file
+        self._compact = False
         self.setAcceptDrops(True)
         self.setAlignment(Qt.AlignCenter)
         self.setWordWrap(True)
-        self.setText(
-            "\n\n⬇  Drag an Excel schema file here\n\n"
-            "(.xlsx / .xlsm)  —  or click to browse\n\n"
-        )
+        self.setText(self._IDLE_TEXT)
         self.setObjectName("dropArea")
         self.setMinimumHeight(120)
+        self._reset_style()
+
+    def set_loaded(self, name: str):
+        """Shrink to a slim file chip once a schema is loaded.
+
+        The big idle target is worth its height only until a file is in; after
+        that it becomes a compact bar so the tabs get the room. The whole area
+        stays a drop target and click-to-browse, so replacing the file is a
+        drop or a click away.
+        """
+        self._compact = True
+        self.setText(f"📄  {name}     ·     drop or click to load another file")
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(46)
         self._reset_style()
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt naming)
@@ -246,14 +263,25 @@ class DropArea(QLabel):
         )
 
     def _reset_style(self):
-        self.setStyleSheet(
-            "#dropArea {"
-            f"  border: 2px dashed {_line_hex(self)};"
-            "  border-radius: 12px;"
-            f"  color: {_muted_hex(self)};"
-            "  font-size: 15px;"
-            "}"
-        )
+        if self._compact:
+            self.setStyleSheet(
+                "#dropArea {"
+                f"  border: 1px solid {_line_hex(self)};"
+                "  border-radius: 8px;"
+                f"  color: {_muted_hex(self)};"
+                "  font-size: 13px;"
+                "  padding: 4px 12px;"
+                "}"
+            )
+        else:
+            self.setStyleSheet(
+                "#dropArea {"
+                f"  border: 2px dashed {_line_hex(self)};"
+                "  border-radius: 12px;"
+                f"  color: {_muted_hex(self)};"
+                "  font-size: 15px;"
+                "}"
+            )
 
     def retheme(self):
         """Re-apply the idle style for the current palette (light/dark)."""
@@ -333,13 +361,13 @@ class TableSelector(QWidget):
         layout.addWidget(self._count)
 
         button_row = QHBoxLayout()
-        select_shown = QPushButton("Select shown")
-        clear_btn = QPushButton("Clear")
-        select_shown.setToolTip("Tick every table currently visible in the list.")
-        select_shown.clicked.connect(self.check_shown)
-        clear_btn.clicked.connect(self.clear_selection)
-        button_row.addWidget(select_shown)
-        button_row.addWidget(clear_btn)
+        self._select_shown_btn = QPushButton("Select shown")
+        self._clear_btn = QPushButton("Clear")
+        self._select_shown_btn.setToolTip("Tick every table currently visible in the list.")
+        self._select_shown_btn.clicked.connect(self.check_shown)
+        self._clear_btn.clicked.connect(self.clear_selection)
+        button_row.addWidget(self._select_shown_btn)
+        button_row.addWidget(self._clear_btn)
         layout.addLayout(button_row)
 
         self._related_btn = QPushButton("Add related tables")
@@ -358,9 +386,30 @@ class TableSelector(QWidget):
         self._path_btn.clicked.connect(lambda: self.path_requested.emit())
         layout.addWidget(self._path_btn)
 
-        render_btn = QPushButton("Render selected")
-        render_btn.clicked.connect(lambda: self.applied.emit())
-        layout.addWidget(render_btn)
+        self._render_btn = QPushButton("Render selected")
+        self._render_btn.clicked.connect(lambda: self.applied.emit())
+        layout.addWidget(self._render_btn)
+
+        # Nothing to act on until a schema is loaded.
+        self.set_ready(False)
+
+    def set_ready(self, ready: bool):
+        """Enable the selection controls only once a schema is loaded.
+
+        With no file open there are no tables to pick, so the filter, the list
+        and every action button are disabled to match the (already disabled)
+        export bar rather than inviting dead clicks at "0 of 0 selected".
+        """
+        for widget in (
+            self._filter,
+            self._list,
+            self._select_shown_btn,
+            self._clear_btn,
+            self._related_btn,
+            self._path_btn,
+            self._render_btn,
+        ):
+            widget.setEnabled(ready)
 
     # -- population --------------------------------------------------------
     def set_tables(self, names: list[str]):
@@ -969,6 +1018,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(diagram_tab, "Rendered diagram")
 
         self._tabs = tabs
+        self._diagram_tab = diagram_tab
 
         # Left: table picker to limit what gets rendered. Right: the tabs.
         self._selector = TableSelector()
@@ -1011,7 +1061,45 @@ class MainWindow(QMainWindow):
         ]
         for btn in self._action_buttons:
             btn.setEnabled(False)
-            buttons.addWidget(btn)
+
+        # "Copy Mermaid" is the most-reached-for action, so it leads as the one
+        # filled/accent button; the rest stay quiet.
+        self._copy_btn.setStyleSheet(
+            "QPushButton {"
+            f"  background: {_ACCENT};"
+            "  color: white;"
+            "  font-weight: 600;"
+            "  border: none;"
+            "  border-radius: 6px;"
+            "  padding: 6px 14px;"
+            "}"
+            "QPushButton:hover:enabled { background: #4a92f9; }"
+            "QPushButton:pressed:enabled { background: #1f6fe0; }"
+            "QPushButton:disabled {"
+            "  background: rgba(128,128,128,0.18);"
+            "  color: rgba(128,128,128,0.75);"
+            "}"
+        )
+
+        # The row reads as three jobs, not eight equal buttons: get the Mermaid
+        # text · save/load the table selection · export or preview the diagram.
+        self._button_seps: list[QFrame] = []
+        groups = [
+            [self._copy_btn, self._save_mmd_btn, self._save_md_btn],
+            [self._save_selection_btn, self._load_selection_btn],
+            [self._export_format, self._export_btn, self._preview_btn],
+        ]
+        for i, group in enumerate(groups):
+            if i > 0:
+                sep = QFrame()
+                sep.setFrameShape(QFrame.VLine)
+                sep.setFixedHeight(24)
+                self._button_seps.append(sep)
+                buttons.addSpacing(4)
+                buttons.addWidget(sep)
+                buttons.addSpacing(4)
+            for widget in group:
+                buttons.addWidget(widget)
 
         buttons.addStretch(1)
         outer.addLayout(buttons)
@@ -1037,7 +1125,10 @@ class MainWindow(QMainWindow):
         """Re-apply palette-derived colours after a light/dark scheme change."""
         muted = f"color: {_muted_hex(self)};"
         self._status.setStyleSheet(muted)
-        self._divider.setStyleSheet(f"color: {_line_hex(self)};")
+        line = f"color: {_line_hex(self)};"
+        self._divider.setStyleSheet(line)
+        for sep in self._button_seps:
+            sep.setStyleSheet(line)
         self._drop.retheme()
         self._selector.retheme()
         self._columns.retheme()
@@ -1147,6 +1238,10 @@ class MainWindow(QMainWindow):
         self._schema = schema
         self._loaded_name = os.path.basename(path)
         self._populate_table(rows)
+        # The big drop target has done its job; shrink it to a file chip so the
+        # tabs get the height, and wake up the (until now inert) table picker.
+        self._drop.set_loaded(self._loaded_name)
+        self._selector.set_ready(True)
 
         names = [t.name for t in schema.tables]
         self._selector.set_tables(names)
@@ -1157,6 +1252,13 @@ class MainWindow(QMainWindow):
 
         for btn in self._action_buttons:
             btn.setEnabled(True)
+
+        # Land on the diagram — the reason they opened the file — once one is
+        # actually rendered. Only in the live window: headless captures, the CLI
+        # and tests grab the window before it's shown and should keep landing on
+        # the data table.
+        if self.isVisible() and self._diagram_rendered:
+            self._tabs.setCurrentWidget(self._diagram_tab)
 
     def _add_related_tables(self):
         """Tick the one-hop foreign-key neighbours of the checked tables, render."""
