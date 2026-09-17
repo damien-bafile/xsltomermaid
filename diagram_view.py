@@ -746,6 +746,20 @@ class DiagramView(QWidget):
         self._view.page().runJavaScript(script)
         self._poll_mermaid(gen, 0)
 
+    def cancel_render(self):
+        """Abandon an in-flight render.
+
+        Showing a message page bumps the render generation (so the in-flight
+        poll is superseded and emits nothing) and navigates away from the shell,
+        which tears down the running Mermaid layout — the effective "stop".
+        """
+        if not self.available or self._view is None or self._workdir is None:
+            return
+        self.show_message(
+            "Render cancelled.\n\n"
+            "Adjust the tables, columns, or options, then click “Render selected”."
+        )
+
     def _on_load_finished(self, ok: bool):
         """When the shell page finishes loading, kick off the pending render."""
         if not self._loading_shell:

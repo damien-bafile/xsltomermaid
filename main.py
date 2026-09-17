@@ -1186,9 +1186,17 @@ class MainWindow(QMainWindow):
         self._options_bar = DiagramOptionsBar()
         self._options_bar.changed.connect(self._render_selection)
         self._render_status = RenderStatus()
+        # A Stop control that only appears while a diagram is rendering, so a
+        # slow/large layout can be abandoned without waiting it out.
+        self._stop_btn = QPushButton("Stop")
+        self._stop_btn.setToolTip("Stop the current render.")
+        self._stop_btn.setVisible(False)
+        self._stop_btn.clicked.connect(self.cancel_render)
         self._diagram_view.render_started.connect(self._render_status.start)
+        self._diagram_view.render_started.connect(lambda: self._set_rendering(True))
         self._diagram_view.render_finished.connect(self._render_status.finish)
         self._diagram_view.render_finished.connect(self._announce_render)
+        self._diagram_view.render_finished.connect(lambda _ok: self._set_rendering(False))
         diagram_tab = QWidget()
         diagram_layout = QVBoxLayout(diagram_tab)
         diagram_layout.setContentsMargins(0, 0, 0, 0)
@@ -1203,6 +1211,7 @@ class MainWindow(QMainWindow):
         status_row.setContentsMargins(4, 0, 6, 0)
         status_row.addStretch(1)
         status_row.addWidget(self._render_status)
+        status_row.addWidget(self._stop_btn)
         diagram_layout.addLayout(status_row)
         diagram_layout.addWidget(self._diagram_view, 1)
         tabs.addTab(diagram_tab, "Rendered diagram")
@@ -1384,6 +1393,10 @@ class MainWindow(QMainWindow):
             act("&Render selected", self._render_selection,
                 QKeySequence("F5"), schema_only=True)
         )
+        # Enabled only while a render is in flight (see _set_rendering).
+        self._stop_action = act("&Stop rendering", self.cancel_render, QKeySequence("Esc"))
+        self._stop_action.setEnabled(False)
+        diagram_menu.addAction(self._stop_action)
         diagram_menu.addSeparator()
         diagram_menu.addAction(
             act("&Copy Mermaid", self.copy_mermaid,
@@ -1425,6 +1438,18 @@ class MainWindow(QMainWindow):
                 )
         except Exception:  # noqa: BLE001 - a11y announcement must never be fatal
             pass
+
+    def _set_rendering(self, active: bool):
+        """Show/hide the Stop control for the duration of a render."""
+        self._stop_btn.setVisible(active)
+        self._stop_action.setEnabled(active)
+
+    def cancel_render(self):
+        """Abandon the in-progress render (Stop button / menu)."""
+        self._diagram_view.cancel_render()
+        self._render_status.clear()
+        self._set_rendering(False)
+        self._status.setText("Render cancelled.")
 
     def retheme(self):
         """Re-apply palette-derived colours after a light/dark scheme change."""
