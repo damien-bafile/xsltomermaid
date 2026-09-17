@@ -99,8 +99,9 @@ RENDER_WARN_LIMIT = 60
 # Mermaid's cryptic "Maximum text size in diagram exceeded".
 MAX_RENDER_CHARS = 1_800_000
 # Building a checkable tree of every column gets heavy; above this many columns
-# in the current selection we skip it and ask the user to narrow the tables.
-COLUMN_TREE_LIMIT = 4000
+# the "All tables" view isn't built at once — the user picks a single table from
+# the dropdown instead (which is always fast, whatever the schema size).
+COLUMN_TREE_LIMIT = 10000
 
 _ACCEPTED_SUFFIXES = (".xlsx", ".xlsm", ".xltx", ".xltm")
 
@@ -412,11 +413,20 @@ class ColumnSelector(QWidget):
         super().__init__(parent)
         self._excluded: set[tuple[str, str]] = set()
         self._signature: tuple[str, ...] | None = None
+        self._tables: list[Table] = []
         self._updating = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
+
+        # A dropdown to focus on one table's columns (fast for huge schemas).
+        scope_row = QHBoxLayout()
+        scope_row.addWidget(QLabel("Show:"))
+        self._scope = QComboBox()
+        self._scope.currentIndexChanged.connect(lambda _i: self._rebuild_view())
+        scope_row.addWidget(self._scope, 1)
+        layout.addLayout(scope_row)
 
         self._hint = QLabel(
             "Load a file and render some tables, then choose which columns to "
@@ -446,7 +456,12 @@ class ColumnSelector(QWidget):
         all_btn = QPushButton("All")
         none_btn = QPushButton("None")
         keys_btn = QPushButton("Keys only")
-        keys_btn.setToolTip("Include only primary-key and foreign-key columns.")
+        for btn, tip in (
+            (all_btn, "Include every column (across all tables)."),
+            (none_btn, "Exclude every column (across all tables)."),
+            (keys_btn, "Include only primary-key and foreign-key columns everywhere."),
+        ):
+            btn.setToolTip(tip)
         all_btn.clicked.connect(lambda: self._bulk("all"))
         none_btn.clicked.connect(lambda: self._bulk("none"))
         keys_btn.clicked.connect(lambda: self._bulk("keys"))
@@ -461,44 +476,80 @@ class ColumnSelector(QWidget):
 
     # -- population --------------------------------------------------------
     def set_tables(self, tables: list[Table]):
-        """Rebuild the tree for ``tables`` unless it already shows exactly them.
+        """Point the picker at ``tables``; the excluded set persists.
 
-        The excluded set persists, so previously-unticked columns stay unticked
-        and columns new to the selection default to included.
+        Rebuilds the scope dropdown and view only when the set of tables
+        actually changes, so re-rendering (e.g. tweaking diagram options) keeps
+        the user's current table focus and column edits.
         """
         signature = tuple(f"{t.schema}.{t.name}" for t in tables)
-        total_columns = sum(len(t.columns) for t in tables)
+        if signature == self._signature:
+            return
 
-        if total_columns > COLUMN_TREE_LIMIT:
+        self._signature = signature
+        self._tables = list(tables)
+
+        total = sum(len(t.columns) for t in tables)
+        self._scope.blockSignals(True)
+        self._scope.clear()
+        self._scope.addItem(f"All tables ({total:,} columns)", -1)
+        for i, table in enumerate(tables):
+            self._scope.addItem(f"{table.full_name} ({len(table.columns)})", i)
+        self._scope.setCurrentIndex(0)
+        self._scope.blockSignals(False)
+        self._scope.setVisible(bool(tables))
+
+        self._rebuild_view()
+
+    def _scope_tables(self) -> list[Table]:
+        """The tables the current dropdown choice covers ('All' or just one)."""
+        index = self._scope.currentData()
+        if index is None or index < 0:
+            return self._tables
+        if 0 <= index < len(self._tables):
+            return [self._tables[index]]
+        return self._tables
+
+    def _rebuild_view(self):
+        """(Re)build the tree for the current dropdown scope."""
+        if not self._tables:
             self._tree.clear()
             self._tree.setVisible(False)
             self._filter.setVisible(False)
             self._hint.setText(
-                f"This selection has {total_columns:,} columns — too many to list. "
-                "Narrow the tables on the left, then come back to pick columns."
+                "Load a file and render some tables, then choose which columns "
+                "to include here."
             )
             self._hint.setVisible(True)
-            self._signature = None
             self._update_count()
             return
 
-        # Same tables as last time → keep the tree (and the user's live edits).
-        if signature == self._signature and self._tree.isVisible():
+        scope = self._scope_tables()
+        is_all = self._scope.currentData() in (None, -1)
+        total_all = sum(len(t.columns) for t in self._tables)
+
+        # The "All tables" view is only built when it's not too heavy; otherwise
+        # the dropdown is the way in (one table at a time is always fine).
+        if is_all and total_all > COLUMN_TREE_LIMIT:
+            self._tree.clear()
+            self._tree.setVisible(False)
+            self._filter.setVisible(False)
+            self._hint.setText(
+                f"This selection has {total_all:,} columns — too many to list at "
+                "once. Pick a single table from the “Show” dropdown above to "
+                "choose its columns (or narrow the tables on the left)."
+            )
+            self._hint.setVisible(True)
+            self._update_count()
             return
 
-        self._signature = signature
+        self._hint.setVisible(False)
         self._filter.setVisible(True)
         self._tree.setVisible(True)
-        self._hint.setVisible(not tables)
-        if not tables:
-            self._hint.setText(
-                "Load a file and render some tables, then choose which columns to "
-                "include here."
-            )
 
         self._updating = True
         self._tree.clear()
-        for table in tables:
+        for table in scope:
             key = table.name.lower()
             parent = QTreeWidgetItem(self._tree, [table.name])
             parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
@@ -531,23 +582,34 @@ class ColumnSelector(QWidget):
         self._update_count()
 
     def _bulk(self, mode: str):
-        self._updating = True
-        for parent in self._top_items():
-            for child in self._children(parent):
-                table_key, col_key, is_key = child.data(0, self._ROLE_KEYS)
-                if mode == "all":
-                    keep = True
-                elif mode == "none":
-                    keep = False
-                else:  # keys
-                    keep = is_key
-                child.setCheckState(0, Qt.Checked if keep else Qt.Unchecked)
+        # Operate on the whole selection (not just the visible scope) so "Keys
+        # only" etc. apply everywhere, even for tables not currently listed.
+        for table in self._tables:
+            table_key = table.name.lower()
+            for column in table.columns:
+                col_key = column.name.lower()
+                is_key = bool(column.is_primary_key or column.foreign_key_reference)
+                keep = True if mode == "all" else False if mode == "none" else is_key
                 if keep:
                     self._excluded.discard((table_key, col_key))
                 else:
                     self._excluded.add((table_key, col_key))
-        self._updating = False
+        self._sync_tree_checks()
         self._update_count()
+
+    def _sync_tree_checks(self):
+        """Update the visible tree's checkboxes to match the excluded set."""
+        self._updating = True
+        for parent in self._top_items():
+            for child in self._children(parent):
+                table_key, col_key, _is_key = child.data(0, self._ROLE_KEYS)
+                state = (
+                    Qt.Unchecked
+                    if (table_key, col_key) in self._excluded
+                    else Qt.Checked
+                )
+                child.setCheckState(0, state)
+        self._updating = False
 
     def _apply_filter_text(self, text: str):
         needle = text.strip().lower()
@@ -571,14 +633,15 @@ class ColumnSelector(QWidget):
         return set(self._excluded)
 
     def _update_count(self):
-        total = 0
-        included = 0
-        for parent in self._top_items():
-            for child in self._children(parent):
-                total += 1
-                if child.checkState(0) == Qt.Checked:
-                    included += 1
-        self._count.setText(f"{included} of {total} columns included")
+        total = sum(len(t.columns) for t in self._tables)
+        excluded_here = sum(
+            1
+            for t in self._tables
+            for c in t.columns
+            if (t.name.lower(), c.name.lower()) in self._excluded
+        )
+        included = total - excluded_here
+        self._count.setText(f"{included:,} of {total:,} columns included")
 
     def retheme(self):
         muted = f"color: {_muted_hex(self)};"
