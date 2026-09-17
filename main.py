@@ -1449,7 +1449,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        applied, missing = self._selector.set_selected_tables(selected)
+        applied, missing = self._selector.set_selected_tables(matched)
         self._render_selection()
         if missing:
             self._status.setText(

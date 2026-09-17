@@ -289,6 +289,60 @@ def test_shortest_path_popup_for_more_than_two_selected(monkeypatch, tmp_path):
     del app
 
 
+def test_shortest_path_popup_cancel_start_keeps_selection(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer", "Order", "Product"])
+    before = set(window._selector.selected_tables())
+
+    def _cancel_start(_parent, _title, _label, _items, _index, _editable):
+        return ("", False)
+
+    monkeypatch.setattr(app_module.QInputDialog, "getItem", _cancel_start)
+    window._find_shortest_path()
+    after = set(window._selector.selected_tables())
+    assert after == before
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_shortest_path_popup_cancel_destination_keeps_selection(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer", "Order", "Product"])
+    before = set(window._selector.selected_tables())
+
+    calls = {"count": 0}
+
+    def _cancel_destination(_parent, title, _label, _items, _index, _editable):
+        calls["count"] += 1
+        if "starting" in title.lower():
+            return ("Customer", True)
+        return ("", False)
+
+    monkeypatch.setattr(app_module.QInputDialog, "getItem", _cancel_destination)
+    window._find_shortest_path()
+    after = set(window._selector.selected_tables())
+    assert calls["count"] == 2
+    assert after == before
+
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_module_import_sets_webengine_flags_for_cli_mode():
     """`--screenshot-diagram` should preconfigure WebEngine flags at import time."""
     cmd = [
