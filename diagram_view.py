@@ -340,8 +340,8 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
 
     table_ids_exact: dict[str, str | None] = {}
     table_ids_lower: dict[str, str | None] = {}
-    table_ids_qualified: dict[str, str] = {}
-    table_ids_qualified_lower: dict[str, str] = {}
+    table_ids_qualified: dict[str, str | None] = {}
+    table_ids_qualified_lower: dict[str, str | None] = {}
     for pos, table in enumerate(tables):
         width, height = _table_size(table)
         table_id = str(pos + 2)
@@ -357,8 +357,19 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
         qualified = getattr(table, "full_name", None) or (
             f"{table.schema}.{table.name}" if getattr(table, "schema", "") else table.name
         )
-        table_ids_qualified[str(qualified)] = table_id
-        table_ids_qualified_lower[str(qualified).lower()] = table_id
+        qualified = str(qualified)
+        if qualified in table_ids_qualified and table_ids_qualified[qualified] != table_id:
+            table_ids_qualified[qualified] = None
+        else:
+            table_ids_qualified[qualified] = table_id
+        qualified_lower = qualified.lower()
+        if (
+            qualified_lower in table_ids_qualified_lower
+            and table_ids_qualified_lower[qualified_lower] != table_id
+        ):
+            table_ids_qualified_lower[qualified_lower] = None
+        else:
+            table_ids_qualified_lower[qualified_lower] = table_id
         style = (
             "shape=mxgraph.er.entity;whiteSpace=wrap;html=1;align=left;verticalAlign=top;"
             "spacing=8;rounded=0;strokeColor=#36393d;fillColor=#ffffff;"

@@ -12,6 +12,12 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
 
 def dump_selection_toml(filename: str, selected_tables: list[str]) -> str:
     """Return TOML text for a table-selection preset."""
+    if not isinstance(filename, str):
+        raise ValueError("'filename' must be a string in the TOML preset.")
+    if not isinstance(selected_tables, list) or not all(
+        isinstance(name, str) for name in selected_tables
+    ):
+        raise ValueError("'selected_tables' must be a list of strings.")
     unique = _normalise_selected_tables(selected_tables)
     return (
         "# xsltomermaid table selection preset\n"

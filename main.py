@@ -1383,7 +1383,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            text = open(path, encoding="utf-8").read()
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
             source_name, selected = load_selection_toml(text)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Could not load table list", str(exc))
