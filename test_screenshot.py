@@ -59,29 +59,22 @@ def test_render_style_defaults_to_left_to_right():
     assert RenderStyle().layout_direction == "LR"
 
 
-def test_svg_to_drawio_wraps_svg_image():
+def test_schema_to_drawio_creates_table_vertices_and_edges():
     import diagram_view
+    from excel_to_mermaid import build_schema
 
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480">'
-        '<rect width="640" height="480" fill="white"/></svg>'
-    )
-    drawio = diagram_view.svg_to_drawio(svg)
+    records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
+    schema = build_schema(records)
+    drawio = diagram_view.schema_to_drawio(schema)
     root = ET.fromstring(drawio)
-    image_cell = root.find(".//mxCell[@id='2']")
-    geometry = root.find(".//mxCell[@id='2']/mxGeometry")
 
     assert root.tag == "mxfile"
-    assert image_cell is not None
-    style = image_cell.attrib.get("style", "")
-    assert isinstance(style, str)
-    assert style.startswith("shape=image;")
-    assert "data:image/svg+xml," in style
-    assert "('" not in style and "'," not in style
-    assert geometry is not None
-    assert geometry.attrib.get("width") == "640"
-    assert geometry.attrib.get("height") == "480"
-    assert "%2Fsvg%3E" in style
+    vertices = root.findall(".//mxCell[@vertex='1']")
+    edges = root.findall(".//mxCell[@edge='1']")
+    assert len(vertices) == len(schema.tables)
+    assert len(edges) == len(schema.relationships)
+    assert all("shape=mxgraph.er.entity" in cell.attrib.get("style", "") for cell in vertices)
+    assert all("endArrow=ERmany" in cell.attrib.get("style", "") for cell in edges)
 
 
 def test_svg_dimensions_handles_fractional_and_exponent_sizes():
@@ -98,29 +91,16 @@ def test_svg_dimensions_handles_fractional_and_exponent_sizes():
     assert h0 == 0.0
 
 
-def test_svg_to_drawio_keeps_non_integer_geometry():
+def test_schema_to_drawio_includes_table_names_and_fk_labels():
     import diagram_view
+    from excel_to_mermaid import build_schema
 
-    drawio = diagram_view.svg_to_drawio('<svg width="640.5" height="480.25"></svg>')
-    root = ET.fromstring(drawio)
-    geometry = root.find(".//mxCell[@id='2']/mxGeometry")
-    assert geometry is not None
-    assert geometry.attrib.get("width") == "640.5"
-    assert geometry.attrib.get("height") == "480.25"
-
-
-def test_save_drawio_writes_file(tmp_path):
-    from diagram_view import DiagramView
-
-    class _DummyView:
-        def current_svg(self):
-            return '<svg width="10" height="20"></svg>'
-
-    out = tmp_path / "diagram.drawio"
-    DiagramView.save_drawio(_DummyView(), str(out))
-    text = out.read_text(encoding="utf-8")
-    assert "<mxfile" in text
-    assert "data:image/svg+xml," in text
+    records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
+    schema = build_schema(records)
+    drawio = diagram_view.schema_to_drawio(schema)
+    assert "<b>Customer</b>" in drawio
+    assert "<b>Order</b>" in drawio
+    assert "CustomerID" in drawio
 
 
 def _png_size(path: str) -> tuple[int, int]:

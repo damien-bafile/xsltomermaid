@@ -263,6 +263,147 @@ def svg_to_drawio(svg: str, page_name: str = "Page-1") -> str:
     return ET.tostring(mxfile, encoding="unicode")
 
 
+def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
+    """Build a native Draw.io ER-like diagram from schema tables + relationships."""
+    mxfile = ET.Element(
+        "mxfile",
+        {
+            "host": "app.diagrams.net",
+            "compressed": "false",
+        },
+    )
+    diagram = ET.SubElement(mxfile, "diagram", {"id": "diagram-1", "name": page_name})
+    graph = ET.SubElement(
+        diagram,
+        "mxGraphModel",
+        {
+            "dx": "1200",
+            "dy": "800",
+            "grid": "1",
+            "gridSize": "10",
+            "guides": "1",
+            "tooltips": "1",
+            "connect": "1",
+            "arrows": "1",
+            "fold": "1",
+            "page": "1",
+            "pageScale": "1",
+            "pageWidth": "827",
+            "pageHeight": "1169",
+            "math": "0",
+            "shadow": "0",
+        },
+    )
+    root = ET.SubElement(graph, "root")
+    ET.SubElement(root, "mxCell", {"id": "0"})
+    ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
+
+    tables = list(getattr(schema, "tables", []) or [])
+    rels = list(getattr(schema, "relationships", []) or [])
+    if not tables:
+        return ET.tostring(mxfile, encoding="unicode")
+
+    def _table_value(table) -> str:
+        lines: list[str] = []
+        for column in table.columns:
+            keys = []
+            if getattr(column, "is_primary_key", False):
+                keys.append("PK")
+            if getattr(column, "foreign_key_reference", ""):
+                keys.append("FK")
+            key_part = f" [{' '.join(keys)}]" if keys else ""
+            data_type = (getattr(column, "data_type", "") or "").strip()
+            if hasattr(column, "rendered_type"):
+                data_type = column.rendered_type()
+            typed = f" : {data_type}" if data_type else ""
+            line = html.escape(f"{column.name}{typed}{key_part}")
+            lines.append(line)
+        body = "<br/>".join(lines) if lines else " "
+        return f"<b>{html.escape(table.name)}</b><hr/>{body}"
+
+    def _table_size(table) -> tuple[int, int]:
+        line_texts = [table.name] + [
+            f"{col.name} {getattr(col, 'data_type', '')}".strip() for col in table.columns
+        ]
+        longest = max((len(text) for text in line_texts), default=10)
+        width = min(max(220, longest * 7 + 48), 520)
+        height = max(80, 40 + len(table.columns) * 18)
+        return width, height
+
+    columns = max(1, int(math.ceil(math.sqrt(len(tables)))))
+    x_spacing = 80
+    y_spacing = 60
+    x = 40
+    y = 40
+    max_height_in_row = 0
+
+    table_ids: dict[str, str] = {}
+    for pos, table in enumerate(tables):
+        width, height = _table_size(table)
+        table_id = str(pos + 2)
+        table_ids[table.name.lower()] = table_id
+        style = (
+            "shape=mxgraph.er.entity;whiteSpace=wrap;html=1;align=left;verticalAlign=top;"
+            "spacing=8;rounded=0;strokeColor=#36393d;fillColor=#ffffff;"
+        )
+        cell = ET.SubElement(
+            root,
+            "mxCell",
+            {
+                "id": table_id,
+                "value": _table_value(table),
+                "style": style,
+                "vertex": "1",
+                "parent": "1",
+            },
+        )
+        ET.SubElement(
+            cell,
+            "mxGeometry",
+            {
+                "x": str(x),
+                "y": str(y),
+                "width": str(width),
+                "height": str(height),
+                "as": "geometry",
+            },
+        )
+
+        max_height_in_row = max(max_height_in_row, height)
+        if (pos + 1) % columns == 0:
+            x = 40
+            y += max_height_in_row + y_spacing
+            max_height_in_row = 0
+        else:
+            x += width + x_spacing
+
+    edge_id = len(tables) + 2
+    for rel in rels:
+        parent_id = table_ids.get(rel.parent_table.lower())
+        child_id = table_ids.get(rel.child_table.lower())
+        if not parent_id or not child_id:
+            continue
+        ET.SubElement(
+            root,
+            "mxCell",
+            {
+                "id": str(edge_id),
+                "value": html.escape(getattr(rel, "label", "") or ""),
+                "style": (
+                    "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
+                    "html=1;startArrow=ERone;endArrow=ERmany;startFill=1;endFill=1;"
+                ),
+                "edge": "1",
+                "parent": "1",
+                "source": parent_id,
+                "target": child_id,
+            },
+        )
+        edge_id += 1
+
+    return ET.tostring(mxfile, encoding="unicode")
+
+
 class DiagramView(QWidget):
     """A tab that renders a Mermaid ER diagram and can export it as SVG/PNG."""
 

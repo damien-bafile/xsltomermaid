@@ -76,7 +76,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diagram_view import DiagramView, RenderStyle, resource_path
+from diagram_view import DiagramView, RenderStyle, resource_path, schema_to_drawio
 from excel_to_mermaid import (
     EXPECTED_HEADERS,
     DiagramOptions,
@@ -885,6 +885,7 @@ class MainWindow(QMainWindow):
         self._loaded_name: str = ""
         self._rendering: bool = False
         self._diagram_rendered: bool = False
+        self._drawio_schema: Schema | None = None
 
         central = QWidget()
         outer = QVBoxLayout(central)
@@ -1230,6 +1231,7 @@ class MainWindow(QMainWindow):
         # user's column choices on top of the table filter.
         self._columns.set_tables(filtered.tables)
         final = filter_columns(filtered, self._columns.excluded_pairs())
+        self._drawio_schema = final
 
         mermaid_text = generate_mermaid(final, self._options_bar.diagram_options())
         self._mermaid_text = mermaid_text
@@ -1238,6 +1240,7 @@ class MainWindow(QMainWindow):
         total = len(self._schema.tables)
         shown = len(final.tables)
         if shown == 0:
+            self._drawio_schema = None
             self._diagram_rendered = False
             self._render_status.clear()
             self._diagram_view.show_message(
@@ -1377,21 +1380,27 @@ class MainWindow(QMainWindow):
             self._status.setText(f"Saved rendered diagram to {path}{note}")
 
     def save_diagram_drawio(self):
-        if self._rendering or self._nothing_to_export():
+        if self._rendering:
+            return
+        if self._drawio_schema is None or not self._drawio_schema.tables:
+            QMessageBox.information(
+                self,
+                "Nothing to export",
+                "There are no selected tables to export to Draw.io yet.",
+            )
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save diagram Draw.io file", "diagram.drawio", "Draw.io file (*.drawio)"
         )
         if path:
-            self._begin_render("Rendering diagram to Draw.io…")
             try:
-                self._diagram_view.save_drawio(path)
+                content = schema_to_drawio(self._drawio_schema)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(content)
             except Exception as exc:  # noqa: BLE001
-                self._end_render()
                 QMessageBox.critical(self, "Could not save diagram", str(exc))
                 return
-            self._end_render()
-            self._status.setText(f"Saved rendered diagram to {path}")
+            self._status.setText(f"Saved Draw.io diagram to {path}")
 
     def save_diagram_svg(self):
         if self._rendering or self._nothing_to_export():
