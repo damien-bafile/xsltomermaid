@@ -737,6 +737,7 @@ class MainWindow(QMainWindow):
         self._pending_path: str = ""
         self._loaded_name: str = ""
         self._rendering: bool = False
+        self._diagram_rendered: bool = False
 
         central = QWidget()
         outer = QVBoxLayout(central)
@@ -1026,6 +1027,7 @@ class MainWindow(QMainWindow):
         total = len(self._schema.tables)
         shown = len(final.tables)
         if shown == 0:
+            self._diagram_rendered = False
             self._diagram_view.show_message(
                 "No tables selected.\n\n"
                 "Tick the tables you want on the left, then click “Render selected”."
@@ -1044,6 +1046,7 @@ class MainWindow(QMainWindow):
         # it fail with "Maximum text size in diagram exceeded". The Mermaid source
         # tab and the text/markdown exports still hold the full selection.
         if len(mermaid_text) > MAX_RENDER_CHARS:
+            self._diagram_rendered = False
             self._diagram_view.show_message(
                 f"This selection is too large to render as a diagram "
                 f"({shown} tables, {col_count} columns — about "
@@ -1058,6 +1061,7 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._diagram_rendered = True
         self._diagram_view.set_diagram(mermaid_text, self._options_bar.render_style())
         self._status.setText(
             f"Loaded {self._loaded_name} — showing {scope} table(s), "
@@ -1117,8 +1121,21 @@ class MainWindow(QMainWindow):
             "Opened diagram preview in your browser (needs internet for Mermaid CDN)."
         )
 
+    def _nothing_to_export(self) -> bool:
+        """True (and warns) if there's no rendered diagram to export."""
+        if not self._diagram_rendered:
+            QMessageBox.information(
+                self,
+                "Nothing to export",
+                "There's no rendered diagram to export yet. It's empty or too "
+                "large to render. Pick some tables (and, for very large schemas, "
+                "fewer tables/columns) so the diagram renders, then try again.",
+            )
+            return True
+        return False
+
     def save_diagram_png(self):
-        if self._rendering:
+        if self._rendering or self._nothing_to_export():
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save diagram PNG", "diagram.png", "PNG image (*.png)"
@@ -1133,16 +1150,21 @@ class MainWindow(QMainWindow):
                     background = "white"
             self._begin_render("Rendering diagram to PNG…")
             try:
-                self._diagram_view.save_png(path, scale=scale, background=background)
+                used = self._diagram_view.save_png(
+                    path, scale=scale, background=background
+                )
             except Exception as exc:  # noqa: BLE001
                 self._end_render()
                 QMessageBox.critical(self, "Could not save diagram", str(exc))
                 return
             self._end_render()
-            self._status.setText(f"Saved rendered diagram to {path}")
+            note = ""
+            if used < scale - 1e-6:
+                note = f" (scaled to {used:.2f}× to keep it within size limits)"
+            self._status.setText(f"Saved rendered diagram to {path}{note}")
 
     def save_diagram_svg(self):
-        if self._rendering:
+        if self._rendering or self._nothing_to_export():
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save diagram SVG", "diagram.svg", "SVG image (*.svg)"
@@ -1186,8 +1208,10 @@ class MainWindow(QMainWindow):
                 "(install PySide6-Addons)."
             )
         if path.lower().endswith(".svg"):
-            return self._diagram_view.save_svg(path)
-        return self._diagram_view.save_png(path)
+            self._diagram_view.save_svg(path)
+        else:
+            self._diagram_view.save_png(path)
+        return path
 
 
 def main(argv: list[str] | None = None):

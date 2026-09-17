@@ -17,6 +17,7 @@ message and :attr:`DiagramView.available` is ``False``.
 from __future__ import annotations
 
 import html
+import math
 import shutil
 import sys
 import tempfile
@@ -107,16 +108,45 @@ def _diagram_html(mermaid_text: str, style: RenderStyle | None = None) -> str:
 """
 
 
-def svg_to_png(svg: str, path: str, scale: float = 2.0, background: str = "white") -> None:
-    """Rasterise an SVG string to a PNG file using QtSvg (works headless)."""
+# Caps so a huge diagram can't ask for a multi-gigabyte QImage (which freezes
+# or crashes the app). We scale the export down to fit within these instead.
+MAX_PNG_DIM = 20000  # max width/height in pixels
+MAX_PNG_PIXELS = 60_000_000  # ~240 MB at 4 bytes/pixel
+
+
+def _fit_scale(width: float, height: float, scale: float) -> float:
+    """Clamp ``scale`` so the rasterised image stays within the size caps."""
+    if width <= 0 or height <= 0:
+        return scale
+    scale = min(scale, MAX_PNG_DIM / width, MAX_PNG_DIM / height)
+    if (width * scale) * (height * scale) > MAX_PNG_PIXELS:
+        scale = math.sqrt(MAX_PNG_PIXELS / (width * height))
+    return scale
+
+
+def svg_to_png(
+    svg: str, path: str, scale: float = 2.0, background: str = "white"
+) -> float:
+    """Rasterise an SVG string to a PNG file using QtSvg (works headless).
+
+    Returns the scale actually used, which may be smaller than requested when
+    the diagram is large enough that the full-scale image would blow past the
+    size caps above.
+    """
     from PySide6.QtSvg import QSvgRenderer
 
     renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
     size = renderer.defaultSize()
-    width = max(int(size.width() * scale), 1)
-    height = max(int(size.height() * scale), 1)
+    effective = _fit_scale(size.width(), size.height(), scale)
+    width = max(int(size.width() * effective), 1)
+    height = max(int(size.height() * effective), 1)
 
     image = QImage(width, height, QImage.Format_ARGB32)
+    if image.isNull():
+        raise RuntimeError(
+            "The diagram is too large to rasterise to PNG. Save as SVG instead, "
+            "or render fewer tables/columns."
+        )
     image.fill(QColor(background))
     painter = QPainter(image)
     renderer.render(painter)
@@ -124,6 +154,7 @@ def svg_to_png(svg: str, path: str, scale: float = 2.0, background: str = "white
 
     if not image.save(path, "PNG"):
         raise RuntimeError(f"Failed to save PNG to {path}")
+    return effective
 
 
 class DiagramView(QWidget):
@@ -223,12 +254,12 @@ class DiagramView(QWidget):
         Path(path).write_text(svg, encoding="utf-8")
         return path
 
-    def save_png(self, path: str, scale: float = 2.0, background: str = "white") -> str:
+    def save_png(self, path: str, scale: float = 2.0, background: str = "white") -> float:
+        """Save the rendered diagram as PNG; returns the scale actually used."""
         svg = self.current_svg()
         if not svg:
             raise RuntimeError("No rendered diagram available to save.")
-        svg_to_png(svg, path, scale=scale, background=background)
-        return path
+        return svg_to_png(svg, path, scale=scale, background=background)
 
     def cleanup(self):
         if self._workdir:
