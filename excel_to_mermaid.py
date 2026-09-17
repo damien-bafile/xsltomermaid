@@ -15,6 +15,7 @@ imported inside :func:`read_rows` so the rest of the module works without it.
 from __future__ import annotations
 
 import re
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Iterable
 
@@ -401,6 +402,54 @@ def filter_columns(
         ]
         new_tables.append(Table(schema=table.schema, name=table.name, columns=kept))
     return Schema(tables=new_tables, relationships=schema.relationships)
+
+
+def shortest_path(schema: Schema, start: str, end: str) -> list[str] | None:
+    """Shortest chain of tables linking ``start`` to ``end`` over the FK graph.
+
+    Relationships are treated as undirected edges. Returns the list of table
+    names on a shortest path, including both endpoints (canonical casing), or
+    ``None`` if the two tables aren't connected. Names are matched
+    case-insensitively; an endpoint that isn't a table in the schema yields
+    ``None``.
+    """
+    canon = {t.name.lower(): t.name for t in schema.tables}
+    src = start.strip().lower()
+    dst = end.strip().lower()
+    if src not in canon or dst not in canon:
+        return None
+    if src == dst:
+        return [canon[src]]
+
+    adjacency: dict[str, set[str]] = {}
+    for rel in schema.relationships:
+        parent = rel.parent_table.lower()
+        child = rel.child_table.lower()
+        adjacency.setdefault(parent, set()).add(child)
+        adjacency.setdefault(child, set()).add(parent)
+
+    # Breadth-first search records each node's predecessor for reconstruction.
+    previous: dict[str, str | None] = {src: None}
+    queue: deque[str] = deque([src])
+    while queue:
+        node = queue.popleft()
+        if node == dst:
+            break
+        for neighbour in adjacency.get(node, ()):
+            if neighbour not in previous:
+                previous[neighbour] = node
+                queue.append(neighbour)
+
+    if dst not in previous:
+        return None
+
+    path: list[str] = []
+    node: str | None = dst
+    while node is not None:
+        path.append(canon.get(node, node))
+        node = previous[node]
+    path.reverse()
+    return path
 
 
 # ---------------------------------------------------------------------------
