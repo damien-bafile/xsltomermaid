@@ -34,6 +34,24 @@ import main as app_module  # noqa: E402
 from make_sample import ROWS  # noqa: E402
 
 
+def test_fit_scale_caps_large_exports():
+    """A huge diagram at high scale is clamped to stay within the size caps."""
+    from diagram_view import MAX_PNG_DIM, MAX_PNG_PIXELS, _fit_scale
+
+    # Small diagram: requested scale is kept as-is.
+    assert _fit_scale(400, 300, 2.0) == 2.0
+
+    # Large diagram at 4x would be ~768 MP; must clamp under both caps.
+    eff = _fit_scale(8000, 6000, 4.0)
+    assert eff < 4.0
+    assert 8000 * eff <= MAX_PNG_DIM + 1
+    assert 6000 * eff <= MAX_PNG_DIM + 1
+    assert (8000 * eff) * (6000 * eff) <= MAX_PNG_PIXELS * 1.01
+
+    # Degenerate sizes don't blow up.
+    assert _fit_scale(0, 0, 3.0) == 3.0
+
+
 def _png_size(path: str) -> tuple[int, int]:
     """Return (width, height) read from a PNG header, or (0, 0) if invalid."""
     with open(path, "rb") as handle:
