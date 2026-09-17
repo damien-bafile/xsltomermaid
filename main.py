@@ -48,7 +48,15 @@ def _configure_headless_env(argv: list[str] | None = None) -> None:
 _configure_headless_env()
 
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPalette
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QGuiApplication,
+    QIcon,
+    QKeySequence,
+    QPalette,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -211,7 +219,21 @@ class DropArea(QLabel):
         self.setText(self._IDLE_TEXT)
         self.setObjectName("dropArea")
         self.setMinimumHeight(120)
+        # Keyboard-operable: a keyboard-only user can focus it and press
+        # Enter/Space to browse, so loading a file never requires the mouse.
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName("Excel schema drop area")
+        self.setAccessibleDescription(
+            "Drop an .xlsx or .xlsm schema file here, or press Enter to browse."
+        )
         self._reset_style()
+
+    def keyPressEvent(self, event):  # noqa: N802 (Qt naming)
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self._browse()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def set_loaded(self, name: str):
         """Shrink to a slim file chip once a schema is loaded.
@@ -228,6 +250,9 @@ class DropArea(QLabel):
         self._reset_style()
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt naming)
+        self._browse()
+
+    def _browse(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Select an Excel schema file",
@@ -276,6 +301,8 @@ class DropArea(QLabel):
         )
 
     def _reset_style(self):
+        # A keyboard-focus ring in the accent colour, on either variant.
+        focus = f"#dropArea:focus {{ border-color: {_ACCENT}; color: {_ACCENT}; }}"
         if self._compact:
             self.setStyleSheet(
                 "#dropArea {"
@@ -285,6 +312,7 @@ class DropArea(QLabel):
                 "  font-size: 13px;"
                 "  padding: 4px 12px;"
                 "}"
+                + focus
             )
         else:
             self.setStyleSheet(
@@ -294,6 +322,7 @@ class DropArea(QLabel):
                 f"  color: {_muted_hex(self)};"
                 "  font-size: 15px;"
                 "}"
+                + focus
             )
 
     def retheme(self):
@@ -1019,12 +1048,14 @@ class MainWindow(QMainWindow):
         self._sample_btn.setStyleSheet(
             "QPushButton {"
             f"  color: {_ACCENT};"
-            "  border: none;"
+            "  border: 1px solid transparent;"
+            "  border-radius: 3px;"
             "  background: transparent;"
             "  padding: 0 2px;"
             "  text-decoration: underline;"
             "}"
             "QPushButton:hover { color: #4a92f9; }"
+            f"QPushButton:focus {{ border-color: {_ACCENT}; }}"
         )
         self._sample_btn.clicked.connect(self.load_sample)
         onboard_row.addWidget(self._onboard_hint)
@@ -1132,6 +1163,7 @@ class MainWindow(QMainWindow):
             "Restore a table selection from a .toml preset."
         )
         self._export_format = QComboBox()
+        self._export_format.setAccessibleName("Diagram export format")
         self._export_format.addItem("Draw.io (.drawio)", "drawio")
         self._export_format.addItem("MS Visio (.vdx)", "visio")
         self._export_format.addItem("PDF (.pdf)", "pdf")
@@ -1165,12 +1197,15 @@ class MainWindow(QMainWindow):
             f"  background: {_ACCENT};"
             "  color: white;"
             "  font-weight: 600;"
-            "  border: none;"
+            # A 2px transparent border reserves space so the focus ring below
+            # doesn't shift the button; padding is trimmed 2px to compensate.
+            "  border: 2px solid transparent;"
             "  border-radius: 6px;"
-            "  padding: 6px 14px;"
+            "  padding: 4px 12px;"
             "}"
             "QPushButton:hover:enabled { background: #4a92f9; }"
             "QPushButton:pressed:enabled { background: #1f6fe0; }"
+            "QPushButton:focus { border-color: #cfe0ff; }"
             "QPushButton:disabled {"
             "  background: rgba(128,128,128,0.18);"
             "  color: rgba(128,128,128,0.75);"
@@ -1208,6 +1243,8 @@ class MainWindow(QMainWindow):
         self._export_btn.clicked.connect(self.export_diagram)
         self._preview_btn.clicked.connect(self.preview_browser)
 
+        self._build_menu_bar()
+
         self.setCentralWidget(central)
 
         # Match the OS: default the diagram's own theme/background to dark when
@@ -1216,6 +1253,78 @@ class MainWindow(QMainWindow):
         if app is not None:
             self._options_bar.apply_system_defaults(system_is_dark(app))
         self.retheme()
+
+    def _build_menu_bar(self):
+        """A menu bar so every action has a keyboard path and a shortcut.
+
+        The bottom button row stays as the visible controls; this mirrors them
+        for keyboard/screen-reader users (loading a file was otherwise
+        mouse-only) and adds the standard accelerators a desktop app is expected
+        to have. Schema-dependent actions are disabled until a file loads,
+        matching the button row.
+        """
+        bar = self.menuBar()
+
+        def act(text, slot, shortcut=None, schema_only=False):
+            action = QAction(text, self)
+            if shortcut is not None:
+                action.setShortcut(shortcut)
+            action.triggered.connect(slot)
+            if schema_only:
+                action.setEnabled(False)
+                self._schema_actions.append(action)
+            return action
+
+        self._schema_actions: list[QAction] = []
+
+        file_menu = bar.addMenu("&File")
+        file_menu.addAction(act("&Open…", self.open_file_dialog, QKeySequence.StandardKey.Open))
+        file_menu.addAction(
+            act("&Load table list…", self.load_table_selection_toml,
+                QKeySequence("Ctrl+L"), schema_only=True)
+        )
+        file_menu.addSeparator()
+        file_menu.addAction(
+            act("&Save Mermaid (.mmd)…", self.save_mmd,
+                QKeySequence.StandardKey.Save, schema_only=True)
+        )
+        file_menu.addAction(
+            act("Save Mark&down (.md)…", self.save_md, schema_only=True)
+        )
+        file_menu.addAction(
+            act("Save &table list…", self.save_table_selection_toml, schema_only=True)
+        )
+        file_menu.addSeparator()
+        file_menu.addAction(act("E&xit", self.close, QKeySequence.StandardKey.Quit))
+
+        diagram_menu = bar.addMenu("&Diagram")
+        diagram_menu.addAction(
+            act("&Render selected", self._render_selection,
+                QKeySequence("F5"), schema_only=True)
+        )
+        diagram_menu.addSeparator()
+        diagram_menu.addAction(
+            act("&Copy Mermaid", self.copy_mermaid,
+                QKeySequence("Ctrl+Shift+C"), schema_only=True)
+        )
+        diagram_menu.addAction(
+            act("&Export diagram…", self.export_diagram,
+                QKeySequence("Ctrl+E"), schema_only=True)
+        )
+        diagram_menu.addAction(
+            act("&Preview in browser", self.preview_browser, schema_only=True)
+        )
+
+    def open_file_dialog(self):
+        """Open the file picker from the menu / Ctrl+O and load the choice."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open an Excel schema file",
+            "",
+            "Excel files (*.xlsx *.xlsm *.xltx *.xltm);;All files (*)",
+        )
+        if path:
+            self.load_file_async(path)
 
     def retheme(self):
         """Re-apply palette-derived colours after a light/dark scheme change."""
@@ -1365,6 +1474,8 @@ class MainWindow(QMainWindow):
 
         for btn in self._action_buttons:
             btn.setEnabled(True)
+        for action in self._schema_actions:
+            action.setEnabled(True)
 
         # Land on the diagram — the reason they opened the file — once one is
         # actually rendered. Only in the live window: headless captures, the CLI
