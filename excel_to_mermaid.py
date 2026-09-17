@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from collections import deque
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Callable, Iterable
 
 # A progress callback receives a fraction in the range 0.0 .. 1.0.
@@ -78,9 +79,19 @@ def _as_bool(value) -> bool:
     return text in {"1", "y", "yes", "true", "t", "x", "✓", "✔"}
 
 
+_HEADER_KEY_RE = re.compile(r"[\s_]+")
+
+
+@lru_cache(maxsize=4096)
 def _header_key(value) -> str:
-    """Normalise a header cell for matching (case/space/underscore-insensitive)."""
-    return re.sub(r"[\s_]+", "", _norm(value)).lower()
+    """Normalise a header cell for matching (case/space/underscore-insensitive).
+
+    Cached: headers and the expected field names are a tiny fixed set reused
+    across every row, so build_schema was recomputing the same regex sub
+    hundreds of thousands of times. Pure function of ``value`` (hashable cell
+    scalars), so memoising is safe.
+    """
+    return _HEADER_KEY_RE.sub("", _norm(value)).lower()
 
 
 # ---------------------------------------------------------------------------
