@@ -146,6 +146,10 @@ def test_window_screenshot(tmp_path):
     assert window._png_scale_value.text() == "2×"
     window._png_scale.setValue(7)
     assert window._png_scale_value.text() == "7×"
+    if window._diagram_view.available:
+        assert not window._save_drawio_btn.isHidden()
+    else:
+        assert window._save_drawio_btn.isHidden()
 
     out = tmp_path / "window.png"
     window.capture(str(out))
