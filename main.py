@@ -295,6 +295,7 @@ class TableSelector(QWidget):
     """A filterable, checkable list of tables to include in the diagram."""
 
     applied = Signal()  # user asked to (re)render the current selection
+    related_requested = Signal()  # user asked to also tick the related tables
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -331,12 +332,13 @@ class TableSelector(QWidget):
         button_row.addWidget(clear_btn)
         layout.addLayout(button_row)
 
-        self._related = QCheckBox("Include related tables")
-        self._related.setToolTip(
-            "Also draw tables directly connected by a foreign key to the ones "
-            "you picked (one hop out)."
+        self._related_btn = QPushButton("Add related tables")
+        self._related_btn.setToolTip(
+            "Tick the tables directly connected by a foreign key to the ones "
+            "you've checked (one hop out), then render."
         )
-        layout.addWidget(self._related)
+        self._related_btn.clicked.connect(lambda: self.related_requested.emit())
+        layout.addWidget(self._related_btn)
 
         render_btn = QPushButton("Render selected")
         render_btn.clicked.connect(lambda: self.applied.emit())
@@ -383,8 +385,21 @@ class TableSelector(QWidget):
     def selected_tables(self) -> list[str]:
         return [item.text() for item in self._items() if item.checkState() == Qt.Checked]
 
-    def include_related(self) -> bool:
-        return self._related.isChecked()
+    def check_tables(self, names) -> int:
+        """Tick the listed tables (by name, case-insensitive), additively.
+
+        Returns how many were newly ticked.
+        """
+        wanted = {n.lower() for n in names}
+        newly = 0
+        self._list.blockSignals(True)
+        for item in self._items():
+            if item.text().lower() in wanted and item.checkState() != Qt.Checked:
+                item.setCheckState(Qt.Checked)
+                newly += 1
+        self._list.blockSignals(False)
+        self._update_count()
+        return newly
 
     def _update_count(self):
         total = self._list.count()
@@ -864,6 +879,7 @@ class MainWindow(QMainWindow):
         # Left: table picker to limit what gets rendered. Right: the tabs.
         self._selector = TableSelector()
         self._selector.applied.connect(self._render_selection)
+        self._selector.related_requested.connect(self._add_related_tables)
 
         body = QSplitter(Qt.Horizontal)
         body.addWidget(self._selector)
@@ -1058,6 +1074,23 @@ class MainWindow(QMainWindow):
         for btn in self._action_buttons:
             btn.setEnabled(True)
 
+    def _add_related_tables(self):
+        """Tick the one-hop foreign-key neighbours of the checked tables, render."""
+        if self._schema is None:
+            return
+        names = self._selector.selected_tables()
+        if not names:
+            self._status.setText("Check at least one table first, then add related.")
+            return
+        # filter_schema with include_related gives us the selection + its one-hop
+        # neighbours; tick every table in that expanded set.
+        expanded = filter_schema(self._schema, names, include_related=True)
+        added = self._selector.check_tables(t.name for t in expanded.tables)
+        if added:
+            self._render_selection()
+        else:
+            self._status.setText("No related tables to add.")
+
     def _render_selection(self):
         """Render the currently-selected tables (Mermaid source + diagram)."""
         if self._schema is None:
@@ -1074,9 +1107,9 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 return
 
-        filtered = filter_schema(
-            self._schema, names, include_related=self._selector.include_related()
-        )
+        # Related tables are ticked explicitly via "Add related tables", so the
+        # checked list is the whole selection — no implicit expansion here.
+        filtered = filter_schema(self._schema, names)
 
         # Refresh the column picker for the tables now in play, then apply the
         # user's column choices on top of the table filter.
