@@ -47,7 +47,15 @@ def _configure_headless_env(argv: list[str] | None = None) -> None:
 
 _configure_headless_env()
 
-from PySide6.QtCore import QEvent, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QEvent,
+    QModelIndex,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -58,6 +66,7 @@ from PySide6.QtGui import (
     QPalette,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -77,8 +86,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QHeaderView,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
@@ -125,8 +133,19 @@ COLUMN_TREE_LIMIT = 10000
 
 _ACCEPTED_SUFFIXES = (".xlsx", ".xlsm", ".xltx", ".xltm")
 
-# A blue accent that reads well on both light and dark backgrounds.
-_ACCENT = "#2f81f7"
+# Accent family and state colours, kept together so a tweak lives in one place
+# rather than scattered across widget stylesheets.
+_ACCENT = "#2f81f7"  # blue accent, reads well on light and dark
+_ACCENT_HOVER = "#4a92f9"  # accent, hover
+_ACCENT_PRESSED = "#1f6fe0"  # accent, pressed
+_ACCENT_RING = "#cfe0ff"  # light focus ring on a filled accent button
+_ACCENT_WASH = "rgba(47,129,247,0.08)"  # translucent accent fill (drag-hover)
+_DISABLED_BG = "rgba(128,128,128,0.18)"  # filled button, disabled
+_DISABLED_FG = "rgba(128,128,128,0.75)"  # filled button text, disabled
+# Semantic status colours for the render indicator. Both clear the 3:1 non-text
+# (icon) contrast threshold on the light and dark surfaces the icon sits on.
+_OK_GREEN = "#2e9e57"  # render succeeded
+_ERR_ORANGE = "#d9822b"  # render failed
 
 
 def app_icon() -> QIcon:
@@ -138,9 +157,26 @@ def app_icon() -> QIcon:
     return QIcon()
 
 
+def _blend(a: QColor, b: QColor, f: float) -> QColor:
+    """Mix colour ``a`` toward ``b`` by fraction ``f`` (0..1)."""
+    return QColor(
+        round(a.red() * (1 - f) + b.red() * f),
+        round(a.green() * (1 - f) + b.green() * f),
+        round(a.blue() * (1 - f) + b.blue() * f),
+    )
+
+
 def _muted_hex(widget) -> str:
-    """A subdued text colour for the current palette (adapts light/dark)."""
-    return widget.palette().color(QPalette.Disabled, QPalette.WindowText).name()
+    """A subdued but legible secondary-text colour for the current palette.
+
+    Blends the normal text colour ~30% toward the window background: softer than
+    body text, but still meets WCAG AA (~4.5:1). The palette's Disabled role is
+    only ~3.7:1, so it must not be reused for active secondary text.
+    """
+    palette = widget.palette()
+    return _blend(
+        palette.color(QPalette.WindowText), palette.color(QPalette.Window), 0.30
+    ).name()
 
 
 def _line_hex(widget) -> str:
@@ -271,7 +307,7 @@ class DropArea(QLabel):
                 "  border-radius: 12px;"
                 f"  color: {_ACCENT};"
                 "  font-size: 15px;"
-                "  background: rgba(47,129,247,0.08);"
+                f"  background: {_ACCENT_WASH};"
                 "}"
             )
         else:
@@ -947,8 +983,6 @@ class RenderStatus(QWidget):
     """A small spinner while the diagram renders, then a tick when it's done."""
 
     _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # braille spinner
-    _OK = "#2e9e57"
-    _ERR = "#d9822b"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -984,11 +1018,11 @@ class RenderStatus(QWidget):
     def finish(self, ok: bool = True):
         self._timer.stop()
         if ok:
-            self._icon.setStyleSheet(f"color: {self._OK}; font-weight: 700;")
+            self._icon.setStyleSheet(f"color: {_OK_GREEN}; font-weight: 700;")
             self._icon.setText("✓")
             self._text.setText("Rendered")
         else:
-            self._icon.setStyleSheet(f"color: {self._ERR}; font-weight: 700;")
+            self._icon.setStyleSheet(f"color: {_ERR_ORANGE}; font-weight: 700;")
             self._icon.setText("⚠")
             self._text.setText("Render failed")
         self.setVisible(True)
@@ -1001,12 +1035,54 @@ class RenderStatus(QWidget):
         self._text.setStyleSheet(f"color: {_muted_hex(self)};")
 
 
+class ExtractedDataModel(QAbstractTableModel):
+    """Read-only model for the raw extracted rows.
+
+    Backing the Extracted-data tab with a model + ``QTableView`` means only the
+    visible cells are realised, instead of building a widget item for every cell
+    (which was ~n_rows × 17 items on the UI thread for large sheets). The cell
+    string doubles as its tooltip, so the full value is available on hover for
+    elided cells without any per-cell allocation.
+    """
+
+    def __init__(self, headers: list[str], parent=None):
+        super().__init__(parent)
+        self._headers = list(headers)
+        self._rows: list[list[str]] = []
+
+    def set_rows(self, rows: list[list[str]]):
+        self.beginResetModel()
+        self._rows = rows
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._headers)
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid() or role not in (Qt.DisplayRole, Qt.ToolTipRole):
+            return None
+        return self._rows[index.row()][index.column()] or None
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role != Qt.DisplayRole:
+            return None
+        if orientation == Qt.Horizontal:
+            return self._headers[section]
+        return section + 1  # 1-based row numbers, like the old vertical header
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Excel Schema → Mermaid ER Diagram")
         self.setWindowIcon(app_icon())
         self.resize(1100, 760)
+        # A floor so the window can't shrink small enough to clip the action bar
+        # or collapse the panels; every action is also reachable from the menu.
+        self.setMinimumSize(960, 600)
 
         self._schema: Schema | None = None
         self._mermaid_text: str = ""
@@ -1054,7 +1130,7 @@ class MainWindow(QMainWindow):
             "  padding: 0 2px;"
             "  text-decoration: underline;"
             "}"
-            "QPushButton:hover { color: #4a92f9; }"
+            f"QPushButton:hover {{ color: {_ACCENT_HOVER}; }}"
             f"QPushButton:focus {{ border-color: {_ACCENT}; }}"
         )
         self._sample_btn.clicked.connect(self.load_sample)
@@ -1073,18 +1149,23 @@ class MainWindow(QMainWindow):
         # Tabs: extracted data table + generated Mermaid text.
         tabs = QTabWidget()
 
-        self._table = QTableWidget(0, len(EXPECTED_HEADERS))
-        self._table.setHorizontalHeaderLabels(EXPECTED_HEADERS)
-        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        # A model + view (not per-cell widgets) so only visible rows are realised.
+        self._table_model = ExtractedDataModel(EXPECTED_HEADERS, self)
+        self._table = QTableView()
+        self._table.setModel(self._table_model)
+        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
         # Keep rows single-line and let long free-text cells elide rather than
-        # wrap into tall rows; a per-cell tooltip carries the full value.
+        # wrap into tall rows; the model serves the full value as the tooltip.
         self._table.setWordWrap(False)
         self._table.setTextElideMode(Qt.ElideRight)
         table_header = self._table.horizontalHeader()
         table_header.setSectionResizeMode(QHeaderView.Interactive)
         table_header.setStretchLastSection(True)  # Description soaks up spare width
         table_header.setMinimumSectionSize(44)
+        # Size columns from a sample of rows, not all of them, so auto-sizing a
+        # huge sheet stays fast.
+        table_header.setResizeContentsPrecision(50)
         tabs.addTab(self._table, "Extracted data")
 
         self._columns = ColumnSelector()
@@ -1107,6 +1188,7 @@ class MainWindow(QMainWindow):
         self._render_status = RenderStatus()
         self._diagram_view.render_started.connect(self._render_status.start)
         self._diagram_view.render_finished.connect(self._render_status.finish)
+        self._diagram_view.render_finished.connect(self._announce_render)
         diagram_tab = QWidget()
         diagram_layout = QVBoxLayout(diagram_tab)
         diagram_layout.setContentsMargins(0, 0, 0, 0)
@@ -1203,12 +1285,12 @@ class MainWindow(QMainWindow):
             "  border-radius: 6px;"
             "  padding: 4px 12px;"
             "}"
-            "QPushButton:hover:enabled { background: #4a92f9; }"
-            "QPushButton:pressed:enabled { background: #1f6fe0; }"
-            "QPushButton:focus { border-color: #cfe0ff; }"
+            f"QPushButton:hover:enabled {{ background: {_ACCENT_HOVER}; }}"
+            f"QPushButton:pressed:enabled {{ background: {_ACCENT_PRESSED}; }}"
+            f"QPushButton:focus {{ border-color: {_ACCENT_RING}; }}"
             "QPushButton:disabled {"
-            "  background: rgba(128,128,128,0.18);"
-            "  color: rgba(128,128,128,0.75);"
+            f"  background: {_DISABLED_BG};"
+            f"  color: {_DISABLED_FG};"
             "}"
         )
 
@@ -1325,6 +1407,24 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.load_file_async(path)
+
+    def _announce_render(self, ok: bool):
+        """Tell a screen reader when a render finishes.
+
+        The spinner→tick status is visual only; without this a screen-reader
+        user gets no signal that the diagram finished (or failed). Best-effort:
+        it degrades silently where the announcement API isn't available.
+        """
+        message = "Diagram rendered" if ok else "Diagram render failed"
+        try:
+            from PySide6.QtGui import QAccessible, QAccessibleAnnouncementEvent
+
+            if QAccessible.isActive():
+                QAccessible.updateAccessibility(
+                    QAccessibleAnnouncementEvent(self, message)
+                )
+        except Exception:  # noqa: BLE001 - a11y announcement must never be fatal
+            pass
 
     def retheme(self):
         """Re-apply palette-derived colours after a light/dark scheme change."""
@@ -1650,27 +1750,27 @@ class MainWindow(QMainWindow):
         )
 
     def _populate_table(self, rows: list[dict]):
-        self._table.setRowCount(0)
-        # Loose header matching so extra/renamed columns still line up.
-        norm_map = {self._key(h): h for h in EXPECTED_HEADERS}
-        self._table.setRowCount(len(rows))
-        for r, row in enumerate(rows):
+        # Build a plain 2-D grid of strings (loose header matching so extra or
+        # renamed columns still line up) and hand it to the model in one reset —
+        # no per-cell widgets.
+        keyed_headers = [self._key(h) for h in EXPECTED_HEADERS]
+        data: list[list[str]] = []
+        for row in rows:
             row_by_key = {self._key(k): v for k, v in row.items()}
-            for c, header in enumerate(EXPECTED_HEADERS):
-                value = row_by_key.get(self._key(header))
-                text = "" if value is None else str(value)
-                item = QTableWidgetItem(text)
-                if text:
-                    # Full value on hover, since wide cells elide.
-                    item.setToolTip(text)
-                self._table.setItem(r, c, item)
+            data.append(
+                [
+                    "" if row_by_key.get(k) is None else str(row_by_key.get(k))
+                    for k in keyed_headers
+                ]
+            )
+        self._table_model.set_rows(data)
         self._table.resizeColumnsToContents()
         # Keep any single long free-text cell (Description, DefaultValue, …) from
         # blowing a column out to the point it shoves the rest off-screen; the
         # value is still readable via elision + tooltip, or by widening the column.
         _MAX_COL_WIDTH = 320
         header = self._table.horizontalHeader()
-        for c in range(self._table.columnCount()):
+        for c in range(self._table_model.columnCount()):
             if c == header.count() - 1:
                 continue  # last column stretches; don't fight it
             if self._table.columnWidth(c) > _MAX_COL_WIDTH:
