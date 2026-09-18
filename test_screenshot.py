@@ -117,6 +117,57 @@ def test_schema_to_drawio_includes_table_names_and_fk_labels():
     assert "CustomerID" in edge_values
 
 
+def test_schema_to_excalidraw_scene_is_valid_and_bound():
+    import json
+
+    import diagram_view
+    from excel_to_mermaid import build_schema
+
+    records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
+    schema = build_schema(records)
+    scene = json.loads(diagram_view.schema_to_excalidraw(schema))
+
+    assert scene["type"] == "excalidraw"
+    by_id = {el["id"]: el for el in scene["elements"]}
+    rects = [e for e in scene["elements"] if e["type"] == "rectangle"]
+    texts = [e for e in scene["elements"] if e["type"] == "text"]
+    arrows = [e for e in scene["elements"] if e["type"] == "arrow"]
+
+    assert len(rects) == len(schema.tables)
+    assert len(arrows) == len(schema.relationships)
+
+    # Table names + FK labels present in the text elements.
+    joined = "\n".join(t["text"] for t in texts)
+    assert "Customer" in joined and "Order" in joined and "CustomerID" in joined
+
+    # Every arrow is glued to real rectangles at both ends.
+    for arrow in arrows:
+        for side in ("startBinding", "endBinding"):
+            target = arrow[side]["elementId"]
+            assert target in by_id and by_id[target]["type"] == "rectangle"
+
+    # Bound text/arrows are back-referenced from their rectangles, and all
+    # referenced ids exist.
+    for rect in rects:
+        for ref in rect["boundElements"]:
+            assert ref["id"] in by_id
+
+
+def test_schema_to_excalidraw_relationship_matching_is_case_insensitive():
+    import json
+
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    schema = Schema(
+        tables=[Table("dbo", "Customer"), Table("dbo", "Order")],
+        relationships=[Relationship(parent_table="CUSTOMER", child_table="order", label="CustomerID")],
+    )
+    scene = json.loads(diagram_view.schema_to_excalidraw(schema))
+    arrows = [e for e in scene["elements"] if e["type"] == "arrow"]
+    assert len(arrows) == 1
+
+
 def test_schema_to_drawio_relationship_matching_is_case_insensitive():
     import diagram_view
     from excel_to_mermaid import Relationship, Schema, Table
@@ -216,7 +267,7 @@ def test_window_screenshot(tmp_path):
         window._export_format.itemData(i)
         for i in range(window._export_format.count())
     ]
-    assert kinds == ["drawio", "pdf", "png", "svg"]
+    assert kinds == ["drawio", "excalidraw", "pdf", "png", "svg"]
 
     out = tmp_path / "window.png"
     window.capture(str(out))

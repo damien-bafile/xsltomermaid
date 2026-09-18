@@ -511,6 +511,192 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
     return ET.tostring(mxfile, encoding="unicode")
 
 
+# ---------------------------------------------------------------------------
+# Excalidraw (.excalidraw) export — a simple, stable JSON scene
+# ---------------------------------------------------------------------------
+# Tables become rectangles with bound (left/top-aligned) text; relationships
+# become arrows glued to the boxes with the foreign-key column as the label.
+# Crisp style (roughness 0), monospaced text so the column lists line up.
+_EXCALI_FONT = 3  # 1=hand-drawn, 2=normal, 3=code/monospace
+_EXCALI_FONT_SIZE = 16
+_EXCALI_LINE_H = 1.25
+_EXCALI_CHAR_W = 9.6  # ~advance width of the mono font at size 16
+_EXCALI_PAD = 10
+
+
+def _excali_line(column) -> str:
+    keys = []
+    if getattr(column, "is_primary_key", False):
+        keys.append("PK")
+    if getattr(column, "foreign_key_reference", ""):
+        keys.append("FK")
+    key_part = f" [{' '.join(keys)}]" if keys else ""
+    data_type = (getattr(column, "data_type", "") or "").strip()
+    if hasattr(column, "rendered_type"):
+        data_type = column.rendered_type()
+    typed = f" : {data_type}" if data_type else ""
+    return f"{column.name}{typed}{key_part}"
+
+
+def _excali_common(eid: str, etype: str, x: float, y: float, w: float, h: float,
+                   seed: int) -> dict:
+    return {
+        "id": eid,
+        "type": etype,
+        "x": round(x, 2),
+        "y": round(y, 2),
+        "width": round(w, 2),
+        "height": round(h, 2),
+        "angle": 0,
+        "strokeColor": "#1e1e1e",
+        "backgroundColor": "transparent",
+        "fillStyle": "solid",
+        "strokeWidth": 1,
+        "strokeStyle": "solid",
+        "roughness": 0,  # crisp lines
+        "opacity": 100,
+        "groupIds": [],
+        "frameId": None,
+        "roundness": None,
+        "seed": seed,
+        "version": 1,
+        "versionNonce": seed,
+        "isDeleted": False,
+        "boundElements": [],
+        "updated": 1,
+        "link": None,
+        "locked": False,
+    }
+
+
+def schema_to_excalidraw(schema) -> str:
+    """Return an Excalidraw scene (.excalidraw JSON) of the schema."""
+    tables = list(getattr(schema, "tables", []) or [])
+    rels = list(getattr(schema, "relationships", []) or [])
+
+    def entity_size(table) -> tuple[float, float]:
+        lines = [table.name, ""] + [_excali_line(c) for c in table.columns]
+        longest = max((len(t) for t in lines), default=8)
+        w = min(max(180.0, longest * _EXCALI_CHAR_W + 2 * _EXCALI_PAD), 560.0)
+        h = len(lines) * _EXCALI_FONT_SIZE * _EXCALI_LINE_H + 2 * _EXCALI_PAD
+        return w, round(h, 2)
+
+    x_gap, y_gap = 80.0, 60.0
+    cols = max(1, int(math.ceil(math.sqrt(len(tables))))) if tables else 1
+    grid = [tables[i:i + cols] for i in range(0, len(tables), cols)]
+
+    elements: list[dict] = []
+    rect_by_idx: dict[int, dict] = {}
+    centers: dict[int, tuple[float, float]] = {}
+    seed = 1000
+    idx = 0
+    y = 40.0
+    for row in grid:
+        x = 40.0
+        row_h = 0.0
+        for table in row:
+            w, h = entity_size(table)
+            rect = _excali_common(f"rect{idx}", "rectangle", x, y, w, h, seed)
+            seed += 1
+            text_lines = [table.name, ""] + [_excali_line(c) for c in table.columns]
+            text = _excali_common(
+                f"txt{idx}", "text",
+                x + _EXCALI_PAD, y + _EXCALI_PAD, w - 2 * _EXCALI_PAD,
+                h - 2 * _EXCALI_PAD, seed,
+            )
+            seed += 1
+            text.update({
+                "text": "\n".join(text_lines),
+                "originalText": "\n".join(text_lines),
+                "fontSize": _EXCALI_FONT_SIZE,
+                "fontFamily": _EXCALI_FONT,
+                "textAlign": "left",
+                "verticalAlign": "top",
+                "containerId": f"rect{idx}",
+                "lineHeight": _EXCALI_LINE_H,
+            })
+            rect["boundElements"] = [{"id": f"txt{idx}", "type": "text"}]
+            elements.append(rect)
+            elements.append(text)
+            rect_by_idx[idx] = rect
+            centers[idx] = (x + w / 2, y + h / 2, w / 2, h / 2)
+            x += w + x_gap
+            row_h = max(row_h, h)
+            idx += 1
+        y += row_h + y_gap
+
+    name_to_idx: dict[str, int] = {}
+    for i, t in enumerate(tables):
+        name_to_idx.setdefault(t.name.lower(), i)
+
+    def _edge_point(cx, cy, hw, hh, tx, ty):
+        """Where the centre->target line crosses this box's boundary."""
+        dx, dy = tx - cx, ty - cy
+        if dx == 0 and dy == 0:
+            return cx, cy
+        sx = hw / abs(dx) if dx else float("inf")
+        sy = hh / abs(dy) if dy else float("inf")
+        t = min(sx, sy)
+        return cx + dx * t, cy + dy * t
+
+    edge_no = 0
+    for rel in rels:
+        p = name_to_idx.get(str(getattr(rel, "parent_table", "")).lower())
+        c = name_to_idx.get(str(getattr(rel, "child_table", "")).lower())
+        if p is None or c is None:
+            continue
+        pcx, pcy, phw, phh = centers[p]
+        ccx, ccy, chw, chh = centers[c]
+        # Route edge-to-edge so the connector doesn't cut through the box text;
+        # the bindings still let Excalidraw reroute when boxes are moved.
+        sx, sy = _edge_point(pcx, pcy, phw, phh, ccx, ccy)
+        ex, ey = _edge_point(ccx, ccy, chw, chh, pcx, pcy)
+        arrow_id = f"arrow{edge_no}"
+        arrow = _excali_common(
+            arrow_id, "arrow", sx, sy, abs(ex - sx), abs(ey - sy), seed
+        )
+        seed += 1
+        arrow.update({
+            "points": [[0, 0], [round(ex - sx, 2), round(ey - sy, 2)]],
+            "lastCommittedPoint": None,
+            "startBinding": {"elementId": f"rect{p}", "focus": 0, "gap": 4},
+            "endBinding": {"elementId": f"rect{c}", "focus": 0, "gap": 4},
+            "startArrowhead": None,
+            "endArrowhead": "arrow",
+        })
+        label = getattr(rel, "label", "") or ""
+        if label:
+            lbl = _excali_common(
+                f"lbl{edge_no}", "text",
+                (sx + ex) / 2, (sy + ey) / 2, len(label) * _EXCALI_CHAR_W,
+                _EXCALI_FONT_SIZE * _EXCALI_LINE_H, seed,
+            )
+            seed += 1
+            lbl.update({
+                "text": label, "originalText": label,
+                "fontSize": _EXCALI_FONT_SIZE, "fontFamily": _EXCALI_FONT,
+                "textAlign": "center", "verticalAlign": "middle",
+                "containerId": arrow_id, "lineHeight": _EXCALI_LINE_H,
+            })
+            arrow["boundElements"] = [{"id": f"lbl{edge_no}", "type": "text"}]
+        elements.append(arrow)
+        if label:
+            elements.append(lbl)
+        rect_by_idx[p]["boundElements"].append({"id": arrow_id, "type": "arrow"})
+        rect_by_idx[c]["boundElements"].append({"id": arrow_id, "type": "arrow"})
+        edge_no += 1
+
+    scene = {
+        "type": "excalidraw",
+        "version": 2,
+        "source": "https://github.com/damien-bafile/xsltomermaid",
+        "elements": elements,
+        "appState": {"gridSize": None, "viewBackgroundColor": "#ffffff"},
+        "files": {},
+    }
+    return json.dumps(scene, indent=2)
+
+
 class DiagramView(QWidget):
     """A tab that renders a Mermaid ER diagram and can export it as SVG/PNG/PDF."""
 

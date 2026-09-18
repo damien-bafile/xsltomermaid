@@ -99,6 +99,7 @@ from diagram_view import (
     RenderStyle,
     resource_path,
     schema_to_drawio,
+    schema_to_excalidraw,
 )
 from excel_to_mermaid import (
     EXPECTED_HEADERS,
@@ -1115,7 +1116,7 @@ class MainWindow(QMainWindow):
         onboard_row.setContentsMargins(0, 0, 0, 0)
         self._onboard_hint = QLabel(
             "New here? Load a schema to get an ER diagram you can export to "
-            "Draw.io, PDF, PNG or SVG —"
+            "Draw.io, Excalidraw, PDF, PNG or SVG —"
         )
         self._onboard_hint.setStyleSheet(f"color: {_muted_hex(self)};")
         self._sample_btn = QPushButton("try a sample")
@@ -1255,6 +1256,7 @@ class MainWindow(QMainWindow):
         self._export_format = QComboBox()
         self._export_format.setAccessibleName("Diagram export format")
         self._export_format.addItem("Draw.io (.drawio)", "drawio")
+        self._export_format.addItem("Excalidraw (.excalidraw)", "excalidraw")
         self._export_format.addItem("PDF (.pdf)", "pdf")
         self._export_format.addItem("PNG (.png)", "png")
         self._export_format.addItem("SVG (.svg)", "svg")
@@ -1991,6 +1993,7 @@ class MainWindow(QMainWindow):
         """
         exts = {
             "drawio": ".drawio",
+            "excalidraw": ".excalidraw",
             "pdf": ".pdf",
             "png": ".png",
             "svg": ".svg",
@@ -2007,6 +2010,10 @@ class MainWindow(QMainWindow):
         export_kind = str(self._export_format.currentData() or "")
         file_specs = {
             "drawio": ("Save Draw.io diagram", "diagram.drawio", "Draw.io file (*.drawio)"),
+            "excalidraw": (
+                "Save Excalidraw scene", "diagram.excalidraw",
+                "Excalidraw file (*.excalidraw)",
+            ),
             "pdf": ("Save diagram PDF", "diagram.pdf", "PDF document (*.pdf)"),
             "png": ("Save diagram PNG", "diagram.png", "PNG image (*.png)"),
             "svg": ("Save diagram SVG", "diagram.svg", "SVG image (*.svg)"),
@@ -2015,7 +2022,7 @@ class MainWindow(QMainWindow):
             return
 
         rendered_export_kinds = {"pdf", "png", "svg"}
-        if export_kind == "drawio":
+        if export_kind in {"drawio", "excalidraw"}:
             schema = self._schema_for_export()
             if schema is None:
                 return
@@ -2039,6 +2046,13 @@ class MainWindow(QMainWindow):
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(content)
                 self._status.setText(f"Saved Draw.io diagram to {path}")
+                return
+
+            if export_kind == "excalidraw":
+                content = schema_to_excalidraw(schema)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(content)
+                self._status.setText(f"Saved Excalidraw scene to {path}")
                 return
 
             if export_kind == "svg":
