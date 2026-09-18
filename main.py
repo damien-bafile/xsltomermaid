@@ -490,7 +490,7 @@ class TableSelector(QWidget):
         self._list.itemChanged.connect(lambda _item: self._update_count())
         layout.addWidget(self._list, 1)
 
-        self._count = QLabel("0 of 0 selected")
+        self._count = QLabel("No tables loaded yet")
         self._count.setStyleSheet(f"color: {_muted_hex(self)};")
         layout.addWidget(self._count)
 
@@ -574,6 +574,15 @@ class TableSelector(QWidget):
             self._path_direction.addItem(label, value)
         self._path_direction.setToolTip(_FK_DIRECTION_TOOLTIP)
         path_box.addWidget(self._path_direction)
+
+        # Teach the one domain concept this panel assumes, at point of use, so a
+        # non-DBA doesn't have to hover a tooltip to know what "direction" means.
+        self._path_hint = QLabel(
+            "A foreign key points from a child table to the parent it references."
+        )
+        self._path_hint.setWordWrap(True)
+        self._path_hint.setStyleSheet(f"color: {_muted_hex(self)}; font-size: 11px;")
+        path_box.addWidget(self._path_hint)
 
         path_row = QHBoxLayout()
         self._path_btn = QPushButton("&Trace path")
@@ -750,6 +759,10 @@ class TableSelector(QWidget):
 
     def _update_count(self):
         total = self._list.count()
+        if total == 0:
+            # Empty state: orient a newcomer instead of a bare "0 of 0 selected".
+            self._count.setText("No tables loaded yet")
+            return
         selected = sum(1 for item in self._items() if item.checkState() == Qt.Checked)
         self._count.setText(f"{selected} of {total} selected")
 
@@ -806,7 +819,9 @@ class TableSelector(QWidget):
         self.applied.emit()
 
     def retheme(self):
-        self._count.setStyleSheet(f"color: {_muted_hex(self)};")
+        muted = _muted_hex(self)
+        self._count.setStyleSheet(f"color: {muted};")
+        self._path_hint.setStyleSheet(f"color: {muted}; font-size: 11px;")
 
 
 class ColumnSelector(QWidget):
