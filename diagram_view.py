@@ -490,7 +490,7 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
         child_id = _lookup_table_id(getattr(rel, "child_table", None))
         if not parent_id or not child_id:
             continue
-        ET.SubElement(
+        edge = ET.SubElement(
             root,
             "mxCell",
             {
@@ -505,6 +505,13 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
                 "source": parent_id,
                 "target": child_id,
             },
+        )
+        # Draw.io's file-open decoder requires an edge to carry a geometry; without
+        # it the whole page decodes to empty (the file opens blank), even though
+        # dragging the file in as an import still works. Give every edge the
+        # standard relative geometry.
+        ET.SubElement(
+            edge, "mxGeometry", {"relative": "1", "as": "geometry"}
         )
         edge_id += 1
 
