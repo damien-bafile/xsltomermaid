@@ -863,9 +863,23 @@ class DiagramView(QWidget):
             pause.exec()
             elapsed += step
 
+        # Mermaid colours text/shapes via a <style> block, not inline attributes.
+        # QtSvg (used to rasterise PNG/PDF) ignores CSS <style> rules, so that
+        # colour is lost — most visibly, the dark theme's light text turns black
+        # and vanishes. Before reading the markup back, copy each element's
+        # *computed* fill/stroke (which Chromium has resolved from the CSS) onto
+        # the element as an attribute, which QtSvg does honour. Theme-agnostic,
+        # and it also makes the exported .svg render correctly in weak viewers.
         svg = self._run_js(
-            "(function(){var s=document.querySelector('.mermaid svg');"
-            "return s ? s.outerHTML : '';})()",
+            "(function(){"
+            "var s=document.querySelector('.mermaid svg');"
+            "if(!s)return '';"
+            "function skip(v){return !v||v==='none'||v==='transparent'||v==='rgba(0, 0, 0, 0)';}"
+            "var els=s.querySelectorAll('text,tspan,path,rect,circle,ellipse,line,polygon,polyline');"
+            "for(var i=0;i<els.length;i++){var el=els[i],cs=getComputedStyle(el);"
+            "['fill','stroke'].forEach(function(p){var v=cs.getPropertyValue(p);"
+            "if(!skip(v)&&!el.getAttribute(p))el.setAttribute(p,v);});}"
+            "return s.outerHTML;})()",
             timeout_ms=3000,
         )
         return svg or None
