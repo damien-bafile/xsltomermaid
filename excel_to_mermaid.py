@@ -640,6 +640,27 @@ def route_paths(
     return routes[:limit], None
 
 
+def related_tables(
+    schema: Schema,
+    selected_names: Iterable[str],
+    direction: str = "either",
+) -> set[str]:
+    """The one-hop foreign-key neighbours of ``selected_names`` (canonical names).
+
+    ``direction`` (one of :data:`PATH_DIRECTIONS`) chooses which links to follow:
+    ``either`` for both, ``forward`` for the tables the selection *references*
+    (its parents), ``reverse`` for the tables that *reference* the selection
+    (its children). The selected tables themselves are never returned.
+    """
+    canon = {t.name.lower(): t.name for t in schema.tables}
+    selected = {name.strip().lower() for name in selected_names if name.strip()}
+    adjacency = _path_adjacency(schema, direction)
+    neighbours: set[str] = set()
+    for name in selected:
+        neighbours |= adjacency.get(name, set())
+    return {canon[n] for n in neighbours if n not in selected and n in canon}
+
+
 # ---------------------------------------------------------------------------
 # Mermaid generation
 # ---------------------------------------------------------------------------

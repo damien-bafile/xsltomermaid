@@ -14,6 +14,7 @@ from excel_to_mermaid import (
     filter_columns,
     filter_schema,
     generate_mermaid,
+    related_tables,
     route_paths,
     shortest_path,
 )
@@ -106,6 +107,21 @@ def test_route_paths_combines_alternatives_across_segments():
     routes, broken = route_paths(schema, ["A", "D"])
     assert broken is None
     assert routes == [["A", "B", "D"], ["A", "C", "D"]]
+
+
+def test_related_tables_honours_direction():
+    schema = _diamond_schema()  # A parent of B,C; B,C parent of D
+    assert related_tables(schema, ["A"]) == {"B", "C"}  # both ways
+    assert related_tables(schema, ["A"], "reverse") == {"B", "C"}  # dependents
+    assert related_tables(schema, ["A"], "forward") == set()  # A references nothing
+    assert related_tables(schema, ["D"], "forward") == {"B", "C"}  # D references B,C
+    assert related_tables(schema, ["D"], "reverse") == set()
+    assert related_tables(schema, ["B"]) == {"A", "D"}  # up to A, down to D
+
+
+def test_related_tables_excludes_selected_and_is_case_insensitive():
+    schema = _diamond_schema()
+    assert related_tables(schema, ["a", "b"]) == {"C", "D"}
 
 SAMPLE_ROWS = [
     {"SchemaName": "dbo", "TableName": "Customer", "ColumnOrder": 1,

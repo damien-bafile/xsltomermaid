@@ -111,6 +111,7 @@ from excel_to_mermaid import (
     filter_schema,
     generate_mermaid,
     read_rows,
+    related_tables,
     route_paths,
     wrap_mermaid_html,
 )
@@ -419,6 +420,18 @@ _PATH_DIRECTION_CHOICES = (
 )
 _PATH_DIRECTION_LABELS = {value: label for label, value in _PATH_DIRECTION_CHOICES}
 
+# "Add related tables" direction, reusing the same child→parent / parent→child
+# semantics as path tracing (forward = referenced parents, reverse = children).
+_RELATED_DIRECTION_CHOICES = (
+    ("Related both ways", "either"),
+    ("Referenced (parents)", "forward"),
+    ("Referencing (children)", "reverse"),
+)
+
+# Adding more than this many related tables in one click asks first (with a
+# preview), so a hub table can't silently drag in dozens.
+RELATED_WARN_COUNT = 10
+
 
 class TableSelector(QWidget):
     """A filterable, checkable list of tables to include in the diagram."""
@@ -462,13 +475,24 @@ class TableSelector(QWidget):
         button_row.addWidget(self._clear_btn)
         layout.addLayout(button_row)
 
+        related_row = QHBoxLayout()
         self._related_btn = QPushButton("Add related tables")
         self._related_btn.setToolTip(
-            "Tick the tables directly connected by a foreign key to the ones "
-            "you've checked (one hop out), then render."
+            "Tick the tables one foreign-key hop from the ones you've checked. "
+            "Adding a lot at once asks first, and can be undone."
         )
         self._related_btn.clicked.connect(lambda: self.related_requested.emit())
-        layout.addWidget(self._related_btn)
+        self._related_direction = QComboBox()
+        for label, value in _RELATED_DIRECTION_CHOICES:
+            self._related_direction.addItem(label, value)
+        self._related_direction.setToolTip(
+            "Which neighbours to add:\n"
+            "Both ways · Referenced (tables you point to) · "
+            "Referencing (tables that point to you)."
+        )
+        related_row.addWidget(self._related_btn, 1)
+        related_row.addWidget(self._related_direction)
+        layout.addLayout(related_row)
 
         # Trace the shortest foreign-key path between two tables. The endpoints
         # come from two always-visible pickers (no need to hunt-and-check first),
@@ -530,9 +554,11 @@ class TableSelector(QWidget):
         path_row.addWidget(self._path_replace)
         layout.addLayout(path_row)
 
-        self._undo_btn = QPushButton("Undo path")
-        self._undo_btn.setToolTip("Restore the selection from before the last traced path.")
-        self._undo_btn.clicked.connect(self.undo_last_path)
+        self._undo_btn = QPushButton("Undo")
+        self._undo_btn.setToolTip(
+            "Restore the selection from before the last add or traced path."
+        )
+        self._undo_btn.clicked.connect(self.undo_last_change)
         self._undo_btn.setEnabled(False)
         layout.addWidget(self._undo_btn)
         self._undo_snapshot: list[str] | None = None
@@ -557,6 +583,7 @@ class TableSelector(QWidget):
             self._select_shown_btn,
             self._clear_btn,
             self._related_btn,
+            self._related_direction,
             self._path_from,
             self._path_to,
             self._path_via,
@@ -570,6 +597,7 @@ class TableSelector(QWidget):
         self._update_path_enabled()
         if not ready:
             self._undo_snapshot = None
+            self._undo_btn.setText("Undo")
         self._undo_btn.setEnabled(ready and self._undo_snapshot is not None)
 
     # -- population --------------------------------------------------------
@@ -600,6 +628,7 @@ class TableSelector(QWidget):
             self._path_via.addItem(name, name)
         self._path_via.blockSignals(False)
         self._undo_snapshot = None
+        self._undo_btn.setText("Undo")
         self._undo_btn.setEnabled(False)
         self._update_path_enabled()
         self._update_count()
@@ -685,17 +714,26 @@ class TableSelector(QWidget):
         ready = self._path_from.isEnabled() and bool(start) and bool(end) and start != end
         self._path_btn.setEnabled(ready)
 
-    def snapshot_for_path_undo(self):
-        """Remember the current selection so a traced path can be undone."""
+    def related_direction(self) -> str:
+        """Which neighbours 'Add related' pulls in: 'either', 'forward', 'reverse'."""
+        return self._related_direction.currentData()
+
+    def snapshot_for_undo(self, label: str):
+        """Remember the current selection so the next change can be undone.
+
+        ``label`` names the action on the button (e.g. "Undo add", "Undo path").
+        """
         self._undo_snapshot = self.selected_tables()
+        self._undo_btn.setText(f"Undo {label}")
         self._undo_btn.setEnabled(True)
 
-    def undo_last_path(self):
-        """Restore the selection captured before the last traced path."""
+    def undo_last_change(self):
+        """Restore the selection captured before the last add / traced path."""
         if self._undo_snapshot is None:
             return
         self.set_selected_tables(self._undo_snapshot)
         self._undo_snapshot = None
+        self._undo_btn.setText("Undo")
         self._undo_btn.setEnabled(False)
         self.applied.emit()
 
@@ -1750,21 +1788,44 @@ class MainWindow(QMainWindow):
             self._tabs.setCurrentWidget(self._diagram_tab)
 
     def _add_related_tables(self):
-        """Tick the one-hop foreign-key neighbours of the checked tables, render."""
+        """Add the one-hop FK neighbours of the checked tables.
+
+        Only the neighbours in the chosen direction are considered (B), a large
+        batch is previewed and confirmed before it lands (A), and the prior
+        selection is snapshotted so the add can be undone (C).
+        """
         if self._schema is None:
             return
         names = self._selector.selected_tables()
         if not names:
             self._status.setText("Check at least one table first, then add related.")
             return
-        # filter_schema with include_related gives us the selection + its one-hop
-        # neighbours; tick every table in that expanded set.
-        expanded = filter_schema(self._schema, names, include_related=True)
-        added = self._selector.check_tables(t.name for t in expanded.tables)
-        if added:
-            self._render_selection()
-        else:
+
+        direction = self._selector.related_direction()
+        new = sorted(related_tables(self._schema, names, direction))
+        if not new:
             self._status.setText("No related tables to add.")
+            return
+        if len(new) > RELATED_WARN_COUNT and not self._confirm_add_related(new):
+            return
+
+        self._selector.snapshot_for_undo("add")
+        added = self._selector.check_tables(new)
+        self._render_selection()
+        self._status.setText(f"Added {_plural(added, 'related table')}.")
+
+    def _confirm_add_related(self, new: list[str]) -> bool:
+        """Preview a large related-table batch and let the user back out."""
+        count = len(new)
+        shown = ", ".join(new[:8])
+        more = "" if count <= 8 else f", +{count - 8} more"
+        answer = QMessageBox.question(
+            self,
+            "Add related tables?",
+            f"This adds {_plural(count, 'related table')}:\n\n{shown}{more}\n\n"
+            "Add them all?",
+        )
+        return answer == QMessageBox.Yes
 
     def _find_shortest_path(self):
         """Trace a shortest route between the chosen tables and apply it.
@@ -1804,7 +1865,7 @@ class MainWindow(QMainWindow):
 
         # Snapshot before mutating so the trace can be undone, then apply the
         # route additively or as a replacement per the user's choice.
-        self._selector.snapshot_for_path_undo()
+        self._selector.snapshot_for_undo("path")
         if self._selector.path_replaces_selection():
             self._selector.set_selected_tables(chosen)
         else:

@@ -512,7 +512,7 @@ def test_trace_path_undo_restores_prior_selection(tmp_path):
     _trace_path(window, "Order", "OrderLine", replace=False)
     assert window._selector._undo_btn.isEnabled()
 
-    window._selector.undo_last_path()
+    window._selector.undo_last_change()
     assert set(window._selector.selected_tables()) == {"Customer"}
     assert not window._selector._undo_btn.isEnabled()
 
@@ -664,6 +664,92 @@ def test_trace_path_no_path_reports_and_keeps_selection(monkeypatch):
     assert told["count"] == 1
     assert set(window._selector.selected_tables()) == {"A"}  # untouched
     assert not window._selector._undo_btn.isEnabled()  # no snapshot taken
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def _set_related_direction(window, value):
+    combo = window._selector._related_direction
+    combo.setCurrentIndex(combo.findData(value))
+
+
+def _hub_schema(children=12):
+    """One parent H referencing `children` child tables (a fan-out hub)."""
+    from excel_to_mermaid import Relationship
+
+    kids = [f"C{i}" for i in range(children)]
+    rels = [Relationship("H", kid, "fk") for kid in kids]
+    return ["H", *kids], rels
+
+
+def test_add_related_direction_limits_neighbours(monkeypatch):
+    app, window = _window_with_schema(*_diamond())
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    window._selector.clear_selection()
+    window._selector.check_tables(["D"])
+
+    # D references B and C (forward); nothing depends on D (reverse).
+    _set_related_direction(window, "forward")
+    window._add_related_tables()
+    assert set(window._selector.selected_tables()) == {"D", "B", "C"}
+
+    window._selector.clear_selection()
+    window._selector.check_tables(["D"])
+    _set_related_direction(window, "reverse")
+    window._add_related_tables()
+    assert set(window._selector.selected_tables()) == {"D"}  # nothing added
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_add_related_previews_and_can_be_declined(monkeypatch):
+    tables, rels = _hub_schema(children=app_module.RELATED_WARN_COUNT + 2)
+    app, window = _window_with_schema(tables, rels)
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    window._selector.clear_selection()
+    window._selector.check_tables(["H"])
+    _set_related_direction(window, "reverse")  # H's dependents = all children
+
+    asked = {"count": 0}
+
+    def _decline(*_args, **_kwargs):
+        asked["count"] += 1
+        return app_module.QMessageBox.No
+
+    monkeypatch.setattr(app_module.QMessageBox, "question", _decline)
+    window._add_related_tables()
+
+    assert asked["count"] == 1  # a big batch prompted
+    assert set(window._selector.selected_tables()) == {"H"}  # declined → unchanged
+    assert not window._selector._undo_btn.isEnabled()
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_add_related_accepts_and_is_undoable(monkeypatch):
+    n_kids = app_module.RELATED_WARN_COUNT + 2
+    tables, rels = _hub_schema(children=n_kids)
+    app, window = _window_with_schema(tables, rels)
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    window._selector.clear_selection()
+    window._selector.check_tables(["H"])
+    _set_related_direction(window, "reverse")
+
+    monkeypatch.setattr(
+        app_module.QMessageBox, "question", lambda *a, **k: app_module.QMessageBox.Yes
+    )
+    window._add_related_tables()
+
+    assert len(window._selector.selected_tables()) == n_kids + 1  # H + all children
+    assert window._selector._undo_btn.isEnabled()
+    assert window._selector._undo_btn.text() == "Undo add"
+
+    window._selector.undo_last_change()
+    assert set(window._selector.selected_tables()) == {"H"}
+    assert not window._selector._undo_btn.isEnabled()
 
     window._diagram_view.cleanup()
     del app
