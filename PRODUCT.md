@@ -40,7 +40,7 @@ A **single-drag, fully local** path from a column-per-row Excel schema to a *ren
 multi-format-exportable* ER diagram. The differentiator is the combination: it reads the
 spreadsheet contract directly (no manual modeling), renders live in-app from a vendored
 Mermaid (no internet, no cloud), and exports the same diagram to the formats enterprise
-workflows actually consume — drawio, Visio (.vdx), PDF, PNG, and SVG — from one selector.
+workflows actually consume — drawio, PDF, PNG, and SVG — from one selector.
 Mermaid text is available as an output, but the app is not "a Mermaid editor"; it is a
 schema-to-diagram converter with Mermaid as its rendering engine.
 
@@ -72,8 +72,11 @@ schema-to-diagram converter with Mermaid as its rendering engine.
 - **Offline by construction:** Mermaid is bundled locally so rendering works with no network
   access. (True of the current implementation; treat as a strong default rather than a
   formally locked commitment — see Product Principles.)
-- **Export formats:** Mermaid `.mmd` / `.md`, drawio, Visio `.vdx`, PDF, PNG, SVG — plus
+- **Export formats:** Mermaid `.mmd` / `.md`, drawio, PDF, PNG, SVG — plus
   copy-to-clipboard and open-in-browser preview. Selection presets save/load as `.toml`.
+  (A native Visio `.vdx`/`.vsdx` export was dropped: the legacy `.vdx` format is
+  deprecated and a valid `.vsdx` is impractical to author reliably. Visio users can
+  export `.drawio` and use draw.io's own "Save as `.vsdx`".)
 - **Mermaid ER parser limitation:** attribute types must be a single plain word, so
   `varchar(100)` / `decimal(18,2)` are flattened to `varchar_100` / `decimal_18_2`.
 - **Default rendered layout:** Left → Right.
@@ -102,9 +105,10 @@ schema-to-diagram converter with Mermaid as its rendering engine.
    than asking them to model anything.
 2. **Local and self-contained.** Rendering and export work without a network; the tool is
    trustworthy for schema data in enterprise / air-gapped settings.
-3. **Export parity is a promise.** *(User-confirmed durable constraint.)* drawio, Visio
-   (.vdx), PDF, PNG, and SVG export must all keep working; downstream users depend on
-   specific formats, so no single export path may silently regress.
+3. **Export parity is a promise.** *(User-confirmed durable constraint.)* drawio, PDF,
+   PNG, and SVG export must all keep working; downstream users depend on specific formats,
+   so no single export path may silently regress. (Native Visio export was intentionally
+   removed — see Capabilities — rather than ship a format that doesn't open.)
 4. **Faithful to the source schema.** PK/FK markers, nullability, types, and derived
    relationships reflect what the spreadsheet actually says; the diagram is a truthful view
    of the input, not an idealized one.
