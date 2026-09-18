@@ -459,13 +459,50 @@ class TableSelector(QWidget):
         self._related_btn.clicked.connect(lambda: self.related_requested.emit())
         layout.addWidget(self._related_btn)
 
-        self._path_btn = QPushButton("Shortest path between 2")
+        # Trace the shortest foreign-key path between two tables. The endpoints
+        # come from two always-visible pickers (no need to hunt-and-check first),
+        # and the result is added to the current selection unless "Replace" is
+        # ticked — so tracing a path never silently wipes what you had.
+        path_label = QLabel("Trace path between tables")
+        path_label.setStyleSheet("font-weight: 600;")
+        layout.addWidget(path_label)
+
+        endpoints_row = QHBoxLayout()
+        self._path_from = QComboBox()
+        self._path_from.setToolTip("Starting table for the path.")
+        self._path_to = QComboBox()
+        self._path_to.setToolTip("Destination table for the path.")
+        for combo in (self._path_from, self._path_to):
+            combo.currentIndexChanged.connect(self._update_path_enabled)
+        endpoints_row.addWidget(self._path_from, 1)
+        arrow = QLabel("→")
+        arrow.setAlignment(Qt.AlignCenter)
+        endpoints_row.addWidget(arrow)
+        endpoints_row.addWidget(self._path_to, 1)
+        layout.addLayout(endpoints_row)
+
+        path_row = QHBoxLayout()
+        self._path_btn = QPushButton("Trace path")
         self._path_btn.setToolTip(
-            "Check exactly two tables, then tick every table on the shortest "
-            "foreign-key path connecting them and render it."
+            "Tick every table on the shortest foreign-key path between the two "
+            "chosen tables and render it."
         )
         self._path_btn.clicked.connect(lambda: self.path_requested.emit())
-        layout.addWidget(self._path_btn)
+        self._path_replace = QCheckBox("Replace selection")
+        self._path_replace.setToolTip(
+            "On: the path replaces your current selection.\n"
+            "Off: the path is added to what you've already checked."
+        )
+        path_row.addWidget(self._path_btn, 1)
+        path_row.addWidget(self._path_replace)
+        layout.addLayout(path_row)
+
+        self._undo_btn = QPushButton("Undo path")
+        self._undo_btn.setToolTip("Restore the selection from before the last traced path.")
+        self._undo_btn.clicked.connect(self.undo_last_path)
+        self._undo_btn.setEnabled(False)
+        layout.addWidget(self._undo_btn)
+        self._undo_snapshot: list[str] | None = None
 
         self._render_btn = QPushButton("Render selected")
         self._render_btn.clicked.connect(lambda: self.applied.emit())
@@ -487,10 +524,18 @@ class TableSelector(QWidget):
             self._select_shown_btn,
             self._clear_btn,
             self._related_btn,
-            self._path_btn,
+            self._path_from,
+            self._path_to,
+            self._path_replace,
             self._render_btn,
         ):
             widget.setEnabled(ready)
+        # The trace/undo buttons have their own readiness (two valid endpoints;
+        # an available snapshot) layered on top of the schema being loaded.
+        self._update_path_enabled()
+        if not ready:
+            self._undo_snapshot = None
+        self._undo_btn.setEnabled(ready and self._undo_snapshot is not None)
 
     # -- population --------------------------------------------------------
     def set_tables(self, names: list[str]):
@@ -503,6 +548,18 @@ class TableSelector(QWidget):
             self._list.addItem(item)
         self._list.blockSignals(False)
         self._filter.clear()
+        # Refill the From/To pickers and default them to the first two tables so
+        # a path can be traced without any prior clicking.
+        for combo in (self._path_from, self._path_to):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(names)
+            combo.blockSignals(False)
+        if self._path_to.count() > 1:
+            self._path_to.setCurrentIndex(1)
+        self._undo_snapshot = None
+        self._undo_btn.setEnabled(False)
+        self._update_path_enabled()
         self._update_count()
 
     # -- selection helpers -------------------------------------------------
@@ -561,6 +618,36 @@ class TableSelector(QWidget):
         total = self._list.count()
         selected = sum(1 for item in self._items() if item.checkState() == Qt.Checked)
         self._count.setText(f"{selected} of {total} selected")
+
+    # -- path tracing (endpoints + non-destructive apply) ------------------
+    def path_endpoints(self) -> tuple[str, str]:
+        """The two tables chosen in the From/To pickers."""
+        return self._path_from.currentText(), self._path_to.currentText()
+
+    def path_replaces_selection(self) -> bool:
+        """Whether a traced path should replace (vs add to) the selection."""
+        return self._path_replace.isChecked()
+
+    def _update_path_enabled(self):
+        """Enable Trace only when two distinct, real endpoints are chosen."""
+        start, end = self.path_endpoints()
+        # Both pickers share the schema-loaded enabled state, so testing one is enough.
+        ready = self._path_from.isEnabled() and bool(start) and bool(end) and start != end
+        self._path_btn.setEnabled(ready)
+
+    def snapshot_for_path_undo(self):
+        """Remember the current selection so a traced path can be undone."""
+        self._undo_snapshot = self.selected_tables()
+        self._undo_btn.setEnabled(True)
+
+    def undo_last_path(self):
+        """Restore the selection captured before the last traced path."""
+        if self._undo_snapshot is None:
+            return
+        self.set_selected_tables(self._undo_snapshot)
+        self._undo_snapshot = None
+        self._undo_btn.setEnabled(False)
+        self.applied.emit()
 
     def retheme(self):
         self._count.setStyleSheet(f"color: {_muted_hex(self)};")
@@ -1630,50 +1717,39 @@ class MainWindow(QMainWindow):
             self._status.setText("No related tables to add.")
 
     def _find_shortest_path(self):
-        """Tick every table on the shortest path between the two checked tables."""
+        """Trace the shortest path between the two tables chosen in the pickers.
+
+        Endpoints come from the always-visible From/To pickers (not the check
+        state), and the result is added to the current selection unless
+        "Replace selection" is ticked. Either way the prior selection is
+        snapshotted first so the Undo button can restore it.
+        """
         if self._schema is None:
             return
-        names = self._selector.selected_tables()
-        if len(names) < 2:
+        start, end = self._selector.path_endpoints()
+        if not start or not end or start == end:
             self._status.setText(
-                "Check at least two tables, then find the shortest path between them."
+                "Pick two different tables in the From / To pickers to trace a path."
             )
             return
-        if len(names) == 2:
-            start, end = names
-        else:
-            start, ok = QInputDialog.getItem(
-                self,
-                "Pick starting table",
-                "More than two tables are selected.\nChoose the starting table:",
-                names,
-                0,
-                False,
-            )
-            if not ok or not start:
-                return
-            ends = [name for name in names if name != start]
-            end, ok = QInputDialog.getItem(
-                self,
-                "Pick destination table",
-                "Choose the destination table:",
-                ends,
-                0,
-                False,
-            )
-            if not ok or not end:
-                return
         path = shortest_path(self._schema, start, end)
         if not path:
             self._status.setText(
                 f"No foreign-key path connects {start} and {end}."
             )
             return
-        self._selector.check_tables(path)
+        # Snapshot before mutating so the trace can be undone, then apply the
+        # path additively or as a replacement per the user's choice.
+        self._selector.snapshot_for_path_undo()
+        if self._selector.path_replaces_selection():
+            self._selector.set_selected_tables(path)
+        else:
+            self._selector.check_tables(path)
         self._render_selection()
         hops = len(path) - 1
+        mode = "replaced with" if self._selector.path_replaces_selection() else "added"
         self._status.setText(
-            f"Shortest path ({hops} hop{'s' if hops != 1 else ''}): "
+            f"Shortest path ({hops} hop{'s' if hops != 1 else ''}, {mode}): "
             + " → ".join(path)
         )
 

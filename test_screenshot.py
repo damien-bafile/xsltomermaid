@@ -449,7 +449,15 @@ def test_diagram_screenshot(tmp_path):
     del app
 
 
-def test_shortest_path_popup_for_more_than_two_selected(monkeypatch, tmp_path):
+def _trace_path(window, start, end, *, replace):
+    """Drive the From/To pickers + replace toggle, then trace the path."""
+    window._selector._path_from.setCurrentText(start)
+    window._selector._path_to.setCurrentText(end)
+    window._selector._path_replace.setChecked(replace)
+    window._find_shortest_path()
+
+
+def test_trace_path_from_pickers_adds_to_selection(tmp_path):
     app = QApplication.instance() or QApplication([])
 
     sample = tmp_path / "sample.xlsx"
@@ -457,30 +465,20 @@ def test_shortest_path_popup_for_more_than_two_selected(monkeypatch, tmp_path):
 
     window = app_module.MainWindow()
     window.load_file(str(sample))
+    # Customer is off the Order→OrderLine path, so it survives an additive trace.
     window._selector.clear_selection()
-    window._selector.check_tables(["Customer", "Order", "Product"])
+    window._selector.check_tables(["Customer"])
 
-    calls = []
-
-    def _fake_get_item(_parent, title, _label, items, _index, _editable):
-        calls.append((title, list(items)))
-        if "starting" in title.lower():
-            return ("Customer", True)
-        return ("Product", True)
-
-    monkeypatch.setattr(app_module.QInputDialog, "getItem", _fake_get_item)
-    window._find_shortest_path()
+    _trace_path(window, "Order", "OrderLine", replace=False)
 
     selected = set(window._selector.selected_tables())
-    assert "OrderLine" in selected
-    assert len(calls) == 2
-    assert calls[0][1] == ["Customer", "Order", "Product"]
+    assert {"Customer", "Order", "OrderLine"} <= selected
 
     window._diagram_view.cleanup()
     del app
 
 
-def test_shortest_path_popup_cancel_start_keeps_selection(monkeypatch, tmp_path):
+def test_trace_path_replace_mode_discards_prior_selection(tmp_path):
     app = QApplication.instance() or QApplication([])
 
     sample = tmp_path / "sample.xlsx"
@@ -489,22 +487,18 @@ def test_shortest_path_popup_cancel_start_keeps_selection(monkeypatch, tmp_path)
     window = app_module.MainWindow()
     window.load_file(str(sample))
     window._selector.clear_selection()
-    window._selector.check_tables(["Customer", "Order", "Product"])
-    before = set(window._selector.selected_tables())
+    window._selector.check_tables(["Customer"])
 
-    def _cancel_start(_parent, _title, _label, _items, _index, _editable):
-        return ("", False)
+    _trace_path(window, "Order", "OrderLine", replace=True)
 
-    monkeypatch.setattr(app_module.QInputDialog, "getItem", _cancel_start)
-    window._find_shortest_path()
-    after = set(window._selector.selected_tables())
-    assert after == before
+    # Replace mode wipes the prior selection: only the path remains.
+    assert set(window._selector.selected_tables()) == {"Order", "OrderLine"}
 
     window._diagram_view.cleanup()
     del app
 
 
-def test_shortest_path_popup_cancel_destination_keeps_selection(monkeypatch, tmp_path):
+def test_trace_path_undo_restores_prior_selection(tmp_path):
     app = QApplication.instance() or QApplication([])
 
     sample = tmp_path / "sample.xlsx"
@@ -513,22 +507,34 @@ def test_shortest_path_popup_cancel_destination_keeps_selection(monkeypatch, tmp
     window = app_module.MainWindow()
     window.load_file(str(sample))
     window._selector.clear_selection()
-    window._selector.check_tables(["Customer", "Order", "Product"])
-    before = set(window._selector.selected_tables())
+    window._selector.check_tables(["Customer"])
 
-    calls = {"count": 0}
+    _trace_path(window, "Order", "OrderLine", replace=False)
+    assert window._selector._undo_btn.isEnabled()
 
-    def _cancel_destination(_parent, title, _label, _items, _index, _editable):
-        calls["count"] += 1
-        if "starting" in title.lower():
-            return ("Customer", True)
-        return ("", False)
+    window._selector.undo_last_path()
+    assert set(window._selector.selected_tables()) == {"Customer"}
+    assert not window._selector._undo_btn.isEnabled()
 
-    monkeypatch.setattr(app_module.QInputDialog, "getItem", _cancel_destination)
-    window._find_shortest_path()
-    after = set(window._selector.selected_tables())
-    assert calls["count"] == 2
-    assert after == before
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_trace_path_disconnected_keeps_selection_and_offers_no_undo(tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer"])
+
+    # Same table both ends is rejected before any mutation or snapshot.
+    _trace_path(window, "Customer", "Customer", replace=True)
+    assert set(window._selector.selected_tables()) == {"Customer"}
+    assert not window._selector._undo_btn.isEnabled()
 
     window._diagram_view.cleanup()
     del app
