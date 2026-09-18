@@ -168,6 +168,46 @@ def test_schema_to_excalidraw_relationship_matching_is_case_insensitive():
     assert len(arrows) == 1
 
 
+def test_schema_to_excalidraw_dark_mode():
+    import json
+
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    schema = Schema(
+        tables=[Table("dbo", "A"), Table("dbo", "B")],
+        relationships=[Relationship(parent_table="A", child_table="B", label="X")],
+    )
+    # Excalidraw's dark theme inverts the canvas at render time, so a dark scene
+    # keeps the normal colours and only flips the theme flag.
+    scene = json.loads(diagram_view.schema_to_excalidraw(schema, dark=True))
+    assert scene["appState"]["theme"] == "dark"
+    assert all(e["strokeColor"] == "#1e1e1e" for e in scene["elements"])
+    light = json.loads(diagram_view.schema_to_excalidraw(schema))
+    assert light["appState"]["theme"] == "light"
+    assert all(e["strokeColor"] == "#1e1e1e" for e in light["elements"])
+
+
+def test_schema_to_excalidraw_spacing_grows_with_label_length():
+    import json
+
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    def gap(label):
+        schema = Schema(
+            tables=[Table("dbo", "A"), Table("dbo", "B")],
+            relationships=[Relationship(parent_table="A", child_table="B", label=label)],
+        )
+        els = json.loads(diagram_view.schema_to_excalidraw(schema))["elements"]
+        rects = {e["id"]: e for e in els if e["type"] == "rectangle"}
+        a, b = rects["rect0"], rects["rect1"]
+        return b["x"] - (a["x"] + a["width"])  # horizontal gap between the boxes
+
+    # A long relationship label widens the gap so it doesn't overlap a box.
+    assert gap("A_VERY_LONG_FOREIGN_KEY_COLUMN_NAME") > gap("X")
+
+
 def test_schema_to_drawio_relationship_matching_is_case_insensitive():
     import diagram_view
     from excel_to_mermaid import Relationship, Schema, Table

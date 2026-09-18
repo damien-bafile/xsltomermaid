@@ -2049,7 +2049,8 @@ class MainWindow(QMainWindow):
                 return
 
             if export_kind == "excalidraw":
-                content = schema_to_excalidraw(schema)
+                dark = self._options_bar.render_style().theme == "dark"
+                content = schema_to_excalidraw(schema, dark=dark)
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(content)
                 self._status.setText(f"Saved Excalidraw scene to {path}")

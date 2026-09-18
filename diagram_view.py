@@ -539,7 +539,7 @@ def _excali_line(column) -> str:
 
 
 def _excali_common(eid: str, etype: str, x: float, y: float, w: float, h: float,
-                   seed: int) -> dict:
+                   seed: int, stroke: str = "#1e1e1e") -> dict:
     return {
         "id": eid,
         "type": etype,
@@ -548,7 +548,7 @@ def _excali_common(eid: str, etype: str, x: float, y: float, w: float, h: float,
         "width": round(w, 2),
         "height": round(h, 2),
         "angle": 0,
-        "strokeColor": "#1e1e1e",
+        "strokeColor": stroke,
         "backgroundColor": "transparent",
         "fillStyle": "solid",
         "strokeWidth": 1,
@@ -569,10 +569,21 @@ def _excali_common(eid: str, etype: str, x: float, y: float, w: float, h: float,
     }
 
 
-def schema_to_excalidraw(schema) -> str:
-    """Return an Excalidraw scene (.excalidraw JSON) of the schema."""
+def schema_to_excalidraw(schema, dark: bool = False) -> str:
+    """Return an Excalidraw scene (.excalidraw JSON) of the schema.
+
+    ``dark`` switches to a dark canvas with light strokes/text so the export
+    matches the app when the diagram theme is dark.
+    """
     tables = list(getattr(schema, "tables", []) or [])
     rels = list(getattr(schema, "relationships", []) or [])
+
+    # Excalidraw's dark theme inverts the whole canvas at render time, so a dark
+    # scene keeps the same (dark-on-light) element colours and just flips the
+    # theme flag — Excalidraw then shows it light-on-dark.
+    stroke = "#1e1e1e"
+    view_bg = "#ffffff"
+    theme = "dark" if dark else "light"
 
     def entity_size(table) -> tuple[float, float]:
         lines = [table.name, ""] + [_excali_line(c) for c in table.columns]
@@ -581,7 +592,13 @@ def schema_to_excalidraw(schema) -> str:
         h = len(lines) * _EXCALI_FONT_SIZE * _EXCALI_LINE_H + 2 * _EXCALI_PAD
         return w, round(h, 2)
 
-    x_gap, y_gap = 80.0, 60.0
+    # Spread boxes so the widest relationship label sits in the gap between
+    # boxes instead of overlapping one; the vertical gap only needs to clear a
+    # single line of label text.
+    max_label = max((len(getattr(r, "label", "") or "") for r in rels), default=0)
+    label_w = max_label * _EXCALI_CHAR_W + 2 * _EXCALI_PAD
+    x_gap = max(80.0, label_w + 24.0)
+    y_gap = max(60.0, _EXCALI_FONT_SIZE * _EXCALI_LINE_H + 24.0)
     cols = max(1, int(math.ceil(math.sqrt(len(tables))))) if tables else 1
     grid = [tables[i:i + cols] for i in range(0, len(tables), cols)]
 
@@ -596,13 +613,13 @@ def schema_to_excalidraw(schema) -> str:
         row_h = 0.0
         for table in row:
             w, h = entity_size(table)
-            rect = _excali_common(f"rect{idx}", "rectangle", x, y, w, h, seed)
+            rect = _excali_common(f"rect{idx}", "rectangle", x, y, w, h, seed, stroke)
             seed += 1
             text_lines = [table.name, ""] + [_excali_line(c) for c in table.columns]
             text = _excali_common(
                 f"txt{idx}", "text",
                 x + _EXCALI_PAD, y + _EXCALI_PAD, w - 2 * _EXCALI_PAD,
-                h - 2 * _EXCALI_PAD, seed,
+                h - 2 * _EXCALI_PAD, seed, stroke,
             )
             seed += 1
             text.update({
@@ -653,7 +670,7 @@ def schema_to_excalidraw(schema) -> str:
         ex, ey = _edge_point(ccx, ccy, chw, chh, pcx, pcy)
         arrow_id = f"arrow{edge_no}"
         arrow = _excali_common(
-            arrow_id, "arrow", sx, sy, abs(ex - sx), abs(ey - sy), seed
+            arrow_id, "arrow", sx, sy, abs(ex - sx), abs(ey - sy), seed, stroke
         )
         seed += 1
         arrow.update({
@@ -669,7 +686,7 @@ def schema_to_excalidraw(schema) -> str:
             lbl = _excali_common(
                 f"lbl{edge_no}", "text",
                 (sx + ex) / 2, (sy + ey) / 2, len(label) * _EXCALI_CHAR_W,
-                _EXCALI_FONT_SIZE * _EXCALI_LINE_H, seed,
+                _EXCALI_FONT_SIZE * _EXCALI_LINE_H, seed, stroke,
             )
             seed += 1
             lbl.update({
@@ -691,7 +708,11 @@ def schema_to_excalidraw(schema) -> str:
         "version": 2,
         "source": "https://github.com/damien-bafile/xsltomermaid",
         "elements": elements,
-        "appState": {"gridSize": None, "viewBackgroundColor": "#ffffff"},
+        "appState": {
+            "gridSize": None,
+            "viewBackgroundColor": view_bg,
+            "theme": theme,
+        },
         "files": {},
     }
     return json.dumps(scene, indent=2)
