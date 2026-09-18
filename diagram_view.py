@@ -397,7 +397,12 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
         return width, height
 
     columns = max(1, int(math.ceil(math.sqrt(len(tables)))))
-    x_spacing = 80
+    # Widen the horizontal gap so a long relationship label riding the edge
+    # between two boxes doesn't collide with either box. Mirrors the label-aware
+    # spacing in the Excalidraw export; ~7px/char matches the width metric
+    # _table_size uses for Draw.io's default label font.
+    max_label = max((len(getattr(rel, "label", "") or "") for rel in rels), default=0)
+    x_spacing = max(80, max_label * 7 + 40)
     y_spacing = 60
     x = 40
     y = 40
