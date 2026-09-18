@@ -346,6 +346,44 @@ def test_export_drawio_checks_schema_before_prompt(monkeypatch):
     del app
 
 
+def test_large_export_warns_but_does_not_block(monkeypatch):
+    from excel_to_mermaid import Schema, Table
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+
+    small = Schema(tables=[Table("dbo", "A"), Table("dbo", "B")], relationships=[])
+    big = Schema(
+        tables=[Table("dbo", f"T{i}") for i in range(app_module.EXPORT_WARN_TABLES + 1)],
+        relationships=[],
+    )
+
+    asked = []
+
+    def _question(*args, **kwargs):
+        asked.append(args)
+        return app_module.QMessageBox.No
+
+    monkeypatch.setattr(app_module.QMessageBox, "question", _question)
+
+    # Small export: no warning, proceeds.
+    assert window._confirm_large_export("excalidraw", small) is True
+    assert not asked
+
+    # Large export: warns; declining stops it (but it's a choice, not a cap).
+    assert window._confirm_large_export("excalidraw", big) is False
+    assert asked, "expected a confirmation prompt for a large export"
+
+    # Accepting the warning proceeds (no hard limit).
+    monkeypatch.setattr(
+        app_module.QMessageBox, "question", lambda *a, **k: app_module.QMessageBox.Yes
+    )
+    assert window._confirm_large_export("drawio", big) is True
+
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_export_rendered_format_requires_webengine(monkeypatch, tmp_path):
     app = QApplication.instance() or QApplication([])
     sample = tmp_path / "sample.xlsx"

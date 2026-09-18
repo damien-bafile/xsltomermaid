@@ -122,6 +122,9 @@ from selection_preset import dump_selection_toml, load_selection_toml
 AUTO_RENDER_LIMIT = 25
 # Rendering more than this many tables at once prompts a confirmation first.
 RENDER_WARN_LIMIT = 60
+# Exporting more than this many tables to an interchange format (drawio /
+# excalidraw) warns that the file may be slow to open — but never blocks it.
+EXPORT_WARN_TABLES = 500
 # Mermaid refuses to render past its own ``maxTextSize`` (2,000,000 chars, set in
 # diagram_view). Stay under it so we can show a helpful message instead of
 # Mermaid's cryptic "Maximum text size in diagram exceeded".
@@ -1956,6 +1959,26 @@ class MainWindow(QMainWindow):
         )
         return None
 
+    def _confirm_large_export(self, export_kind: str, schema) -> bool:
+        """Advise (but never block) before exporting a big interchange file.
+
+        Large .drawio / .excalidraw files open slowly in their editors; warn the
+        user so it isn't a surprise, but always let them proceed — no cap.
+        """
+        n_tables = len(schema.tables)
+        if n_tables <= EXPORT_WARN_TABLES:
+            return True
+        n_cols = sum(len(t.columns) for t in schema.tables)
+        app_name = "Excalidraw" if export_kind == "excalidraw" else "Draw.io"
+        answer = QMessageBox.question(
+            self,
+            "Export a large diagram?",
+            f"This exports {_plural(n_tables, 'table')} "
+            f"({_plural(n_cols, 'column')}). A {app_name} file that big can be "
+            "slow to open and edit. Export anyway?",
+        )
+        return answer == QMessageBox.Yes
+
     def _png_export_options(self) -> tuple[float, str] | None:
         scale, ok = QInputDialog.getDouble(
             self,
@@ -2025,6 +2048,8 @@ class MainWindow(QMainWindow):
         if export_kind in {"drawio", "excalidraw"}:
             schema = self._schema_for_export()
             if schema is None:
+                return
+            if not self._confirm_large_export(export_kind, schema):
                 return
         elif export_kind in rendered_export_kinds and self._nothing_to_export():
             return
