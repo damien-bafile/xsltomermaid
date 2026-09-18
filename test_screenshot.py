@@ -745,7 +745,7 @@ def test_add_related_accepts_and_is_undoable(monkeypatch):
 
     assert len(window._selector.selected_tables()) == n_kids + 1  # H + all children
     assert window._selector._undo_btn.isEnabled()
-    assert window._selector._undo_btn.text() == "Undo add"
+    assert window._selector._undo_btn.text() == "&Undo add"
 
     window._selector.undo_last_change()
     assert set(window._selector.selected_tables()) == {"H"}
