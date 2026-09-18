@@ -1,6 +1,6 @@
 [project]
 name = "xsltomermaid"
-version = "0.8.0"
+version = "0.9.0"
 description = "Qt app that turns a database-schema Excel file into a Mermaid ER diagram"
 readme = "README.md"
 requires-python = ">=3.10"
