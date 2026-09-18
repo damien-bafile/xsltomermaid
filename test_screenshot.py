@@ -82,6 +82,10 @@ def test_schema_to_drawio_creates_table_vertices_and_edges():
     assert len(edges) == len(schema.relationships)
     assert all("shape=mxgraph.er.entity" in cell.attrib.get("style", "") for cell in vertices)
     assert all("endArrow=ERmany" in cell.attrib.get("style", "") for cell in edges)
+    # Every edge must carry a geometry, or Draw.io opens the saved file blank
+    # (the import path is lenient, but File > Open is not).
+    assert edges, "expected at least one relationship edge"
+    assert all(cell.find("mxGeometry") is not None for cell in edges)
 
 
 def test_svg_dimensions_handles_fractional_and_exponent_sizes():
