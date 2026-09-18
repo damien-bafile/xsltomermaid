@@ -540,6 +540,135 @@ def test_trace_path_disconnected_keeps_selection_and_offers_no_undo(tmp_path):
     del app
 
 
+def _window_with_schema(tables, rels):
+    """A MainWindow with an in-memory schema loaded (no file, no render)."""
+    from excel_to_mermaid import Schema, Table
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window._schema = Schema(tables=[Table("", n) for n in tables], relationships=rels)
+    window._selector.set_tables(tables)
+    return app, window
+
+
+def _diamond():
+    """A→B, A→C, B→D, C→D — two equally short A→D paths."""
+    from excel_to_mermaid import Relationship
+
+    return ["A", "B", "C", "D"], [
+        Relationship("A", "B", "ab"),
+        Relationship("A", "C", "ac"),
+        Relationship("B", "D", "bd"),
+        Relationship("C", "D", "cd"),
+    ]
+
+
+def _abcd_chain():
+    from excel_to_mermaid import Relationship
+
+    return ["A", "B", "C", "D", "E"], [
+        Relationship("A", "B", "ab"),
+        Relationship("B", "C", "bc"),
+        Relationship("C", "D", "cd"),
+    ]
+
+
+def _set_direction(window, value):
+    combo = window._selector._path_direction
+    combo.setCurrentIndex(combo.findData(value))
+
+
+def test_trace_path_via_stop_forces_route(monkeypatch):
+    app, window = _window_with_schema(*_diamond())
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+
+    window._selector._path_from.setCurrentText("A")
+    window._selector._path_to.setCurrentText("D")
+    window._selector._path_via.setCurrentText("C")  # force the A-C-D branch
+    window._selector._path_replace.setChecked(True)
+    window._find_shortest_path()
+
+    assert set(window._selector.selected_tables()) == {"A", "C", "D"}
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_trace_path_popup_lets_user_choose_between_ties(monkeypatch):
+    app, window = _window_with_schema(*_diamond())
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+
+    window._selector._path_from.setCurrentText("A")
+    window._selector._path_to.setCurrentText("D")
+    window._selector._path_replace.setChecked(True)
+
+    seen = {}
+
+    def _fake_get_item(_parent, _title, _label, items, _index, _editable):
+        seen["items"] = list(items)
+        return (items[0], True)  # sorted → "A → B → D"
+
+    monkeypatch.setattr(app_module.QInputDialog, "getItem", _fake_get_item)
+    window._find_shortest_path()
+
+    assert seen["items"] == ["A → B → D", "A → C → D"]
+    assert set(window._selector.selected_tables()) == {"A", "B", "D"}
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_trace_path_no_directed_path_offers_direction_retry(monkeypatch):
+    app, window = _window_with_schema(*_abcd_chain())
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+
+    window._selector._path_from.setCurrentText("A")
+    window._selector._path_to.setCurrentText("D")
+    _set_direction(window, "forward")  # child→parent: A can't reach D forwards
+    window._selector._path_replace.setChecked(True)
+
+    asked = {"count": 0}
+
+    def _yes(*_args, **_kwargs):
+        asked["count"] += 1
+        return app_module.QMessageBox.Yes
+
+    monkeypatch.setattr(app_module.QMessageBox, "question", _yes)
+    window._find_shortest_path()
+
+    # Retrying without the direction constraint finds the whole chain.
+    assert asked["count"] == 1
+    assert set(window._selector.selected_tables()) == {"A", "B", "C", "D"}
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_trace_path_no_path_reports_and_keeps_selection(monkeypatch):
+    app, window = _window_with_schema(*_abcd_chain())  # E is isolated
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    window._selector.check_tables(["A"])
+
+    window._selector._path_from.setCurrentText("A")
+    window._selector._path_to.setCurrentText("E")
+    window._selector._path_replace.setChecked(False)
+
+    told = {"count": 0}
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "information",
+        lambda *a, **k: told.__setitem__("count", told["count"] + 1),
+    )
+    window._find_shortest_path()
+
+    assert told["count"] == 1
+    assert set(window._selector.selected_tables()) == {"A"}  # untouched
+    assert not window._selector._undo_btn.isEnabled()  # no snapshot taken
+
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_module_import_sets_webengine_flags_for_cli_mode():
     """`--screenshot-diagram` should preconfigure WebEngine flags at import time."""
     cmd = [

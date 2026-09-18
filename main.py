@@ -111,7 +111,7 @@ from excel_to_mermaid import (
     filter_schema,
     generate_mermaid,
     read_rows,
-    shortest_path,
+    route_paths,
     wrap_mermaid_html,
 )
 from make_sample import write_sample
@@ -409,6 +409,17 @@ class LoadWorker(QThread):
             self.failed.emit(str(exc))
 
 
+# Path-direction options offered in the selector, paired with the value passed
+# to route_paths. The labels double as the human phrasing in the "no path"
+# dialog (see _PATH_DIRECTION_LABELS).
+_PATH_DIRECTION_CHOICES = (
+    ("Either direction", "either"),
+    ("Follow FK reference (child → parent)", "forward"),
+    ("Follow dependents (parent → child)", "reverse"),
+)
+_PATH_DIRECTION_LABELS = {value: label for label, value in _PATH_DIRECTION_CHOICES}
+
+
 class TableSelector(QWidget):
     """A filterable, checkable list of tables to include in the diagram."""
 
@@ -481,11 +492,33 @@ class TableSelector(QWidget):
         endpoints_row.addWidget(self._path_to, 1)
         layout.addLayout(endpoints_row)
 
+        # Optional single intermediate stop the route must pass through.
+        via_row = QHBoxLayout()
+        via_label = QLabel("via")
+        self._path_via = QComboBox()
+        self._path_via.setToolTip(
+            "Optional: force the route through this table on the way."
+        )
+        via_row.addWidget(via_label)
+        via_row.addWidget(self._path_via, 1)
+        layout.addLayout(via_row)
+
+        # Foreign keys are directed, so let the user say which way to walk them.
+        self._path_direction = QComboBox()
+        for label, value in _PATH_DIRECTION_CHOICES:
+            self._path_direction.addItem(label, value)
+        self._path_direction.setToolTip(
+            "Either direction: ignore FK direction (just connectivity).\n"
+            "Follow FK reference: walk child → parent (what a table depends on).\n"
+            "Follow dependents: walk parent → child (what depends on a table)."
+        )
+        layout.addWidget(self._path_direction)
+
         path_row = QHBoxLayout()
         self._path_btn = QPushButton("Trace path")
         self._path_btn.setToolTip(
-            "Tick every table on the shortest foreign-key path between the two "
-            "chosen tables and render it."
+            "Trace the shortest foreign-key path between the two chosen tables "
+            "(through the optional Via stop) and render it."
         )
         self._path_btn.clicked.connect(lambda: self.path_requested.emit())
         self._path_replace = QCheckBox("Replace selection")
@@ -526,6 +559,8 @@ class TableSelector(QWidget):
             self._related_btn,
             self._path_from,
             self._path_to,
+            self._path_via,
+            self._path_direction,
             self._path_replace,
             self._render_btn,
         ):
@@ -557,6 +592,13 @@ class TableSelector(QWidget):
             combo.blockSignals(False)
         if self._path_to.count() > 1:
             self._path_to.setCurrentIndex(1)
+        # The Via picker starts at an explicit "no stop" entry (data None).
+        self._path_via.blockSignals(True)
+        self._path_via.clear()
+        self._path_via.addItem("(no via stop)", None)
+        for name in names:
+            self._path_via.addItem(name, name)
+        self._path_via.blockSignals(False)
         self._undo_snapshot = None
         self._undo_btn.setEnabled(False)
         self._update_path_enabled()
@@ -627,6 +669,14 @@ class TableSelector(QWidget):
     def path_replaces_selection(self) -> bool:
         """Whether a traced path should replace (vs add to) the selection."""
         return self._path_replace.isChecked()
+
+    def path_direction(self) -> str:
+        """Which way to walk foreign keys: 'either', 'forward', or 'reverse'."""
+        return self._path_direction.currentData()
+
+    def path_via(self) -> str | None:
+        """The optional intermediate stop, or None when '(no via stop)' is picked."""
+        return self._path_via.currentData()
 
     def _update_path_enabled(self):
         """Enable Trace only when two distinct, real endpoints are chosen."""
@@ -1717,12 +1767,14 @@ class MainWindow(QMainWindow):
             self._status.setText("No related tables to add.")
 
     def _find_shortest_path(self):
-        """Trace the shortest path between the two tables chosen in the pickers.
+        """Trace a shortest route between the chosen tables and apply it.
 
-        Endpoints come from the always-visible From/To pickers (not the check
-        state), and the result is added to the current selection unless
-        "Replace selection" is ticked. Either way the prior selection is
-        snapshotted first so the Undo button can restore it.
+        Endpoints come from the From/To pickers, with an optional single Via
+        stop the route must pass through (#3). Foreign keys are walked per the
+        Direction picker. When several equally-short routes exist the user picks
+        one, and when none exists a dialog offers to retry ignoring direction
+        (#5). Either way the prior selection is snapshotted first so it can be
+        undone.
         """
         if self._schema is None:
             return
@@ -1732,26 +1784,84 @@ class MainWindow(QMainWindow):
                 "Pick two different tables in the From / To pickers to trace a path."
             )
             return
-        path = shortest_path(self._schema, start, end)
-        if not path:
-            self._status.setText(
-                f"No foreign-key path connects {start} and {end}."
-            )
-            return
+
+        direction = self._selector.path_direction()
+        via = self._selector.path_via()
+        stops = [start, via, end] if via else [start, end]
+
+        routes, broken = route_paths(self._schema, stops, direction)
+        if not routes:
+            routes = self._retry_or_report_no_path(stops, direction, broken)
+            if not routes:
+                return
+
+        if len(routes) == 1:
+            chosen = routes[0]
+        else:
+            chosen = self._choose_route(routes)
+            if chosen is None:
+                return
+
         # Snapshot before mutating so the trace can be undone, then apply the
-        # path additively or as a replacement per the user's choice.
+        # route additively or as a replacement per the user's choice.
         self._selector.snapshot_for_path_undo()
         if self._selector.path_replaces_selection():
-            self._selector.set_selected_tables(path)
+            self._selector.set_selected_tables(chosen)
         else:
-            self._selector.check_tables(path)
+            self._selector.check_tables(chosen)
         self._render_selection()
-        hops = len(path) - 1
+        hops = len(chosen) - 1
         mode = "replaced with" if self._selector.path_replaces_selection() else "added"
         self._status.setText(
-            f"Shortest path ({hops} hop{'s' if hops != 1 else ''}, {mode}): "
-            + " → ".join(path)
+            f"Path ({hops} hop{'s' if hops != 1 else ''}, {mode}): "
+            + " → ".join(chosen)
         )
+
+    def _retry_or_report_no_path(self, stops, direction, broken):
+        """Handle a route with no connection: offer a direction retry, else report.
+
+        Returns the routes found on retry (possibly empty). ``broken`` is the
+        ``(from, to)`` pair that couldn't be connected.
+        """
+        a, b = broken
+        # A directed search that fails can often succeed if direction is ignored,
+        # so offer that rather than leaving the user at a dead end.
+        if direction != "either":
+            resp = QMessageBox.question(
+                self,
+                "No directed path",
+                f"No path from {a} to {b} following "
+                f"“{_PATH_DIRECTION_LABELS[direction]}”.\n\n"
+                "Search again ignoring foreign-key direction?",
+            )
+            if resp == QMessageBox.Yes:
+                routes, broken = route_paths(self._schema, stops, "either")
+                if routes:
+                    return routes
+                a, b = broken
+        QMessageBox.information(
+            self,
+            "No path",
+            f"No foreign-key path connects {a} and {b}"
+            + ("." if direction == "either" else " (even ignoring direction)."),
+        )
+        self._status.setText(f"No path connects {a} and {b}.")
+        return []
+
+    def _choose_route(self, routes):
+        """Ask the user which of several equally-short routes to use."""
+        labels = [" → ".join(route) for route in routes]
+        picked, ok = QInputDialog.getItem(
+            self,
+            "Choose a path",
+            f"{len(routes)} equally short paths were found.\nChoose one:",
+            labels,
+            0,
+            False,
+        )
+        if not ok or not picked:
+            return None
+        return routes[labels.index(picked)]
 
     def _render_selection(self):
         """Render the currently-selected tables (Mermaid source + diagram)."""

@@ -15,7 +15,7 @@ imported inside :func:`read_rows` so the rest of the module works without it.
 from __future__ import annotations
 
 import re
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Callable, Iterable
@@ -515,6 +515,129 @@ def shortest_path(schema: Schema, start: str, end: str) -> list[str] | None:
         node = previous[node]
     path.reverse()
     return path
+
+
+# Foreign keys are directed (a child table references a parent), so a "path"
+# can mean three different things. ``either`` ignores direction (mere
+# connectivity); ``forward`` follows the FK reference child→parent ("what does
+# this depend on"); ``reverse`` follows it parent→child ("what depends on this").
+PATH_DIRECTIONS = ("either", "forward", "reverse")
+
+
+def _path_adjacency(schema: Schema, direction: str) -> dict[str, set[str]]:
+    """Build the (possibly directed) table adjacency for path finding."""
+    adjacency: dict[str, set[str]] = defaultdict(set)
+    for rel in schema.relationships:
+        parent = rel.parent_table.lower()
+        child = rel.child_table.lower()
+        if direction in ("either", "forward"):
+            adjacency[child].add(parent)  # follow the FK reference
+        if direction in ("either", "reverse"):
+            adjacency[parent].add(child)  # follow the dependents
+    return adjacency
+
+
+def all_shortest_paths(
+    schema: Schema,
+    start: str,
+    end: str,
+    direction: str = "either",
+    limit: int = 12,
+) -> list[list[str]]:
+    """Every shortest chain of tables from ``start`` to ``end`` over the FK graph.
+
+    Like :func:`shortest_path` but returns *all* equally-short paths (so the UI
+    can let the user choose when there's a tie), honouring ``direction`` (one of
+    :data:`PATH_DIRECTIONS`). Results are sorted for determinism and capped at
+    ``limit``. Returns ``[]`` when the two tables aren't connected under the
+    chosen direction, or ``[[start]]`` when they're the same table.
+    """
+    canon = {t.name.lower(): t.name for t in schema.tables}
+    src = start.strip().lower()
+    dst = end.strip().lower()
+    if src not in canon or dst not in canon:
+        return []
+    if src == dst:
+        return [[canon[src]]]
+
+    adjacency = _path_adjacency(schema, direction)
+    # BFS layers: distance from src to every reachable node.
+    dist: dict[str, int] = {src: 0}
+    queue: deque[str] = deque([src])
+    while queue:
+        node = queue.popleft()
+        for neighbour in adjacency.get(node, ()):
+            if neighbour not in dist:
+                dist[neighbour] = dist[node] + 1
+                queue.append(neighbour)
+    if dst not in dist:
+        return []
+
+    # Predecessors on some shortest path: an edge n→m with dist[m] == dist[n]+1.
+    preds: dict[str, list[str]] = defaultdict(list)
+    for node, d in dist.items():
+        for neighbour in adjacency.get(node, ()):
+            if dist.get(neighbour) == d + 1:
+                preds[neighbour].append(node)
+
+    results: list[list[str]] = []
+
+    def backtrack(node: str, tail: list[str]) -> None:
+        if len(results) >= limit:
+            return
+        if node == src:
+            results.append([canon.get(name, name) for name in [node] + tail])
+            return
+        for prev in sorted(preds[node]):
+            backtrack(prev, [node] + tail)
+
+    backtrack(dst, [])
+    results.sort()
+    return results[:limit]
+
+
+def route_paths(
+    schema: Schema,
+    stops: list[str],
+    direction: str = "either",
+    limit: int = 12,
+) -> tuple[list[list[str]], tuple[str, str] | None]:
+    """Shortest routes visiting ``stops`` in order (a multi-waypoint path).
+
+    Returns ``(routes, broken)``. ``broken`` is the first consecutive
+    ``(from, to)`` pair with no connecting path (and ``routes`` is then empty);
+    otherwise it's ``None`` and ``routes`` holds up to ``limit`` full routes,
+    each stitched from a shortest path per segment.
+    """
+    clean: list[str] = []
+    for stop in stops:
+        name = (stop or "").strip()
+        if name and (not clean or clean[-1].lower() != name.lower()):
+            clean.append(name)
+    if len(clean) < 2:
+        return ([clean] if clean else []), None
+
+    segments: list[list[list[str]]] = []
+    for a, b in zip(clean, clean[1:]):
+        options = all_shortest_paths(schema, a, b, direction, limit)
+        if not options:
+            return [], (a, b)
+        segments.append(options)
+
+    # Stitch one option per segment, joining on the shared endpoint. Capped so a
+    # many-waypoint route with several options each can't explode the list.
+    routes: list[list[str]] = [[]]
+    for options in segments:
+        combined: list[list[str]] = []
+        for base in routes:
+            for path in options:
+                combined.append(base + (path if not base else path[1:]))
+                if len(combined) >= limit:
+                    break
+            if len(combined) >= limit:
+                break
+        routes = combined
+    return routes[:limit], None
 
 
 # ---------------------------------------------------------------------------

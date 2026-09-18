@@ -9,10 +9,12 @@ from excel_to_mermaid import (
     Schema,
     Table,
     _parse_reference_table,
+    all_shortest_paths,
     build_schema,
     filter_columns,
     filter_schema,
     generate_mermaid,
+    route_paths,
     shortest_path,
 )
 
@@ -52,6 +54,58 @@ def test_shortest_path_disconnected_and_self():
 def test_shortest_path_is_case_insensitive():
     schema = _chain_schema()
     assert shortest_path(schema, "a", "c") == ["A", "B", "C"]
+
+
+def _diamond_schema():
+    # A is parent of B and C; B and C are each parent of D. So A→D has two
+    # equally short undirected paths: A-B-D and A-C-D.
+    tables = [Table("", n) for n in ["A", "B", "C", "D"]]
+    rels = [
+        Relationship("A", "B", "ab"),
+        Relationship("A", "C", "ac"),
+        Relationship("B", "D", "bd"),
+        Relationship("C", "D", "cd"),
+    ]
+    return Schema(tables=tables, relationships=rels)
+
+
+def test_all_shortest_paths_returns_every_tie_sorted():
+    schema = _diamond_schema()
+    paths = all_shortest_paths(schema, "A", "D")
+    assert paths == [["A", "B", "D"], ["A", "C", "D"]]  # both ties, sorted
+
+
+def test_all_shortest_paths_respects_fk_direction():
+    schema = _chain_schema()  # A parent-of B parent-of C parent-of D
+    # "forward" follows the FK reference child→parent, so you can walk D up to A
+    # but not A down to D.
+    assert all_shortest_paths(schema, "D", "A", "forward") == [["D", "C", "B", "A"]]
+    assert all_shortest_paths(schema, "A", "D", "forward") == []
+    # "reverse" follows dependents parent→child: the mirror image.
+    assert all_shortest_paths(schema, "A", "D", "reverse") == [["A", "B", "C", "D"]]
+    assert all_shortest_paths(schema, "D", "A", "reverse") == []
+
+
+def test_route_paths_visits_via_stop_in_order():
+    schema = _chain_schema()
+    routes, broken = route_paths(schema, ["A", "C", "D"])
+    assert broken is None
+    assert routes == [["A", "B", "C", "D"]]
+
+
+def test_route_paths_reports_broken_segment():
+    schema = _chain_schema()  # E is isolated
+    routes, broken = route_paths(schema, ["A", "E", "D"])
+    assert routes == []
+    assert broken == ("A", "E")
+
+
+def test_route_paths_combines_alternatives_across_segments():
+    schema = _diamond_schema()
+    # A→D has two ties; routing A→D→(back) keeps the alternatives distinct.
+    routes, broken = route_paths(schema, ["A", "D"])
+    assert broken is None
+    assert routes == [["A", "B", "D"], ["A", "C", "D"]]
 
 SAMPLE_ROWS = [
     {"SchemaName": "dbo", "TableName": "Customer", "ColumnOrder": 1,
