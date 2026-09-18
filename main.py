@@ -99,6 +99,7 @@ from diagram_view import (
     RenderStyle,
     resource_path,
     schema_to_drawio,
+    schema_to_excalidraw,
 )
 from excel_to_mermaid import (
     EXPECTED_HEADERS,
@@ -121,6 +122,9 @@ from selection_preset import dump_selection_toml, load_selection_toml
 AUTO_RENDER_LIMIT = 25
 # Rendering more than this many tables at once prompts a confirmation first.
 RENDER_WARN_LIMIT = 60
+# Exporting more than this many tables to an interchange format (drawio /
+# excalidraw) warns that the file may be slow to open — but never blocks it.
+EXPORT_WARN_TABLES = 500
 # Mermaid refuses to render past its own ``maxTextSize`` (2,000,000 chars, set in
 # diagram_view). Stay under it so we can show a helpful message instead of
 # Mermaid's cryptic "Maximum text size in diagram exceeded".
@@ -1115,7 +1119,7 @@ class MainWindow(QMainWindow):
         onboard_row.setContentsMargins(0, 0, 0, 0)
         self._onboard_hint = QLabel(
             "New here? Load a schema to get an ER diagram you can export to "
-            "Draw.io, PDF, PNG or SVG —"
+            "Draw.io, Excalidraw, PDF, PNG or SVG —"
         )
         self._onboard_hint.setStyleSheet(f"color: {_muted_hex(self)};")
         self._sample_btn = QPushButton("try a sample")
@@ -1255,6 +1259,7 @@ class MainWindow(QMainWindow):
         self._export_format = QComboBox()
         self._export_format.setAccessibleName("Diagram export format")
         self._export_format.addItem("Draw.io (.drawio)", "drawio")
+        self._export_format.addItem("Excalidraw (.excalidraw)", "excalidraw")
         self._export_format.addItem("PDF (.pdf)", "pdf")
         self._export_format.addItem("PNG (.png)", "png")
         self._export_format.addItem("SVG (.svg)", "svg")
@@ -1954,6 +1959,26 @@ class MainWindow(QMainWindow):
         )
         return None
 
+    def _confirm_large_export(self, export_kind: str, schema) -> bool:
+        """Advise (but never block) before exporting a big interchange file.
+
+        Large .drawio / .excalidraw files open slowly in their editors; warn the
+        user so it isn't a surprise, but always let them proceed — no cap.
+        """
+        n_tables = len(schema.tables)
+        if n_tables <= EXPORT_WARN_TABLES:
+            return True
+        n_cols = sum(len(t.columns) for t in schema.tables)
+        app_name = "Excalidraw" if export_kind == "excalidraw" else "Draw.io"
+        answer = QMessageBox.question(
+            self,
+            "Export a large diagram?",
+            f"This exports {_plural(n_tables, 'table')} "
+            f"({_plural(n_cols, 'column')}). A {app_name} file that big can be "
+            "slow to open and edit. Export anyway?",
+        )
+        return answer == QMessageBox.Yes
+
     def _png_export_options(self) -> tuple[float, str] | None:
         scale, ok = QInputDialog.getDouble(
             self,
@@ -1991,6 +2016,7 @@ class MainWindow(QMainWindow):
         """
         exts = {
             "drawio": ".drawio",
+            "excalidraw": ".excalidraw",
             "pdf": ".pdf",
             "png": ".png",
             "svg": ".svg",
@@ -2007,6 +2033,10 @@ class MainWindow(QMainWindow):
         export_kind = str(self._export_format.currentData() or "")
         file_specs = {
             "drawio": ("Save Draw.io diagram", "diagram.drawio", "Draw.io file (*.drawio)"),
+            "excalidraw": (
+                "Save Excalidraw scene", "diagram.excalidraw",
+                "Excalidraw file (*.excalidraw)",
+            ),
             "pdf": ("Save diagram PDF", "diagram.pdf", "PDF document (*.pdf)"),
             "png": ("Save diagram PNG", "diagram.png", "PNG image (*.png)"),
             "svg": ("Save diagram SVG", "diagram.svg", "SVG image (*.svg)"),
@@ -2015,9 +2045,11 @@ class MainWindow(QMainWindow):
             return
 
         rendered_export_kinds = {"pdf", "png", "svg"}
-        if export_kind == "drawio":
+        if export_kind in {"drawio", "excalidraw"}:
             schema = self._schema_for_export()
             if schema is None:
+                return
+            if not self._confirm_large_export(export_kind, schema):
                 return
         elif export_kind in rendered_export_kinds and self._nothing_to_export():
             return
@@ -2039,6 +2071,14 @@ class MainWindow(QMainWindow):
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(content)
                 self._status.setText(f"Saved Draw.io diagram to {path}")
+                return
+
+            if export_kind == "excalidraw":
+                dark = self._options_bar.render_style().theme == "dark"
+                content = schema_to_excalidraw(schema, dark=dark)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(content)
+                self._status.setText(f"Saved Excalidraw scene to {path}")
                 return
 
             if export_kind == "svg":

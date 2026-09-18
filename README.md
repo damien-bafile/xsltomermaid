@@ -22,7 +22,8 @@ DefaultValue | ComputedDefinition | Collation | Description
 5. **Renders** the diagram live in-app (a "Rendered diagram" tab powered by a
    locally vendored `mermaid.js` — no internet needed).
 6. Lets you **copy** the Mermaid text, **save** it as `.mmd` / `.md`, **export the
-   diagram** from one export selector as `.drawio` / `.pdf` / `.png` / `.svg`,
+   diagram** from one export selector as `.drawio` / `.excalidraw` / `.pdf` /
+   `.png` / `.svg`,
    **save/load selected tables** as `.toml` presets (including source filename),
    or **preview** it in your browser.
 7. Uses **Left → Right** as the default rendered layout direction.

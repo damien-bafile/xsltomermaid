@@ -121,6 +121,97 @@ def test_schema_to_drawio_includes_table_names_and_fk_labels():
     assert "CustomerID" in edge_values
 
 
+def test_schema_to_excalidraw_scene_is_valid_and_bound():
+    import json
+
+    import diagram_view
+    from excel_to_mermaid import build_schema
+
+    records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
+    schema = build_schema(records)
+    scene = json.loads(diagram_view.schema_to_excalidraw(schema))
+
+    assert scene["type"] == "excalidraw"
+    by_id = {el["id"]: el for el in scene["elements"]}
+    rects = [e for e in scene["elements"] if e["type"] == "rectangle"]
+    texts = [e for e in scene["elements"] if e["type"] == "text"]
+    arrows = [e for e in scene["elements"] if e["type"] == "arrow"]
+
+    assert len(rects) == len(schema.tables)
+    assert len(arrows) == len(schema.relationships)
+
+    # Table names + FK labels present in the text elements.
+    joined = "\n".join(t["text"] for t in texts)
+    assert "Customer" in joined and "Order" in joined and "CustomerID" in joined
+
+    # Every arrow is glued to real rectangles at both ends.
+    for arrow in arrows:
+        for side in ("startBinding", "endBinding"):
+            target = arrow[side]["elementId"]
+            assert target in by_id and by_id[target]["type"] == "rectangle"
+
+    # Bound text/arrows are back-referenced from their rectangles, and all
+    # referenced ids exist.
+    for rect in rects:
+        for ref in rect["boundElements"]:
+            assert ref["id"] in by_id
+
+
+def test_schema_to_excalidraw_relationship_matching_is_case_insensitive():
+    import json
+
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    schema = Schema(
+        tables=[Table("dbo", "Customer"), Table("dbo", "Order")],
+        relationships=[Relationship(parent_table="CUSTOMER", child_table="order", label="CustomerID")],
+    )
+    scene = json.loads(diagram_view.schema_to_excalidraw(schema))
+    arrows = [e for e in scene["elements"] if e["type"] == "arrow"]
+    assert len(arrows) == 1
+
+
+def test_schema_to_excalidraw_dark_mode():
+    import json
+
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    schema = Schema(
+        tables=[Table("dbo", "A"), Table("dbo", "B")],
+        relationships=[Relationship(parent_table="A", child_table="B", label="X")],
+    )
+    # Excalidraw's dark theme inverts the canvas at render time, so a dark scene
+    # keeps the normal colours and only flips the theme flag.
+    scene = json.loads(diagram_view.schema_to_excalidraw(schema, dark=True))
+    assert scene["appState"]["theme"] == "dark"
+    assert all(e["strokeColor"] == "#1e1e1e" for e in scene["elements"])
+    light = json.loads(diagram_view.schema_to_excalidraw(schema))
+    assert light["appState"]["theme"] == "light"
+    assert all(e["strokeColor"] == "#1e1e1e" for e in light["elements"])
+
+
+def test_schema_to_excalidraw_spacing_grows_with_label_length():
+    import json
+
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    def gap(label):
+        schema = Schema(
+            tables=[Table("dbo", "A"), Table("dbo", "B")],
+            relationships=[Relationship(parent_table="A", child_table="B", label=label)],
+        )
+        els = json.loads(diagram_view.schema_to_excalidraw(schema))["elements"]
+        rects = {e["id"]: e for e in els if e["type"] == "rectangle"}
+        a, b = rects["rect0"], rects["rect1"]
+        return b["x"] - (a["x"] + a["width"])  # horizontal gap between the boxes
+
+    # A long relationship label widens the gap so it doesn't overlap a box.
+    assert gap("A_VERY_LONG_FOREIGN_KEY_COLUMN_NAME") > gap("X")
+
+
 def test_schema_to_drawio_relationship_matching_is_case_insensitive():
     import diagram_view
     from excel_to_mermaid import Relationship, Schema, Table
@@ -220,7 +311,7 @@ def test_window_screenshot(tmp_path):
         window._export_format.itemData(i)
         for i in range(window._export_format.count())
     ]
-    assert kinds == ["drawio", "pdf", "png", "svg"]
+    assert kinds == ["drawio", "excalidraw", "pdf", "png", "svg"]
 
     out = tmp_path / "window.png"
     window.capture(str(out))
@@ -254,6 +345,44 @@ def test_export_drawio_checks_schema_before_prompt(monkeypatch):
     window._export_format.setCurrentIndex(0)  # drawio
     window.export_diagram()
     assert info_calls, "Expected an informational prompt for empty schema."
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_large_export_warns_but_does_not_block(monkeypatch):
+    from excel_to_mermaid import Schema, Table
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+
+    small = Schema(tables=[Table("dbo", "A"), Table("dbo", "B")], relationships=[])
+    big = Schema(
+        tables=[Table("dbo", f"T{i}") for i in range(app_module.EXPORT_WARN_TABLES + 1)],
+        relationships=[],
+    )
+
+    asked = []
+
+    def _question(*args, **kwargs):
+        asked.append(args)
+        return app_module.QMessageBox.No
+
+    monkeypatch.setattr(app_module.QMessageBox, "question", _question)
+
+    # Small export: no warning, proceeds.
+    assert window._confirm_large_export("excalidraw", small) is True
+    assert not asked
+
+    # Large export: warns; declining stops it (but it's a choice, not a cap).
+    assert window._confirm_large_export("excalidraw", big) is False
+    assert asked, "expected a confirmation prompt for a large export"
+
+    # Accepting the warning proceeds (no hard limit).
+    monkeypatch.setattr(
+        app_module.QMessageBox, "question", lambda *a, **k: app_module.QMessageBox.Yes
+    )
+    assert window._confirm_large_export("drawio", big) is True
 
     window._diagram_view.cleanup()
     del app
