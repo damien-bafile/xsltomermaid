@@ -596,6 +596,43 @@ def test_trace_path_disconnected_keeps_selection_and_offers_no_undo(tmp_path):
     del app
 
 
+def test_large_render_warning_asks_once_per_selection(monkeypatch):
+    from excel_to_mermaid import Column, Schema, Table
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    n = app_module.RENDER_WARN_LIMIT + 5  # over the warn threshold
+    tables = [
+        Table("dbo", f"T{i}", [Column("dbo", f"T{i}", 1, "Id", "int", is_primary_key=True)])
+        for i in range(n)
+    ]
+    window._schema = Schema(tables=tables, relationships=[])
+    window._selector.set_tables([t.name for t in tables])
+    window._selector.check_all()
+    # Don't actually render (keep the test fast/headless-safe).
+    monkeypatch.setattr(window._diagram_view, "set_diagram", lambda *a, **k: None)
+
+    calls = {"n": 0}
+
+    def _q(*a, **k):
+        calls["n"] += 1
+        return app_module.QMessageBox.Yes
+
+    monkeypatch.setattr(app_module.QMessageBox, "question", _q)
+
+    window._render_selection()
+    window._render_selection()  # same big selection → must not re-ask
+    assert calls["n"] == 1
+
+    # Changing the selection (still over the limit) asks again.
+    window._selector.set_selected_tables([t.name for t in tables[:-1]])
+    window._render_selection()
+    assert calls["n"] == 2
+
+    window._diagram_view.cleanup()
+    del app
+
+
 def _window_with_schema(tables, rels):
     """A MainWindow with an in-memory schema loaded (no file, no render)."""
     from excel_to_mermaid import Schema, Table

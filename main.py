@@ -1352,6 +1352,10 @@ class MainWindow(QMainWindow):
 
         self._schema: Schema | None = None
         self._mermaid_text: str = ""
+        # The table selection last confirmed past the large-diagram warning, so
+        # re-rendering the same big selection (e.g. after a render-option change)
+        # doesn't re-ask. None means nothing confirmed yet.
+        self._render_confirmed_sig: frozenset[str] | None = None
         self._worker: LoadWorker | None = None
         self._pending_path: str = ""
         self._loaded_name: str = ""
@@ -1831,6 +1835,7 @@ class MainWindow(QMainWindow):
         """
         self._schema = schema
         self._loaded_name = os.path.basename(path)
+        self._render_confirmed_sig = None  # new file: forget the prior confirmation
         self._populate_table(rows)
         # The big drop target has done its job; shrink it to a file chip so the
         # tabs get the height, and wake up the (until now inert) table picker.
@@ -2003,14 +2008,22 @@ class MainWindow(QMainWindow):
         self._drawio_schema = None
         names = self._selector.selected_tables()
         if len(names) > RENDER_WARN_LIMIT:
-            answer = QMessageBox.question(
-                self,
-                "Render a large diagram?",
-                f"You selected {len(names)} tables. A diagram that big can be slow "
-                "to render and hard to read. Render it anyway?",
-            )
-            if answer != QMessageBox.Yes:
-                return
+            # Ask once per selection: a re-render of the same big set (e.g. after
+            # toggling a render option) shouldn't nag again.
+            sig = frozenset(n.lower() for n in names)
+            if sig != self._render_confirmed_sig:
+                answer = QMessageBox.question(
+                    self,
+                    "Render a large diagram?",
+                    f"You selected {len(names)} tables. A diagram that big can be "
+                    "slow to render and hard to read. Render it anyway?",
+                )
+                if answer != QMessageBox.Yes:
+                    return
+                self._render_confirmed_sig = sig
+        elif self._render_confirmed_sig is not None:
+            # Back under the limit — clear so growing past it re-asks.
+            self._render_confirmed_sig = None
 
         # Related tables are ticked explicitly via "Add related tables", so the
         # checked list is the whole selection — no implicit expansion here.
