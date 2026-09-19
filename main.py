@@ -2397,7 +2397,8 @@ class MainWindow(QMainWindow):
 
         try:
             if export_kind == "drawio":
-                content = schema_to_drawio(schema)
+                dark = self._options_bar.render_style().theme == "dark"
+                content = schema_to_drawio(schema, dark=dark)
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(content)
                 self._status.setText(f"Saved Draw.io diagram to {path}")

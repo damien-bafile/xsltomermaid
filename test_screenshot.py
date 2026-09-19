@@ -109,6 +109,32 @@ def test_svg_dimensions_handles_fractional_and_exponent_sizes():
     assert hp == 6531.0
 
 
+def test_schema_to_drawio_dark_variant():
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    schema = Schema(
+        tables=[Table("dbo", "A"), Table("dbo", "B")],
+        relationships=[Relationship("A", "B", "AID")],
+    )
+    light = ET.fromstring(diagram_view.schema_to_drawio(schema))
+    dark = ET.fromstring(diagram_view.schema_to_drawio(schema, dark=True))
+
+    # Dark: dark page background, dark box fill + light font, light edge stroke.
+    gm_d = dark.find(".//mxGraphModel")
+    assert gm_d.attrib.get("background") == "#1e1e1e"
+    dv = [c.attrib["style"] for c in dark.findall(".//mxCell[@vertex='1']")]
+    assert dv and all("fillColor=#2b2b2b" in s and "fontColor=#e8eaed" in s for s in dv)
+    de = [c.attrib["style"] for c in dark.findall(".//mxCell[@edge='1']")]
+    assert de and all("strokeColor=#9aa0a6" in s for s in de)
+
+    # Light (default) is unchanged: white fill, no page background, no fontColor.
+    gm_l = light.find(".//mxGraphModel")
+    assert "background" not in gm_l.attrib
+    lv = [c.attrib["style"] for c in light.findall(".//mxCell[@vertex='1']")]
+    assert lv and all("fillColor=#ffffff" in s and "fontColor" not in s for s in lv)
+
+
 def test_schema_to_drawio_includes_table_names_and_fk_labels():
     import diagram_view
     from excel_to_mermaid import build_schema
