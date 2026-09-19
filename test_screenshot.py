@@ -489,16 +489,19 @@ def test_diagram_screenshot(tmp_path):
         "render them as dark redaction bars"
     )
 
-    # QtSvg ignores dominant-baseline (and dy), so it must be stripped from the
-    # relationship labels — otherwise the text rides above the line instead of
-    # sitting on it. See current_svg().
-    labels = re.findall(
-        r'<text[^>]*class="[^"]*relationshipLabel[^"]*"[^>]*>', text
+    # QtSvg ignores dominant-baseline:middle, so every centred text (table
+    # cells, entity titles, edge labels) would ride above its intended y. It's
+    # converted to an alphabetic baseline in current_svg(), so none should
+    # remain in the export. See current_svg().
+    assert "dominant-baseline: middle" not in text, (
+        "centred text must drop dominant-baseline:middle so QtSvg positions it "
+        "correctly"
     )
-    assert labels, "expected relationship labels in the rendered SVG"
-    assert all("dominant-baseline" not in lbl for lbl in labels), (
-        "relationship labels must drop dominant-baseline so QtSvg centres them "
-        "on the line"
+    assert re.search(r'class="[^"]*entityLabel[^"]*"', text), (
+        "expected entity (cell) labels in the rendered SVG"
+    )
+    assert re.search(r'class="[^"]*relationshipLabel[^"]*"', text), (
+        "expected relationship labels in the rendered SVG"
     )
 
     window._diagram_view.cleanup()

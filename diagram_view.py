@@ -938,14 +938,20 @@ class DiagramView(QWidget):
         # *computed* fill/stroke (which Chromium has resolved from the CSS) onto
         # the element as an attribute, which QtSvg does honour. Theme-agnostic,
         # and it also makes the exported .svg render correctly in weak viewers.
-        # The relationship-label boxes need extra care: Mermaid fills them via a
-        # `.relationshipLabelBox{fill:hsl(...)}` CSS rule, and QtSvg *does* apply
-        # that class but can't parse hsl(), so it falls back to a dark fill that
-        # overrides the inline light one — the label reads as a dark redaction
-        # bar in light PNG/PDF exports. An inline `style` fill wins over the
-        # stylesheet in QtSvg, so pin the box to the page background (masking the
-        # line behind it, correct in both themes) and the label text to its
-        # computed colour.
+        #
+        # Two more QtSvg gaps are patched here:
+        #  * Relationship-label boxes are filled by a `.relationshipLabelBox{
+        #    fill:hsl(...)}` CSS rule. QtSvg applies the class but can't parse
+        #    hsl(), so it falls back to a dark fill (a dark redaction bar in
+        #    light exports). An inline `style` fill wins over the stylesheet, so
+        #    pin each box to the page background (masking the line, correct in
+        #    both themes).
+        #  * QtSvg ignores `dominant-baseline: middle`, so every centred text
+        #    (table cells, entity titles, edge labels) drops to its baseline and
+        #    rides above where Mermaid placed it. Switch those to an alphabetic
+        #    baseline and shift `y` by the measured centre offset — cached per
+        #    font-size, so it's exact for any font/size with no constant, and
+        #    keeps the .svg centred in browsers too.
         svg = self._run_js(
             "(function(){"
             "var s=document.querySelector('.mermaid svg');"
@@ -959,23 +965,19 @@ class DiagramView(QWidget):
             "Array.prototype.forEach.call(s.querySelectorAll('.relationshipLabelBox'),"
             "function(b){b.style.setProperty('opacity','1');"
             "b.style.setProperty('fill',bg||'none');});"
-            "Array.prototype.forEach.call(s.querySelectorAll('.relationshipLabel'),"
-            "function(t){var f=getComputedStyle(t).fill;"
-            "if(!skip(f))t.style.setProperty('fill',f);"
-            # QtSvg ignores `dominant-baseline: middle` (and `dy`), so the label
-            # centres on its baseline and rides above the relationship line.
-            # Mermaid puts the label's `y` at the line, i.e. the intended centre,
-            # so: drop the property (keeps the .svg centred in browsers too),
-            # measure the now-baseline-aligned box with getBBox, and shift `y`
-            # so that box re-centres on the original `y`. No font/size constant —
-            # the browser reports the real metrics, so it holds for any font,
-            # size, or label text.
-            "var oy=parseFloat(t.getAttribute('y'));"
-            "if(!isNaN(oy)){t.style.removeProperty('dominant-baseline');"
-            "var bb=t.getBBox();var c=bb.y+bb.height/2;"
-            "t.setAttribute('y',(2*oy-c).toFixed(2));}});"
+            "var offs={};"
+            "Array.prototype.forEach.call(s.querySelectorAll('text'),function(t){"
+            "var cs=getComputedStyle(t);var db=cs.dominantBaseline;"
+            "if(db!=='middle'&&db!=='central')return;"
+            "var fs=cs.fontSize;"
+            "if(offs[fs]===undefined){var m=t.getBBox();var cm=m.y+m.height/2;"
+            "t.style.setProperty('dominant-baseline','alphabetic');"
+            "var b2=t.getBBox();offs[fs]=cm-(b2.y+b2.height/2);}"
+            "else{t.style.setProperty('dominant-baseline','alphabetic');}"
+            "var oy=parseFloat(t.getAttribute('y'))||0;"
+            "t.setAttribute('y',(oy+offs[fs]).toFixed(2));});"
             "return s.outerHTML;})()",
-            timeout_ms=3000,
+            timeout_ms=5000,
         )
         return svg or None
 
