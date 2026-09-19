@@ -63,7 +63,8 @@ fill/stroke/text when exporting from a dark session
 ---
 
 ## 4. Fix `current_svg` render-timeout accounting  ·  low
-- [ ] Done
+- [x] Done — the poll loop now measures a wall-clock deadline
+  (`time.monotonic()`), so `timeout_ms` is a true cap.
 
 **Why:** the poll loop in `diagram_view.py::current_svg` adds 150 to `elapsed`
 per iteration, but each poll can block up to 2s, so the "60s" cap is really
