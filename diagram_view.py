@@ -23,6 +23,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -934,17 +935,17 @@ class DiagramView(QWidget):
         """
         if not self.available or self._view is None:
             return None
-        deadline = timeout_ms
-        step = 150
-        elapsed = 0
-        while elapsed < deadline:
+        # Wall-clock deadline: each poll below can itself block up to ~2s, so
+        # counting fixed 150ms steps badly under-counted real time (a "60s" cap
+        # ran for minutes when a render stalled). Measure elapsed time instead.
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        while time.monotonic() < deadline:
             done = self._run_js("window._mermaidDone === true", timeout_ms=2000)
             if done:
                 break
             pause = QEventLoop()
-            QTimer.singleShot(step, pause.quit)
+            QTimer.singleShot(150, pause.quit)
             pause.exec()
-            elapsed += step
 
         # Mermaid colours text/shapes via a <style> block, not inline attributes.
         # QtSvg (used to rasterise PNG/PDF) ignores CSS <style> rules, so that
