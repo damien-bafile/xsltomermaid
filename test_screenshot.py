@@ -100,6 +100,13 @@ def test_svg_dimensions_handles_fractional_and_exponent_sizes():
     w0, h0 = diagram_view._svg_dimensions('<svg width="0" height="0"></svg>')
     assert w0 == 0.0
     assert h0 == 0.0
+    # A percentage width (Mermaid's useMaxWidth) must fall back to the viewBox,
+    # not be read as 100 — otherwise the PDF fallback would size to 100px.
+    wp, hp = diagram_view._svg_dimensions(
+        '<svg width="100%" viewBox="0 0 3526 6531"></svg>'
+    )
+    assert wp == 3526.0
+    assert hp == 6531.0
 
 
 def test_schema_to_drawio_includes_table_names_and_fk_labels():
@@ -467,6 +474,36 @@ def test_diagram_screenshot(tmp_path):
     # The rendered diagram should mention the tables from the sample.
     assert "OrderLine" in text and "Customer" in text
 
+    # Relationship-label boxes must carry an inline style fill. Mermaid fills
+    # them with an hsl() CSS rule QtSvg can't parse (it falls back to dark and
+    # the label reads as a dark redaction bar in PNG/PDF); the inline style set
+    # in current_svg() overrides that. See current_svg().
+    import re
+
+    boxes = re.findall(
+        r'<rect[^>]*class="[^"]*relationshipLabelBox[^"]*"[^>]*>', text
+    )
+    assert boxes, "expected relationship-label boxes in the rendered SVG"
+    assert all("style=" in b and "fill" in b for b in boxes), (
+        "relationship-label boxes need an inline style fill so QtSvg doesn't "
+        "render them as dark redaction bars"
+    )
+
+    # QtSvg ignores dominant-baseline:middle, so every centred text (table
+    # cells, entity titles, edge labels) would ride above its intended y. It's
+    # converted to an alphabetic baseline in current_svg(), so none should
+    # remain in the export. See current_svg().
+    assert "dominant-baseline: middle" not in text, (
+        "centred text must drop dominant-baseline:middle so QtSvg positions it "
+        "correctly"
+    )
+    assert re.search(r'class="[^"]*entityLabel[^"]*"', text), (
+        "expected entity (cell) labels in the rendered SVG"
+    )
+    assert re.search(r'class="[^"]*relationshipLabel[^"]*"', text), (
+        "expected relationship labels in the rendered SVG"
+    )
+
     window._diagram_view.cleanup()
     del app
 
@@ -557,6 +594,43 @@ def test_trace_path_disconnected_keeps_selection_and_offers_no_undo(tmp_path):
     _trace_path(window, "Customer", "Customer", replace=True)
     assert set(window._selector.selected_tables()) == {"Customer"}
     assert not window._selector._undo_btn.isEnabled()
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_large_render_warning_asks_once_per_selection(monkeypatch):
+    from excel_to_mermaid import Column, Schema, Table
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    n = app_module.RENDER_WARN_LIMIT + 5  # over the warn threshold
+    tables = [
+        Table("dbo", f"T{i}", [Column("dbo", f"T{i}", 1, "Id", "int", is_primary_key=True)])
+        for i in range(n)
+    ]
+    window._schema = Schema(tables=tables, relationships=[])
+    window._selector.set_tables([t.name for t in tables])
+    window._selector.check_all()
+    # Don't actually render (keep the test fast/headless-safe).
+    monkeypatch.setattr(window._diagram_view, "set_diagram", lambda *a, **k: None)
+
+    calls = {"n": 0}
+
+    def _q(*a, **k):
+        calls["n"] += 1
+        return app_module.QMessageBox.Yes
+
+    monkeypatch.setattr(app_module.QMessageBox, "question", _q)
+
+    window._render_selection()
+    window._render_selection()  # same big selection → must not re-ask
+    assert calls["n"] == 1
+
+    # Changing the selection (still over the limit) asks again.
+    window._selector.set_selected_tables([t.name for t in tables[:-1]])
+    window._render_selection()
+    assert calls["n"] == 2
 
     window._diagram_view.cleanup()
     del app

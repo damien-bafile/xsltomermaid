@@ -238,6 +238,11 @@ def _svg_dimensions(svg: str) -> tuple[float, float]:
         )
         if not match:
             return None
+        # A relative unit ("100%") is not an absolute pixel size — Mermaid emits
+        # width="100%" under useMaxWidth. Reject it so we fall back to the
+        # viewBox, which carries the real dimensions.
+        if match.group(2) in ("%", "em", "ex"):
+            return None
         try:
             return float(match.group(1))
         except ValueError:
@@ -933,6 +938,20 @@ class DiagramView(QWidget):
         # *computed* fill/stroke (which Chromium has resolved from the CSS) onto
         # the element as an attribute, which QtSvg does honour. Theme-agnostic,
         # and it also makes the exported .svg render correctly in weak viewers.
+        #
+        # Two more QtSvg gaps are patched here:
+        #  * Relationship-label boxes are filled by a `.relationshipLabelBox{
+        #    fill:hsl(...)}` CSS rule. QtSvg applies the class but can't parse
+        #    hsl(), so it falls back to a dark fill (a dark redaction bar in
+        #    light exports). An inline `style` fill wins over the stylesheet, so
+        #    pin each box to the page background (masking the line, correct in
+        #    both themes).
+        #  * QtSvg ignores `dominant-baseline: middle`, so every centred text
+        #    (table cells, entity titles, edge labels) drops to its baseline and
+        #    rides above where Mermaid placed it. Switch those to an alphabetic
+        #    baseline and shift `y` by the measured centre offset — cached per
+        #    font-size, so it's exact for any font/size with no constant, and
+        #    keeps the .svg centred in browsers too.
         svg = self._run_js(
             "(function(){"
             "var s=document.querySelector('.mermaid svg');"
@@ -942,8 +961,23 @@ class DiagramView(QWidget):
             "for(var i=0;i<els.length;i++){var el=els[i],cs=getComputedStyle(el);"
             "['fill','stroke'].forEach(function(p){var v=cs.getPropertyValue(p);"
             "if(!skip(v)&&!el.getAttribute(p))el.setAttribute(p,v);});}"
+            "var bg=getComputedStyle(document.body).backgroundColor;if(skip(bg))bg='';"
+            "Array.prototype.forEach.call(s.querySelectorAll('.relationshipLabelBox'),"
+            "function(b){b.style.setProperty('opacity','1');"
+            "b.style.setProperty('fill',bg||'none');});"
+            "var offs={};"
+            "Array.prototype.forEach.call(s.querySelectorAll('text'),function(t){"
+            "var cs=getComputedStyle(t);var db=cs.dominantBaseline;"
+            "if(db!=='middle'&&db!=='central')return;"
+            "var fs=cs.fontSize;"
+            "if(offs[fs]===undefined){var m=t.getBBox();var cm=m.y+m.height/2;"
+            "t.style.setProperty('dominant-baseline','alphabetic');"
+            "var b2=t.getBBox();offs[fs]=cm-(b2.y+b2.height/2);}"
+            "else{t.style.setProperty('dominant-baseline','alphabetic');}"
+            "var oy=parseFloat(t.getAttribute('y'))||0;"
+            "t.setAttribute('y',(oy+offs[fs]).toFixed(2));});"
             "return s.outerHTML;})()",
-            timeout_ms=3000,
+            timeout_ms=5000,
         )
         return svg or None
 
