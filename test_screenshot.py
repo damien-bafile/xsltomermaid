@@ -212,6 +212,28 @@ def test_schema_to_excalidraw_spacing_grows_with_label_length():
     assert gap("A_VERY_LONG_FOREIGN_KEY_COLUMN_NAME") > gap("X")
 
 
+def test_schema_to_drawio_spacing_grows_with_label_length():
+    import diagram_view
+    from excel_to_mermaid import Relationship, Schema, Table
+
+    def gap(label):
+        schema = Schema(
+            tables=[Table("dbo", "A"), Table("dbo", "B")],
+            relationships=[Relationship(parent_table="A", child_table="B", label=label)],
+        )
+        root = ET.fromstring(diagram_view.schema_to_drawio(schema))
+        geoms = {}
+        for cell in root.findall(".//mxCell[@vertex='1']"):
+            g = cell.find("mxGeometry")
+            geoms[cell.attrib["id"]] = (float(g.attrib["x"]), float(g.attrib["width"]))
+        # Two tables land side by side in the same grid row (ids "2" and "3").
+        (ax, aw), (bx, _bw) = geoms["2"], geoms["3"]
+        return bx - (ax + aw)  # horizontal gap between the boxes
+
+    # A long relationship label widens the inter-box gap, same as Excalidraw.
+    assert gap("A_VERY_LONG_FOREIGN_KEY_COLUMN_NAME") > gap("X")
+
+
 def test_schema_to_drawio_relationship_matching_is_case_insensitive():
     import diagram_view
     from excel_to_mermaid import Relationship, Schema, Table
