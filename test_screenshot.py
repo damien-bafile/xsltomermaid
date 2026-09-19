@@ -100,6 +100,13 @@ def test_svg_dimensions_handles_fractional_and_exponent_sizes():
     w0, h0 = diagram_view._svg_dimensions('<svg width="0" height="0"></svg>')
     assert w0 == 0.0
     assert h0 == 0.0
+    # A percentage width (Mermaid's useMaxWidth) must fall back to the viewBox,
+    # not be read as 100 — otherwise the PDF fallback would size to 100px.
+    wp, hp = diagram_view._svg_dimensions(
+        '<svg width="100%" viewBox="0 0 3526 6531"></svg>'
+    )
+    assert wp == 3526.0
+    assert hp == 6531.0
 
 
 def test_schema_to_drawio_includes_table_names_and_fk_labels():

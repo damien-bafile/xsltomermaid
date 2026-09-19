@@ -238,6 +238,11 @@ def _svg_dimensions(svg: str) -> tuple[float, float]:
         )
         if not match:
             return None
+        # A relative unit ("100%") is not an absolute pixel size — Mermaid emits
+        # width="100%" under useMaxWidth. Reject it so we fall back to the
+        # viewBox, which carries the real dimensions.
+        if match.group(2) in ("%", "em", "ex"):
+            return None
         try:
             return float(match.group(1))
         except ValueError:
