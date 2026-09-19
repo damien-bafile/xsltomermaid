@@ -115,6 +115,7 @@ from excel_to_mermaid import (
     read_rows,
     related_tables,
     route_paths,
+    unresolved_foreign_keys,
     wrap_mermaid_html,
 )
 from make_sample import write_sample
@@ -1845,10 +1846,39 @@ class MainWindow(QMainWindow):
 
         names = [t.name for t in schema.tables]
         self._selector.set_tables(names)
+
+        # The file parsed but yielded no tables — every row was missing a
+        # TableName or ColumnName. Say so plainly instead of "0 tables / select
+        # tables on the left" (there are none to select).
+        if not names:
+            self._diagram_view.show_message(
+                "No tables found in this file.\n\n"
+                "Each row needs both a TableName and a ColumnName under the "
+                "header row. The sheet loaded, but no rows had both — check you "
+                "opened the right sheet and that the data sits directly under "
+                "the headers."
+            )
+            self._status.setText(
+                f"Loaded {self._loaded_name} — no table/column data found "
+                "(each row needs a TableName and a ColumnName)."
+            )
+            return
+
         # Small schemas render in full; large ones wait for the user to pick.
         if len(names) <= AUTO_RENDER_LIMIT:
             self._selector.check_all()
         self._render_selection()
+
+        # Foreign keys pointing at tables not in this sheet draw no relationship;
+        # flag them so a missing edge isn't a silent surprise.
+        dangling = unresolved_foreign_keys(schema)
+        if dangling:
+            self._status.setText(
+                self._status.text()
+                + f'  <span style="color:{_muted_hex(self)}">· '
+                f"{_plural(len(dangling), 'foreign key')} reference a table not "
+                "in this sheet</span>"
+            )
 
         for btn in self._action_buttons:
             btn.setEnabled(True)

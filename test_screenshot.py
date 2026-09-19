@@ -662,6 +662,19 @@ def test_large_render_warning_asks_once_per_selection(monkeypatch):
     del app
 
 
+def test_empty_load_reports_no_table_data():
+    from excel_to_mermaid import Schema
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    # A file that parsed but produced no tables (no row had TableName+ColumnName).
+    window._apply_loaded("weird.xlsx", [{"Foo": "bar"}], Schema(tables=[], relationships=[]), "")
+    assert "no table/column data" in window._status.text().lower()
+
+    window._diagram_view.cleanup()
+    del app
+
+
 def _window_with_schema(tables, rels):
     """A MainWindow with an in-memory schema loaded (no file, no render)."""
     from excel_to_mermaid import Schema, Table

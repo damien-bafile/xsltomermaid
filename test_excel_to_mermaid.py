@@ -123,6 +123,24 @@ def test_related_tables_excludes_selected_and_is_case_insensitive():
     schema = _diamond_schema()
     assert related_tables(schema, ["a", "b"]) == {"C", "D"}
 
+
+def test_unresolved_foreign_keys():
+    from excel_to_mermaid import Column, unresolved_foreign_keys
+
+    a = Table("dbo", "A", [Column("dbo", "A", 1, "AID", "int", is_primary_key=True)])
+    b = Table(
+        "dbo",
+        "B",
+        [
+            Column("dbo", "B", 1, "BID", "int", is_primary_key=True),
+            Column("dbo", "B", 2, "AID", "int", foreign_key_reference="dbo.A.AID"),
+            Column("dbo", "B", 3, "GID", "int", foreign_key_reference="dbo.Ghost.GID"),
+        ],
+    )
+    schema = Schema(tables=[a, b], relationships=[])
+    # A.AID resolves (A is present); Ghost does not.
+    assert unresolved_foreign_keys(schema) == [("B", "dbo.Ghost.GID")]
+
 SAMPLE_ROWS = [
     {"SchemaName": "dbo", "TableName": "Customer", "ColumnOrder": 1,
      "ColumnName": "CustomerID", "DataType": "int", "IsPrimaryKey": 1, "IsNullable": 0},

@@ -76,7 +76,10 @@ a fixed per-iteration increment.
 ---
 
 ## 5. Harden the spreadsheet import  ·  medium
-- [ ] Done
+- [x] Done — a file that parses but yields no tables now reports *why* (each row
+  needs TableName + ColumnName) instead of a bland "0 tables"; and foreign keys
+  pointing at tables not in the sheet are counted and noted in the status
+  (`unresolved_foreign_keys`).
 
 **Why:** for the "someone handed me a schema" audience, malformed headers, odd
 types, empty sheets, and duplicate table names should fail with clear, specific

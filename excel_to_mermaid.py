@@ -661,6 +661,26 @@ def related_tables(
     return {canon[n] for n in neighbours if n not in selected and n in canon}
 
 
+def unresolved_foreign_keys(schema: Schema) -> list[tuple[str, str]]:
+    """Foreign-key references that don't resolve to a table in ``schema``.
+
+    Returns ``(child_table, reference_string)`` pairs — a dangling FK points at a
+    table that isn't in the sheet, so no relationship is drawn for it. Useful for
+    telling the user their export may be missing tables.
+    """
+    names = {t.name.lower() for t in schema.tables}
+    dangling: list[tuple[str, str]] = []
+    for table in schema.tables:
+        for column in table.columns:
+            ref = _norm(column.foreign_key_reference)
+            if not ref:
+                continue
+            target = _parse_reference_table(ref)
+            if target is None or target.lower() not in names:
+                dangling.append((table.name, ref))
+    return dangling
+
+
 # ---------------------------------------------------------------------------
 # Mermaid generation
 # ---------------------------------------------------------------------------
