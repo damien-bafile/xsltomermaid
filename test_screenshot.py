@@ -471,7 +471,36 @@ def test_diagram_screenshot(tmp_path):
     del app
 
 
-def test_shortest_path_popup_for_more_than_two_selected(monkeypatch, tmp_path):
+def _trace_path(window, start, end, *, replace):
+    """Drive the From/To pickers + replace toggle, then trace the path."""
+    window._selector._path_from.setCurrentText(start)
+    window._selector._path_to.setCurrentText(end)
+    window._selector._path_replace.setChecked(replace)
+    window._find_shortest_path()
+
+
+def test_trace_path_from_pickers_adds_to_selection(tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    # Customer is off the Order→OrderLine path, so it survives an additive trace.
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer"])
+
+    _trace_path(window, "Order", "OrderLine", replace=False)
+
+    selected = set(window._selector.selected_tables())
+    assert {"Customer", "Order", "OrderLine"} <= selected
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_trace_path_replace_mode_discards_prior_selection(tmp_path):
     app = QApplication.instance() or QApplication([])
 
     sample = tmp_path / "sample.xlsx"
@@ -480,77 +509,269 @@ def test_shortest_path_popup_for_more_than_two_selected(monkeypatch, tmp_path):
     window = app_module.MainWindow()
     window.load_file(str(sample))
     window._selector.clear_selection()
-    window._selector.check_tables(["Customer", "Order", "Product"])
+    window._selector.check_tables(["Customer"])
 
-    calls = []
+    _trace_path(window, "Order", "OrderLine", replace=True)
 
-    def _fake_get_item(_parent, title, _label, items, _index, _editable):
-        calls.append((title, list(items)))
-        if "starting" in title.lower():
-            return ("Customer", True)
-        return ("Product", True)
+    # Replace mode wipes the prior selection: only the path remains.
+    assert set(window._selector.selected_tables()) == {"Order", "OrderLine"}
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_trace_path_undo_restores_prior_selection(tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer"])
+
+    _trace_path(window, "Order", "OrderLine", replace=False)
+    assert window._selector._undo_btn.isEnabled()
+
+    window._selector.undo_last_change()
+    assert set(window._selector.selected_tables()) == {"Customer"}
+    assert not window._selector._undo_btn.isEnabled()
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_trace_path_disconnected_keeps_selection_and_offers_no_undo(tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer"])
+
+    # Same table both ends is rejected before any mutation or snapshot.
+    _trace_path(window, "Customer", "Customer", replace=True)
+    assert set(window._selector.selected_tables()) == {"Customer"}
+    assert not window._selector._undo_btn.isEnabled()
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def _window_with_schema(tables, rels):
+    """A MainWindow with an in-memory schema loaded (no file, no render)."""
+    from excel_to_mermaid import Schema, Table
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window._schema = Schema(tables=[Table("", n) for n in tables], relationships=rels)
+    window._selector.set_tables(tables)
+    return app, window
+
+
+def _diamond():
+    """A→B, A→C, B→D, C→D — two equally short A→D paths."""
+    from excel_to_mermaid import Relationship
+
+    return ["A", "B", "C", "D"], [
+        Relationship("A", "B", "ab"),
+        Relationship("A", "C", "ac"),
+        Relationship("B", "D", "bd"),
+        Relationship("C", "D", "cd"),
+    ]
+
+
+def _abcd_chain():
+    from excel_to_mermaid import Relationship
+
+    return ["A", "B", "C", "D", "E"], [
+        Relationship("A", "B", "ab"),
+        Relationship("B", "C", "bc"),
+        Relationship("C", "D", "cd"),
+    ]
+
+
+def _set_direction(window, value):
+    combo = window._selector._path_direction
+    combo.setCurrentIndex(combo.findData(value))
+
+
+def test_trace_path_via_stop_forces_route(monkeypatch):
+    app, window = _window_with_schema(*_diamond())
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+
+    window._selector._path_from.setCurrentText("A")
+    window._selector._path_to.setCurrentText("D")
+    window._selector._path_via.setCurrentText("C")  # force the A-C-D branch
+    window._selector._path_replace.setChecked(True)
+    window._find_shortest_path()
+
+    assert set(window._selector.selected_tables()) == {"A", "C", "D"}
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_trace_path_popup_lets_user_choose_between_ties(monkeypatch):
+    app, window = _window_with_schema(*_diamond())
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+
+    window._selector._path_from.setCurrentText("A")
+    window._selector._path_to.setCurrentText("D")
+    window._selector._path_replace.setChecked(True)
+
+    seen = {}
+
+    def _fake_get_item(_parent, _title, _label, items, _index, _editable):
+        seen["items"] = list(items)
+        return (items[0], True)  # sorted → "A → B → D"
 
     monkeypatch.setattr(app_module.QInputDialog, "getItem", _fake_get_item)
     window._find_shortest_path()
 
-    selected = set(window._selector.selected_tables())
-    assert "OrderLine" in selected
-    assert len(calls) == 2
-    assert calls[0][1] == ["Customer", "Order", "Product"]
+    assert seen["items"] == ["A → B → D", "A → C → D"]
+    assert set(window._selector.selected_tables()) == {"A", "B", "D"}
 
     window._diagram_view.cleanup()
     del app
 
 
-def test_shortest_path_popup_cancel_start_keeps_selection(monkeypatch, tmp_path):
-    app = QApplication.instance() or QApplication([])
+def test_trace_path_no_directed_path_offers_direction_retry(monkeypatch):
+    app, window = _window_with_schema(*_abcd_chain())
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
 
-    sample = tmp_path / "sample.xlsx"
-    _ensure_sample(str(sample))
+    window._selector._path_from.setCurrentText("A")
+    window._selector._path_to.setCurrentText("D")
+    _set_direction(window, "forward")  # child→parent: A can't reach D forwards
+    window._selector._path_replace.setChecked(True)
 
-    window = app_module.MainWindow()
-    window.load_file(str(sample))
-    window._selector.clear_selection()
-    window._selector.check_tables(["Customer", "Order", "Product"])
-    before = set(window._selector.selected_tables())
+    asked = {"count": 0}
 
-    def _cancel_start(_parent, _title, _label, _items, _index, _editable):
-        return ("", False)
+    def _yes(*_args, **_kwargs):
+        asked["count"] += 1
+        return app_module.QMessageBox.Yes
 
-    monkeypatch.setattr(app_module.QInputDialog, "getItem", _cancel_start)
+    monkeypatch.setattr(app_module.QMessageBox, "question", _yes)
     window._find_shortest_path()
-    after = set(window._selector.selected_tables())
-    assert after == before
+
+    # Retrying without the direction constraint finds the whole chain.
+    assert asked["count"] == 1
+    assert set(window._selector.selected_tables()) == {"A", "B", "C", "D"}
 
     window._diagram_view.cleanup()
     del app
 
 
-def test_shortest_path_popup_cancel_destination_keeps_selection(monkeypatch, tmp_path):
-    app = QApplication.instance() or QApplication([])
+def test_trace_path_no_path_reports_and_keeps_selection(monkeypatch):
+    app, window = _window_with_schema(*_abcd_chain())  # E is isolated
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    window._selector.check_tables(["A"])
 
-    sample = tmp_path / "sample.xlsx"
-    _ensure_sample(str(sample))
+    window._selector._path_from.setCurrentText("A")
+    window._selector._path_to.setCurrentText("E")
+    window._selector._path_replace.setChecked(False)
 
-    window = app_module.MainWindow()
-    window.load_file(str(sample))
-    window._selector.clear_selection()
-    window._selector.check_tables(["Customer", "Order", "Product"])
-    before = set(window._selector.selected_tables())
-
-    calls = {"count": 0}
-
-    def _cancel_destination(_parent, title, _label, _items, _index, _editable):
-        calls["count"] += 1
-        if "starting" in title.lower():
-            return ("Customer", True)
-        return ("", False)
-
-    monkeypatch.setattr(app_module.QInputDialog, "getItem", _cancel_destination)
+    told = {"count": 0}
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "information",
+        lambda *a, **k: told.__setitem__("count", told["count"] + 1),
+    )
     window._find_shortest_path()
-    after = set(window._selector.selected_tables())
-    assert calls["count"] == 2
-    assert after == before
+
+    assert told["count"] == 1
+    assert set(window._selector.selected_tables()) == {"A"}  # untouched
+    assert not window._selector._undo_btn.isEnabled()  # no snapshot taken
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def _set_related_direction(window, value):
+    combo = window._selector._related_direction
+    combo.setCurrentIndex(combo.findData(value))
+
+
+def _hub_schema(children=12):
+    """One parent H referencing `children` child tables (a fan-out hub)."""
+    from excel_to_mermaid import Relationship
+
+    kids = [f"C{i}" for i in range(children)]
+    rels = [Relationship("H", kid, "fk") for kid in kids]
+    return ["H", *kids], rels
+
+
+def test_add_related_direction_limits_neighbours(monkeypatch):
+    app, window = _window_with_schema(*_diamond())
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    window._selector.clear_selection()
+    window._selector.check_tables(["D"])
+
+    # D references B and C (forward); nothing depends on D (reverse).
+    _set_related_direction(window, "forward")
+    window._add_related_tables()
+    assert set(window._selector.selected_tables()) == {"D", "B", "C"}
+
+    window._selector.clear_selection()
+    window._selector.check_tables(["D"])
+    _set_related_direction(window, "reverse")
+    window._add_related_tables()
+    assert set(window._selector.selected_tables()) == {"D"}  # nothing added
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_add_related_previews_and_can_be_declined(monkeypatch):
+    tables, rels = _hub_schema(children=app_module.RELATED_WARN_COUNT + 2)
+    app, window = _window_with_schema(tables, rels)
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    window._selector.clear_selection()
+    window._selector.check_tables(["H"])
+    _set_related_direction(window, "reverse")  # H's dependents = all children
+
+    asked = {"count": 0}
+
+    def _decline(*_args, **_kwargs):
+        asked["count"] += 1
+        return app_module.QMessageBox.No
+
+    monkeypatch.setattr(app_module.QMessageBox, "question", _decline)
+    window._add_related_tables()
+
+    assert asked["count"] == 1  # a big batch prompted
+    assert set(window._selector.selected_tables()) == {"H"}  # declined → unchanged
+    assert not window._selector._undo_btn.isEnabled()
+
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_add_related_accepts_and_is_undoable(monkeypatch):
+    n_kids = app_module.RELATED_WARN_COUNT + 2
+    tables, rels = _hub_schema(children=n_kids)
+    app, window = _window_with_schema(tables, rels)
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    window._selector.clear_selection()
+    window._selector.check_tables(["H"])
+    _set_related_direction(window, "reverse")
+
+    monkeypatch.setattr(
+        app_module.QMessageBox, "question", lambda *a, **k: app_module.QMessageBox.Yes
+    )
+    window._add_related_tables()
+
+    assert len(window._selector.selected_tables()) == n_kids + 1  # H + all children
+    assert window._selector._undo_btn.isEnabled()
+    assert window._selector._undo_btn.text() == "&Undo add"
+
+    window._selector.undo_last_change()
+    assert set(window._selector.selected_tables()) == {"H"}
+    assert not window._selector._undo_btn.isEnabled()
 
     window._diagram_view.cleanup()
     del app

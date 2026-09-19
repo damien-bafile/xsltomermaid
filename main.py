@@ -64,6 +64,7 @@ from PySide6.QtGui import (
     QIcon,
     QKeySequence,
     QPalette,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -85,6 +86,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
+    QToolButton,
     QHeaderView,
     QTableView,
     QTabWidget,
@@ -111,7 +113,8 @@ from excel_to_mermaid import (
     filter_schema,
     generate_mermaid,
     read_rows,
-    shortest_path,
+    related_tables,
+    route_paths,
     wrap_mermaid_html,
 )
 from make_sample import write_sample
@@ -145,6 +148,34 @@ _ACCENT_RING = "#cfe0ff"  # light focus ring on a filled accent button
 _ACCENT_WASH = "rgba(47,129,247,0.08)"  # translucent accent fill (drag-hover)
 _DISABLED_BG = "rgba(128,128,128,0.18)"  # filled button, disabled
 _DISABLED_FG = "rgba(128,128,128,0.75)"  # filled button text, disabled
+
+
+def _apply_primary_button_style(button) -> None:
+    """Filled-accent styling for the one lead action in a button group.
+
+    Used for the two primary calls to action — "Copy Mermaid" in the export bar
+    and "Render selected" in the table picker — so both read as the loud button
+    among quiet neighbours.
+    """
+    button.setStyleSheet(
+        "QPushButton {"
+        f"  background: {_ACCENT};"
+        "  color: white;"
+        "  font-weight: 600;"
+        # A 2px transparent border reserves space so the focus ring doesn't
+        # shift the button; padding is trimmed 2px to compensate.
+        "  border: 2px solid transparent;"
+        "  border-radius: 6px;"
+        "  padding: 4px 12px;"
+        "}"
+        f"QPushButton:hover:enabled {{ background: {_ACCENT_HOVER}; }}"
+        f"QPushButton:pressed:enabled {{ background: {_ACCENT_PRESSED}; }}"
+        f"QPushButton:focus {{ border-color: {_ACCENT_RING}; }}"
+        "QPushButton:disabled {"
+        f"  background: {_DISABLED_BG};"
+        f"  color: {_DISABLED_FG};"
+        "}"
+    )
 # Semantic status colours for the render indicator. Both clear the 3:1 non-text
 # (icon) contrast threshold on the light and dark surfaces the icon sits on.
 _OK_GREEN = "#2e9e57"  # render succeeded
@@ -409,6 +440,28 @@ class LoadWorker(QThread):
             self.failed.emit(str(exc))
 
 
+# One shared vocabulary for foreign-key direction, used by BOTH the path tracer
+# and "Add related tables" so the same idea is never worded two ways. Plain
+# language leads; the DBA terms (child→parent) live in the tooltips. "forward"
+# follows the FK reference (a child points to its parent); "reverse" the reverse.
+_FK_DIRECTION_CHOICES = (
+    ("Either direction", "either"),
+    ("Tables it points to", "forward"),
+    ("Tables that point to it", "reverse"),
+)
+_FK_DIRECTION_LABELS = {value: label for label, value in _FK_DIRECTION_CHOICES}
+_FK_DIRECTION_TOOLTIP = (
+    "Which way to follow foreign keys:\n"
+    "Either direction — ignore direction, just connectivity.\n"
+    "Tables it points to — follow each FK to its target (child → parent).\n"
+    "Tables that point to it — follow FKs back to their source (parent → child)."
+)
+
+# Adding more than this many related tables in one click asks first (with a
+# preview), so a hub table can't silently drag in dozens.
+RELATED_WARN_COUNT = 10
+
+
 class TableSelector(QWidget):
     """A filterable, checkable list of tables to include in the diagram."""
 
@@ -437,13 +490,13 @@ class TableSelector(QWidget):
         self._list.itemChanged.connect(lambda _item: self._update_count())
         layout.addWidget(self._list, 1)
 
-        self._count = QLabel("0 of 0 selected")
+        self._count = QLabel("No tables loaded yet")
         self._count.setStyleSheet(f"color: {_muted_hex(self)};")
         layout.addWidget(self._count)
 
         button_row = QHBoxLayout()
-        self._select_shown_btn = QPushButton("Select shown")
-        self._clear_btn = QPushButton("Clear")
+        self._select_shown_btn = QPushButton("&Select shown")
+        self._clear_btn = QPushButton("&Clear")
         self._select_shown_btn.setToolTip("Tick every table currently visible in the list.")
         self._select_shown_btn.clicked.connect(self.check_shown)
         self._clear_btn.clicked.connect(self.clear_selection)
@@ -451,28 +504,147 @@ class TableSelector(QWidget):
         button_row.addWidget(self._clear_btn)
         layout.addLayout(button_row)
 
-        self._related_btn = QPushButton("Add related tables")
+        related_row = QHBoxLayout()
+        self._related_btn = QPushButton("&Add related tables")
         self._related_btn.setToolTip(
-            "Tick the tables directly connected by a foreign key to the ones "
-            "you've checked (one hop out), then render."
+            "Tick the tables one foreign-key hop from the ones you've checked. "
+            "Adding a lot at once asks first, and can be undone."
         )
         self._related_btn.clicked.connect(lambda: self.related_requested.emit())
-        layout.addWidget(self._related_btn)
+        self._related_direction = QComboBox()
+        for label, value in _FK_DIRECTION_CHOICES:
+            self._related_direction.addItem(label, value)
+        self._related_direction.setToolTip(
+            "Which neighbours to add, by foreign-key direction.\n" + _FK_DIRECTION_TOOLTIP
+        )
+        related_row.addWidget(self._related_btn, 1)
+        related_row.addWidget(self._related_direction)
+        layout.addLayout(related_row)
 
-        self._path_btn = QPushButton("Shortest path between 2")
+        # Path tracing is a power tool, not the main loop, so it lives behind a
+        # disclosure: the header is one quiet line until opened, keeping the rail
+        # focused on "pick tables → render".
+        self._path_toggle = QToolButton()
+        self._path_toggle.setText("Trace path between tables")
+        self._path_toggle.setCheckable(True)
+        self._path_toggle.setChecked(False)
+        self._path_toggle.setArrowType(Qt.RightArrow)
+        self._path_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._path_toggle.setToolTip("Find the shortest FK path between two tables.")
+        # A borderless header, but keyboard focus and hover must still show — a
+        # background wash gives both without shifting the layout.
+        self._path_toggle.setStyleSheet(
+            "QToolButton { border: none; font-weight: 600; padding: 2px 4px;"
+            "  border-radius: 4px; }"
+            f"QToolButton:hover {{ background: {_ACCENT_WASH}; }}"
+            f"QToolButton:focus {{ background: {_ACCENT_WASH}; }}"
+        )
+        self._path_toggle.toggled.connect(self._on_path_toggled)
+        layout.addWidget(self._path_toggle)
+
+        # Everything the path tracer needs, hidden until the disclosure is open.
+        self._path_box = QWidget()
+        path_box = QVBoxLayout(self._path_box)
+        path_box.setContentsMargins(0, 0, 0, 4)
+        path_box.setSpacing(6)
+
+        endpoints_row = QHBoxLayout()
+        self._path_from = QComboBox()
+        self._path_from.setToolTip("Starting table for the path.")
+        self._path_to = QComboBox()
+        self._path_to.setToolTip("Destination table for the path.")
+        for combo in (self._path_from, self._path_to):
+            combo.currentIndexChanged.connect(self._update_path_enabled)
+        endpoints_row.addWidget(self._path_from, 1)
+        arrow = QLabel("→")
+        arrow.setAlignment(Qt.AlignCenter)
+        endpoints_row.addWidget(arrow)
+        endpoints_row.addWidget(self._path_to, 1)
+        path_box.addLayout(endpoints_row)
+
+        # Optional single intermediate stop the route must pass through.
+        via_row = QHBoxLayout()
+        via_label = QLabel("via")
+        self._path_via = QComboBox()
+        self._path_via.setToolTip(
+            "Optional: force the route through this table on the way."
+        )
+        via_row.addWidget(via_label)
+        via_row.addWidget(self._path_via, 1)
+        path_box.addLayout(via_row)
+
+        # Foreign keys are directed, so let the user say which way to walk them.
+        self._path_direction = QComboBox()
+        for label, value in _FK_DIRECTION_CHOICES:
+            self._path_direction.addItem(label, value)
+        self._path_direction.setToolTip(_FK_DIRECTION_TOOLTIP)
+        path_box.addWidget(self._path_direction)
+
+        # Teach the one domain concept this panel assumes, at point of use, so a
+        # non-DBA doesn't have to hover a tooltip to know what "direction" means.
+        self._path_hint = QLabel(
+            "A foreign key points from a child table to the parent it references."
+        )
+        self._path_hint.setWordWrap(True)
+        self._path_hint.setStyleSheet(f"color: {_muted_hex(self)}; font-size: 11px;")
+        path_box.addWidget(self._path_hint)
+
+        path_row = QHBoxLayout()
+        self._path_btn = QPushButton("&Trace path")
         self._path_btn.setToolTip(
-            "Check exactly two tables, then tick every table on the shortest "
-            "foreign-key path connecting them and render it."
+            "Trace the shortest foreign-key path between the two chosen tables "
+            "(through the optional Via stop) and render it."
         )
         self._path_btn.clicked.connect(lambda: self.path_requested.emit())
-        layout.addWidget(self._path_btn)
+        self._path_replace = QCheckBox("Replace selection")
+        self._path_replace.setToolTip(
+            "On: the path replaces your current selection.\n"
+            "Off: the path is added to what you've already checked."
+        )
+        path_row.addWidget(self._path_btn, 1)
+        path_row.addWidget(self._path_replace)
+        path_box.addLayout(path_row)
 
-        self._render_btn = QPushButton("Render selected")
+        self._path_box.setVisible(False)
+        layout.addWidget(self._path_box)
+
+        # Primary action row. Render is the one thing users most want to press,
+        # so it leads as the filled accent button; Undo sits quietly beside it,
+        # reverting the last add or traced path.
+        layout.addSpacing(4)
+        action_row = QHBoxLayout()
+        self._render_btn = QPushButton("&Render selected")
         self._render_btn.clicked.connect(lambda: self.applied.emit())
-        layout.addWidget(self._render_btn)
+        _apply_primary_button_style(self._render_btn)
+        self._undo_btn = QPushButton("&Undo")
+        self._undo_btn.setToolTip(
+            "Restore the selection from before the last add or traced path."
+        )
+        self._undo_btn.clicked.connect(self.undo_last_change)
+        self._undo_btn.setEnabled(False)
+        action_row.addWidget(self._render_btn, 1)
+        action_row.addWidget(self._undo_btn)
+        layout.addLayout(action_row)
+        self._undo_snapshot: list[str] | None = None
+
+        # Keyboard accelerators for the frequent loop: jump to the filter, and
+        # render without reaching for the mouse (Ctrl+Enter alongside the menu's
+        # F5). Button mnemonics (Alt+R/A/C/…) cover the rest.
+        QShortcut(QKeySequence("Ctrl+F"), self, activated=self._focus_filter)
+        for seq in ("Ctrl+Return", "Ctrl+Enter"):
+            QShortcut(QKeySequence(seq), self, activated=self._emit_render_if_ready)
 
         # Nothing to act on until a schema is loaded.
         self.set_ready(False)
+
+    def _focus_filter(self):
+        if self._filter.isEnabled():
+            self._filter.setFocus(Qt.ShortcutFocusReason)
+            self._filter.selectAll()
+
+    def _emit_render_if_ready(self):
+        if self._render_btn.isEnabled():
+            self.applied.emit()
 
     def set_ready(self, ready: bool):
         """Enable the selection controls only once a schema is loaded.
@@ -487,10 +659,23 @@ class TableSelector(QWidget):
             self._select_shown_btn,
             self._clear_btn,
             self._related_btn,
-            self._path_btn,
+            self._related_direction,
+            self._path_toggle,
+            self._path_from,
+            self._path_to,
+            self._path_via,
+            self._path_direction,
+            self._path_replace,
             self._render_btn,
         ):
             widget.setEnabled(ready)
+        # The trace/undo buttons have their own readiness (two valid endpoints;
+        # an available snapshot) layered on top of the schema being loaded.
+        self._update_path_enabled()
+        if not ready:
+            self._undo_snapshot = None
+            self._undo_btn.setText("&Undo")
+        self._undo_btn.setEnabled(ready and self._undo_snapshot is not None)
 
     # -- population --------------------------------------------------------
     def set_tables(self, names: list[str]):
@@ -503,6 +688,26 @@ class TableSelector(QWidget):
             self._list.addItem(item)
         self._list.blockSignals(False)
         self._filter.clear()
+        # Refill the From/To pickers and default them to the first two tables so
+        # a path can be traced without any prior clicking.
+        for combo in (self._path_from, self._path_to):
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(names)
+            combo.blockSignals(False)
+        if self._path_to.count() > 1:
+            self._path_to.setCurrentIndex(1)
+        # The Via picker starts at an explicit "no stop" entry (data None).
+        self._path_via.blockSignals(True)
+        self._path_via.clear()
+        self._path_via.addItem("(no via stop)", None)
+        for name in names:
+            self._path_via.addItem(name, name)
+        self._path_via.blockSignals(False)
+        self._undo_snapshot = None
+        self._undo_btn.setText("&Undo")
+        self._undo_btn.setEnabled(False)
+        self._update_path_enabled()
         self._update_count()
 
     # -- selection helpers -------------------------------------------------
@@ -559,11 +764,69 @@ class TableSelector(QWidget):
 
     def _update_count(self):
         total = self._list.count()
+        if total == 0:
+            # Empty state: orient a newcomer instead of a bare "0 of 0 selected".
+            self._count.setText("No tables loaded yet")
+            return
         selected = sum(1 for item in self._items() if item.checkState() == Qt.Checked)
         self._count.setText(f"{selected} of {total} selected")
 
+    # -- path tracing (endpoints + non-destructive apply) ------------------
+    def path_endpoints(self) -> tuple[str, str]:
+        """The two tables chosen in the From/To pickers."""
+        return self._path_from.currentText(), self._path_to.currentText()
+
+    def path_replaces_selection(self) -> bool:
+        """Whether a traced path should replace (vs add to) the selection."""
+        return self._path_replace.isChecked()
+
+    def path_direction(self) -> str:
+        """Which way to walk foreign keys: 'either', 'forward', or 'reverse'."""
+        return self._path_direction.currentData()
+
+    def path_via(self) -> str | None:
+        """The optional intermediate stop, or None when '(no via stop)' is picked."""
+        return self._path_via.currentData()
+
+    def _on_path_toggled(self, open_: bool):
+        """Expand or collapse the path-tracer disclosure."""
+        self._path_toggle.setArrowType(Qt.DownArrow if open_ else Qt.RightArrow)
+        self._path_box.setVisible(open_)
+
+    def _update_path_enabled(self):
+        """Enable Trace only when two distinct, real endpoints are chosen."""
+        start, end = self.path_endpoints()
+        # Both pickers share the schema-loaded enabled state, so testing one is enough.
+        ready = self._path_from.isEnabled() and bool(start) and bool(end) and start != end
+        self._path_btn.setEnabled(ready)
+
+    def related_direction(self) -> str:
+        """Which neighbours 'Add related' pulls in: 'either', 'forward', 'reverse'."""
+        return self._related_direction.currentData()
+
+    def snapshot_for_undo(self, label: str):
+        """Remember the current selection so the next change can be undone.
+
+        ``label`` names the action on the button (e.g. "Undo add", "Undo path").
+        """
+        self._undo_snapshot = self.selected_tables()
+        self._undo_btn.setText(f"&Undo {label}")
+        self._undo_btn.setEnabled(True)
+
+    def undo_last_change(self):
+        """Restore the selection captured before the last add / traced path."""
+        if self._undo_snapshot is None:
+            return
+        self.set_selected_tables(self._undo_snapshot)
+        self._undo_snapshot = None
+        self._undo_btn.setText("&Undo")
+        self._undo_btn.setEnabled(False)
+        self.applied.emit()
+
     def retheme(self):
-        self._count.setStyleSheet(f"color: {_muted_hex(self)};")
+        muted = _muted_hex(self)
+        self._count.setStyleSheet(f"color: {muted};")
+        self._path_hint.setStyleSheet(f"color: {muted}; font-size: 11px;")
 
 
 class ColumnSelector(QWidget):
@@ -1286,25 +1549,7 @@ class MainWindow(QMainWindow):
 
         # "Copy Mermaid" is the most-reached-for action, so it leads as the one
         # filled/accent button; the rest stay quiet.
-        self._copy_btn.setStyleSheet(
-            "QPushButton {"
-            f"  background: {_ACCENT};"
-            "  color: white;"
-            "  font-weight: 600;"
-            # A 2px transparent border reserves space so the focus ring below
-            # doesn't shift the button; padding is trimmed 2px to compensate.
-            "  border: 2px solid transparent;"
-            "  border-radius: 6px;"
-            "  padding: 4px 12px;"
-            "}"
-            f"QPushButton:hover:enabled {{ background: {_ACCENT_HOVER}; }}"
-            f"QPushButton:pressed:enabled {{ background: {_ACCENT_PRESSED}; }}"
-            f"QPushButton:focus {{ border-color: {_ACCENT_RING}; }}"
-            "QPushButton:disabled {"
-            f"  background: {_DISABLED_BG};"
-            f"  color: {_DISABLED_FG};"
-            "}"
-        )
+        _apply_primary_button_style(self._copy_btn)
 
         # The row reads as three jobs, not eight equal buttons: get the Mermaid
         # text · save/load the table selection · export or preview the diagram.
@@ -1613,69 +1858,141 @@ class MainWindow(QMainWindow):
             self._tabs.setCurrentWidget(self._diagram_tab)
 
     def _add_related_tables(self):
-        """Tick the one-hop foreign-key neighbours of the checked tables, render."""
+        """Add the one-hop FK neighbours of the checked tables.
+
+        Only the neighbours in the chosen direction are considered (B), a large
+        batch is previewed and confirmed before it lands (A), and the prior
+        selection is snapshotted so the add can be undone (C).
+        """
         if self._schema is None:
             return
         names = self._selector.selected_tables()
         if not names:
             self._status.setText("Check at least one table first, then add related.")
             return
-        # filter_schema with include_related gives us the selection + its one-hop
-        # neighbours; tick every table in that expanded set.
-        expanded = filter_schema(self._schema, names, include_related=True)
-        added = self._selector.check_tables(t.name for t in expanded.tables)
-        if added:
-            self._render_selection()
-        else:
+
+        direction = self._selector.related_direction()
+        new = sorted(related_tables(self._schema, names, direction))
+        if not new:
             self._status.setText("No related tables to add.")
+            return
+        if len(new) > RELATED_WARN_COUNT and not self._confirm_add_related(new):
+            return
+
+        self._selector.snapshot_for_undo("add")
+        added = self._selector.check_tables(new)
+        self._render_selection()
+        self._status.setText(f"Added {_plural(added, 'related table')}.")
+
+    def _confirm_add_related(self, new: list[str]) -> bool:
+        """Preview a large related-table batch and let the user back out."""
+        count = len(new)
+        shown = ", ".join(new[:8])
+        more = "" if count <= 8 else f", +{count - 8} more"
+        answer = QMessageBox.question(
+            self,
+            "Add related tables?",
+            f"This adds {_plural(count, 'related table')}:\n\n{shown}{more}\n\n"
+            "Add them all?",
+        )
+        return answer == QMessageBox.Yes
 
     def _find_shortest_path(self):
-        """Tick every table on the shortest path between the two checked tables."""
+        """Trace a shortest route between the chosen tables and apply it.
+
+        Endpoints come from the From/To pickers, with an optional single Via
+        stop the route must pass through (#3). Foreign keys are walked per the
+        Direction picker. When several equally-short routes exist the user picks
+        one, and when none exists a dialog offers to retry ignoring direction
+        (#5). Either way the prior selection is snapshotted first so it can be
+        undone.
+        """
         if self._schema is None:
             return
-        names = self._selector.selected_tables()
-        if len(names) < 2:
+        start, end = self._selector.path_endpoints()
+        if not start or not end or start == end:
             self._status.setText(
-                "Check at least two tables, then find the shortest path between them."
+                "Pick two different tables in the From / To pickers to trace a path."
             )
             return
-        if len(names) == 2:
-            start, end = names
+
+        direction = self._selector.path_direction()
+        via = self._selector.path_via()
+        stops = [start, via, end] if via else [start, end]
+
+        routes, broken = route_paths(self._schema, stops, direction)
+        if not routes:
+            routes = self._retry_or_report_no_path(stops, direction, broken)
+            if not routes:
+                return
+
+        if len(routes) == 1:
+            chosen = routes[0]
         else:
-            start, ok = QInputDialog.getItem(
-                self,
-                "Pick starting table",
-                "More than two tables are selected.\nChoose the starting table:",
-                names,
-                0,
-                False,
-            )
-            if not ok or not start:
+            chosen = self._choose_route(routes)
+            if chosen is None:
                 return
-            ends = [name for name in names if name != start]
-            end, ok = QInputDialog.getItem(
-                self,
-                "Pick destination table",
-                "Choose the destination table:",
-                ends,
-                0,
-                False,
-            )
-            if not ok or not end:
-                return
-        path = shortest_path(self._schema, start, end)
-        if not path:
-            self._status.setText(
-                f"No foreign-key path connects {start} and {end}."
-            )
-            return
-        self._selector.check_tables(path)
+
+        # Snapshot before mutating so the trace can be undone, then apply the
+        # route additively or as a replacement per the user's choice.
+        self._selector.snapshot_for_undo("path")
+        if self._selector.path_replaces_selection():
+            self._selector.set_selected_tables(chosen)
+        else:
+            self._selector.check_tables(chosen)
         self._render_selection()
-        hops = len(path) - 1
+        hops = len(chosen) - 1
+        mode = "replaced with" if self._selector.path_replaces_selection() else "added"
         self._status.setText(
-            f"Shortest path ({hops} hop{'s' if hops != 1 else ''}): "
-            + " → ".join(path)
+            f"Path ({hops} hop{'s' if hops != 1 else ''}, {mode}): "
+            + " → ".join(chosen)
         )
+
+    def _retry_or_report_no_path(self, stops, direction, broken):
+        """Handle a route with no connection: offer a direction retry, else report.
+
+        Returns the routes found on retry (possibly empty). ``broken`` is the
+        ``(from, to)`` pair that couldn't be connected.
+        """
+        a, b = broken
+        # A directed search that fails can often succeed if direction is ignored,
+        # so offer that rather than leaving the user at a dead end.
+        if direction != "either":
+            resp = QMessageBox.question(
+                self,
+                "No directed path",
+                f"No path from {a} to {b} following "
+                f"“{_FK_DIRECTION_LABELS[direction]}”.\n\n"
+                "Search again ignoring foreign-key direction?",
+            )
+            if resp == QMessageBox.Yes:
+                routes, broken = route_paths(self._schema, stops, "either")
+                if routes:
+                    return routes
+                a, b = broken
+        QMessageBox.information(
+            self,
+            "No path",
+            f"No foreign-key path connects {a} and {b}"
+            + ("." if direction == "either" else " (even ignoring direction)."),
+        )
+        self._status.setText(f"No path connects {a} and {b}.")
+        return []
+
+    def _choose_route(self, routes):
+        """Ask the user which of several equally-short routes to use."""
+        labels = [" → ".join(route) for route in routes]
+        picked, ok = QInputDialog.getItem(
+            self,
+            "Choose a path",
+            f"{len(routes)} equally short paths were found.\nChoose one:",
+            labels,
+            0,
+            False,
+        )
+        if not ok or not picked:
+            return None
+        return routes[labels.index(picked)]
 
     def _render_selection(self):
         """Render the currently-selected tables (Mermaid source + diagram)."""
