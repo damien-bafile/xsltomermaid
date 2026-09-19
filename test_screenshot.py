@@ -467,6 +467,21 @@ def test_diagram_screenshot(tmp_path):
     # The rendered diagram should mention the tables from the sample.
     assert "OrderLine" in text and "Customer" in text
 
+    # Relationship-label boxes must carry an inline style fill. Mermaid fills
+    # them with an hsl() CSS rule QtSvg can't parse (it falls back to dark and
+    # the label reads as a dark redaction bar in PNG/PDF); the inline style set
+    # in current_svg() overrides that. See current_svg().
+    import re
+
+    boxes = re.findall(
+        r'<rect[^>]*class="[^"]*relationshipLabelBox[^"]*"[^>]*>', text
+    )
+    assert boxes, "expected relationship-label boxes in the rendered SVG"
+    assert all("style=" in b and "fill" in b for b in boxes), (
+        "relationship-label boxes need an inline style fill so QtSvg doesn't "
+        "render them as dark redaction bars"
+    )
+
     window._diagram_view.cleanup()
     del app
 

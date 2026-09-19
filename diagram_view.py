@@ -933,6 +933,14 @@ class DiagramView(QWidget):
         # *computed* fill/stroke (which Chromium has resolved from the CSS) onto
         # the element as an attribute, which QtSvg does honour. Theme-agnostic,
         # and it also makes the exported .svg render correctly in weak viewers.
+        # The relationship-label boxes need extra care: Mermaid fills them via a
+        # `.relationshipLabelBox{fill:hsl(...)}` CSS rule, and QtSvg *does* apply
+        # that class but can't parse hsl(), so it falls back to a dark fill that
+        # overrides the inline light one — the label reads as a dark redaction
+        # bar in light PNG/PDF exports. An inline `style` fill wins over the
+        # stylesheet in QtSvg, so pin the box to the page background (masking the
+        # line behind it, correct in both themes) and the label text to its
+        # computed colour.
         svg = self._run_js(
             "(function(){"
             "var s=document.querySelector('.mermaid svg');"
@@ -942,6 +950,13 @@ class DiagramView(QWidget):
             "for(var i=0;i<els.length;i++){var el=els[i],cs=getComputedStyle(el);"
             "['fill','stroke'].forEach(function(p){var v=cs.getPropertyValue(p);"
             "if(!skip(v)&&!el.getAttribute(p))el.setAttribute(p,v);});}"
+            "var bg=getComputedStyle(document.body).backgroundColor;if(skip(bg))bg='';"
+            "Array.prototype.forEach.call(s.querySelectorAll('.relationshipLabelBox'),"
+            "function(b){b.style.setProperty('opacity','1');"
+            "b.style.setProperty('fill',bg||'none');});"
+            "Array.prototype.forEach.call(s.querySelectorAll('.relationshipLabel'),"
+            "function(t){var f=getComputedStyle(t).fill;"
+            "if(!skip(f))t.style.setProperty('fill',f);});"
             "return s.outerHTML;})()",
             timeout_ms=3000,
         )
