@@ -6,7 +6,8 @@ recommended priority. Check items off as we go.
 ---
 
 ## 1. Add CI that runs the test suite  ·  high value / low effort
-- [ ] Done
+- [x] Done — `.github/workflows/test.yml` runs the full suite (incl. WebEngine
+  render tests) on ubuntu-22.04 for push/PR. Merged in #36.
 
 **Why:** GitHub Actions only builds the Windows exe and releases
 (`.github/workflows/build-windows.yml`, `release.yml`) — nothing runs `pytest`.
@@ -18,24 +19,39 @@ render tests need. Gate merges on it.
 
 ---
 
-## 2. Replace QtSvg rasterisation with QWebEngine native PDF/PNG  ·  high value / medium–high effort
-- [ ] Done
+## 2. Replace QtSvg rasterisation with QWebEngine native PDF/PNG  ·  DEFERRED
+- [ ] Done — **deferred** (revisit only if a new QtSvg quirk bites)
 
-**Why:** we've patched three separate QtSvg-vs-CSS bugs (`hsl()` label-box fill,
-`dominant-baseline`, `width="100%"`) with JS workarounds in
-`diagram_view.py::current_svg`. They're all symptoms of QtSvg not being a full
-CSS engine, while the page already renders correctly in QWebEngine.
+**Why (original):** we've patched three QtSvg-vs-CSS bugs (`hsl()` label-box
+fill, `dominant-baseline`, `width="100%"`) with JS workarounds in
+`diagram_view.py::current_svg`. QWebEngine already renders the page correctly.
 
-**Do:** export PDF via `QWebEnginePage.printToPdf()` and capture PNG from web
-content (honoring all CSS, matching the live view), retiring the QtSvg path and
-its per-quirk workarounds. Keep SVG readback for the `.svg` export.
-**Caveat:** `QWebEngineView.grab()` does not capture web content offscreen (see
-the note in `diagram_view.py`); use `printToPdf` / a proper capture path.
+**Spike outcome (2026-09):** `QWebEnginePage.printToPdf()` + `QtPdf.QPdfDocument`
+raster **works** — a spike produced a single, correctly-sized page rendering
+identically to the live view (correct colours, centred text, no workarounds).
+But it surfaced real costs that made it net-negative for now:
+  - **Transparent-background PNG would regress** — a PDF page has no alpha, so
+    output is always opaque. The QtSvg path supports the export's transparent
+    background option.
+  - **Pagination must be forced** — even a 4-table diagram paginated into 2
+    pages and ignored the custom page size until an injected
+    `@page{size…;margin:0}` fixed it; needs per-size testing (diagrams reach
+    6500px+ tall).
+  - **DOM-mutation hazard** — `current_svg()` mutates the live DOM, so a
+    `printToPdf` path would need a fresh re-render / cleanup to avoid printing
+    already-mutated markup.
+
+**Decision:** keep the QtSvg path (works, tested, CI-gated, supports transparent
+bg, scales to 200 tables). **Switch to this QWebEngine approach if more QtSvg
+rendering problems appear** — the spike above is the proven starting point
+(`printToPdf(callback, QPageLayout)` with an injected exact-size `@page`, then
+`QPdfDocument.render`).
 
 ---
 
 ## 3. Give `.drawio` a dark variant  ·  medium
-- [ ] Done
+- [x] Done — `schema_to_drawio(dark=...)` emits dark box fill, light font/stroke,
+  and a dark page background; wired to the render theme in `export_diagram`.
 
 **Why:** `schema_to_drawio` hardcodes `fillColor=#ffffff`, so on draw.io's dark
 canvas the boxes are glaringly bright / inconsistent.

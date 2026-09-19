@@ -333,8 +333,22 @@ def svg_to_drawio(svg: str, page_name: str = "Page-1") -> str:
     return ET.tostring(mxfile, encoding="unicode")
 
 
-def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
-    """Build a native Draw.io ER-like diagram from schema tables + relationships."""
+def schema_to_drawio(schema, page_name: str = "Page-1", dark: bool = False) -> str:
+    """Build a native Draw.io ER-like diagram from schema tables + relationships.
+
+    ``dark=True`` emits dark-filled boxes, light text/strokes, and a dark page
+    background so the diagram is coherent on Draw.io's dark canvas (mirrors
+    :func:`schema_to_excalidraw`'s dark option); the default stays light.
+    """
+    # Box fill / stroke / text / edge colours, and the page background.
+    if dark:
+        c_fill, c_stroke, c_font, c_edge, c_bg = (
+            "#2b2b2b", "#9aa0a6", "#e8eaed", "#9aa0a6", "#1e1e1e",
+        )
+    else:
+        c_fill, c_stroke, c_font, c_edge, c_bg = (
+            "#ffffff", "#36393d", "", "", "",
+        )
     mxfile = ET.Element(
         "mxfile",
         {
@@ -343,27 +357,26 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
         },
     )
     diagram = ET.SubElement(mxfile, "diagram", {"id": "diagram-1", "name": page_name})
-    graph = ET.SubElement(
-        diagram,
-        "mxGraphModel",
-        {
-            "dx": "1200",
-            "dy": "800",
-            "grid": "1",
-            "gridSize": "10",
-            "guides": "1",
-            "tooltips": "1",
-            "connect": "1",
-            "arrows": "1",
-            "fold": "1",
-            "page": "1",
-            "pageScale": "1",
-            "pageWidth": "827",
-            "pageHeight": "1169",
-            "math": "0",
-            "shadow": "0",
-        },
-    )
+    graph_attrs = {
+        "dx": "1200",
+        "dy": "800",
+        "grid": "1",
+        "gridSize": "10",
+        "guides": "1",
+        "tooltips": "1",
+        "connect": "1",
+        "arrows": "1",
+        "fold": "1",
+        "page": "1",
+        "pageScale": "1",
+        "pageWidth": "827",
+        "pageHeight": "1169",
+        "math": "0",
+        "shadow": "0",
+    }
+    if c_bg:
+        graph_attrs["background"] = c_bg
+    graph = ET.SubElement(diagram, "mxGraphModel", graph_attrs)
     root = ET.SubElement(graph, "root")
     ET.SubElement(root, "mxCell", {"id": "0"})
     ET.SubElement(root, "mxCell", {"id": "1", "parent": "0"})
@@ -447,7 +460,8 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
             table_ids_qualified_lower[qualified_lower] = table_id
         style = (
             "shape=mxgraph.er.entity;whiteSpace=wrap;html=1;align=left;verticalAlign=top;"
-            "spacing=8;rounded=0;strokeColor=#36393d;fillColor=#ffffff;"
+            f"spacing=8;rounded=0;strokeColor={c_stroke};fillColor={c_fill};"
+            + (f"fontColor={c_font};" if c_font else "")
         )
         cell = ET.SubElement(
             root,
@@ -509,6 +523,7 @@ def schema_to_drawio(schema, page_name: str = "Page-1") -> str:
                 "style": (
                     "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
                     "html=1;startArrow=ERone;endArrow=ERmany;startFill=1;endFill=1;"
+                    + (f"strokeColor={c_edge};fontColor={c_font};" if c_edge else "")
                 ),
                 "edge": "1",
                 "parent": "1",
