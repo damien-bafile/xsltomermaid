@@ -531,8 +531,13 @@ class TableSelector(QWidget):
         self._path_toggle.setArrowType(Qt.RightArrow)
         self._path_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._path_toggle.setToolTip("Find the shortest FK path between two tables.")
+        # A borderless header, but keyboard focus and hover must still show — a
+        # background wash gives both without shifting the layout.
         self._path_toggle.setStyleSheet(
-            "QToolButton { border: none; font-weight: 600; padding: 2px 0; }"
+            "QToolButton { border: none; font-weight: 600; padding: 2px 4px;"
+            "  border-radius: 4px; }"
+            f"QToolButton:hover {{ background: {_ACCENT_WASH}; }}"
+            f"QToolButton:focus {{ background: {_ACCENT_WASH}; }}"
         )
         self._path_toggle.toggled.connect(self._on_path_toggled)
         layout.addWidget(self._path_toggle)
