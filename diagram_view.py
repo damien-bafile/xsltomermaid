@@ -955,8 +955,16 @@ class DiagramView(QWidget):
             "function(b){b.style.setProperty('opacity','1');"
             "b.style.setProperty('fill',bg||'none');});"
             "Array.prototype.forEach.call(s.querySelectorAll('.relationshipLabel'),"
-            "function(t){var f=getComputedStyle(t).fill;"
-            "if(!skip(f))t.style.setProperty('fill',f);});"
+            "function(t){var cs=getComputedStyle(t);var f=cs.fill;"
+            "if(!skip(f))t.style.setProperty('fill',f);"
+            # QtSvg ignores `dominant-baseline: middle` (and `dy`), so the label
+            # centres on its baseline and the text rides above the relationship
+            # line. Drop the property and nudge `y` down ~0.3em — which both
+            # QtSvg and browsers honour — so the text sits on the line.
+            "t.style.removeProperty('dominant-baseline');"
+            "var fs=parseFloat(cs.fontSize)||12;"
+            "var y=parseFloat(t.getAttribute('y'));"
+            "if(!isNaN(y))t.setAttribute('y',(y+fs*0.3).toFixed(2));});"
             "return s.outerHTML;})()",
             timeout_ms=3000,
         )

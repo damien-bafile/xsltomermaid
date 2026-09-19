@@ -482,6 +482,18 @@ def test_diagram_screenshot(tmp_path):
         "render them as dark redaction bars"
     )
 
+    # QtSvg ignores dominant-baseline (and dy), so it must be stripped from the
+    # relationship labels — otherwise the text rides above the line instead of
+    # sitting on it. See current_svg().
+    labels = re.findall(
+        r'<text[^>]*class="[^"]*relationshipLabel[^"]*"[^>]*>', text
+    )
+    assert labels, "expected relationship labels in the rendered SVG"
+    assert all("dominant-baseline" not in lbl for lbl in labels), (
+        "relationship labels must drop dominant-baseline so QtSvg centres them "
+        "on the line"
+    )
+
     window._diagram_view.cleanup()
     del app
 
