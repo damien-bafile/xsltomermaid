@@ -66,6 +66,55 @@ def test_diagram_options_bar_constructs_headlessly():
     assert bar.render_style().layout_direction == "LR"
 
 
+def test_column_selector_marks_primary_and_foreign_keys():
+    from excel_to_mermaid import Column, Table
+
+    app = QApplication.instance() or QApplication([])
+    selector = app_module.ColumnSelector()
+    selector.set_tables(
+        [
+            Table(
+                "dbo",
+                "Orders",
+                [
+                    Column("dbo", "Orders", 1, "OrderID", "int", is_primary_key=True),
+                    Column(
+                        "dbo",
+                        "Orders",
+                        2,
+                        "CustomerID",
+                        "int",
+                        foreign_key_reference="dbo.Customer.CustomerID",
+                    ),
+                ],
+            )
+        ]
+    )
+
+    table_item = selector._tree.topLevelItem(0)
+    assert table_item.child(0).text(0) == "OrderID  [PK]"
+    assert table_item.child(1).text(0) == "CustomerID  [FK]"
+    assert table_item.child(0).toolTip(0) == "PK key column: OrderID"
+    del app
+
+
+def test_sql_query_dock_is_fixed_on_right_and_copyable():
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+
+    assert window.dockWidgetArea(window._sql_dock) == app_module.Qt.RightDockWidgetArea
+    assert window._sql_dock.allowedAreas() == app_module.Qt.RightDockWidgetArea
+    assert not window._sql_dock.isFloating()
+    assert window._sql_dock.features() == app_module.QDockWidget.DockWidgetClosable
+    for header in app_module.EXPECTED_HEADERS:
+        assert f"[{header}]" in window._sql_query_view.toPlainText()
+
+    window.copy_sql_query()
+    assert app.clipboard().text() == app_module.SQL_SERVER_SCHEMA_QUERY
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_schema_to_drawio_creates_table_vertices_and_edges():
     import diagram_view
     from excel_to_mermaid import build_schema

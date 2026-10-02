@@ -27,6 +27,8 @@ DefaultValue | ComputedDefinition | Collation | Description
    **save/load selected tables** as `.toml` presets (including source filename),
    or **preview** it in your browser.
 7. Uses **Left → Right** as the default rendered layout direction.
+8. Shows **PK/FK markers** in the column selector and includes a right-docked,
+   copyable **SQL Server schema query** that produces the columns expected by the app.
 
 Foreign-key references are parsed flexibly — `dbo.Customer.CustomerID`,
 `Customer.CustomerID`, `Customer(CustomerID)`, and a bare `Customer` all resolve to
