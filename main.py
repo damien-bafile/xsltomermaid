@@ -71,6 +71,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDockWidget,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -139,6 +140,72 @@ MAX_RENDER_CHARS = 1_800_000
 COLUMN_TREE_LIMIT = 10000
 
 _ACCEPTED_SUFFIXES = (".xlsx", ".xlsm", ".xltx", ".xltm")
+
+SQL_SERVER_SCHEMA_QUERY = """\
+-- Run this in the SQL Server database you want to document.
+-- Export the results, including column headers, to .xlsx for xsltomermaid.
+SELECT
+    s.name AS [SchemaName],
+    t.name AS [TableName],
+    c.column_id AS [ColumnOrder],
+    c.name AS [ColumnName],
+    ty.name AS [DataType],
+    CASE
+        WHEN ty.name IN (N'varchar', N'nvarchar', N'varbinary')
+            AND c.max_length = -1 THEN N'max'
+        WHEN ty.name IN (N'nchar', N'nvarchar') THEN CONVERT(varchar(10), c.max_length / 2)
+        WHEN ty.name IN (N'char', N'varchar', N'binary', N'varbinary')
+            THEN CONVERT(varchar(10), c.max_length)
+    END AS [Length],
+    NULLIF(c.precision, 0) AS [Precision],
+    NULLIF(c.scale, 0) AS [Scale],
+    c.is_nullable AS [IsNullable],
+    c.is_identity AS [IsIdentity],
+    c.is_computed AS [IsComputed],
+    CASE WHEN EXISTS (
+        SELECT 1
+        FROM sys.indexes AS pk
+        INNER JOIN sys.index_columns AS pkc
+            ON pkc.object_id = pk.object_id
+            AND pkc.index_id = pk.index_id
+        WHERE pk.object_id = t.object_id
+            AND pk.is_primary_key = 1
+            AND pkc.column_id = c.column_id
+    ) THEN 1 ELSE 0 END AS [IsPrimaryKey],
+    fk.ForeignKeyReference AS [ForeignKeyReference],
+    dc.definition AS [DefaultValue],
+    cc.definition AS [ComputedDefinition],
+    c.collation_name AS [Collation],
+    CONVERT(nvarchar(max), ep.value) AS [Description]
+FROM sys.tables AS t
+INNER JOIN sys.schemas AS s ON s.schema_id = t.schema_id
+INNER JOIN sys.columns AS c ON c.object_id = t.object_id
+INNER JOIN sys.types AS ty ON ty.user_type_id = c.user_type_id
+LEFT JOIN sys.default_constraints AS dc
+    ON dc.object_id = c.default_object_id
+LEFT JOIN sys.computed_columns AS cc
+    ON cc.object_id = c.object_id AND cc.column_id = c.column_id
+LEFT JOIN sys.extended_properties AS ep
+    ON ep.class = 1
+    AND ep.major_id = t.object_id
+    AND ep.minor_id = c.column_id
+    AND ep.name = N'MS_Description'
+OUTER APPLY (
+    SELECT TOP (1)
+        CONCAT(rs.name, N'.', rt.name, N'.', rc.name) AS ForeignKeyReference
+    FROM sys.foreign_key_columns AS fkc
+    INNER JOIN sys.tables AS rt ON rt.object_id = fkc.referenced_object_id
+    INNER JOIN sys.schemas AS rs ON rs.schema_id = rt.schema_id
+    INNER JOIN sys.columns AS rc
+        ON rc.object_id = fkc.referenced_object_id
+        AND rc.column_id = fkc.referenced_column_id
+    WHERE fkc.parent_object_id = t.object_id
+        AND fkc.parent_column_id = c.column_id
+    ORDER BY fkc.constraint_object_id, fkc.constraint_column_id
+) AS fk
+WHERE t.is_ms_shipped = 0
+ORDER BY s.name, t.name, c.column_id;
+"""
 
 # Accent family and state colours, kept together so a tweak lives in one place
 # rather than scattered across widget stylesheets.
@@ -1014,11 +1081,23 @@ class ColumnSelector(QWidget):
             parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
             parent.setData(0, self._ROLE_KIND, "table")
             for column in table.columns:
-                child = QTreeWidgetItem(parent, [column.name])
+                markers = []
+                if column.is_primary_key:
+                    markers.append("PK")
+                if column.foreign_key_reference:
+                    markers.append("FK")
+                label = (
+                    f"{column.name}  [{', '.join(markers)}]"
+                    if markers
+                    else column.name
+                )
+                child = QTreeWidgetItem(parent, [label])
                 child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
                 is_key = bool(column.is_primary_key or column.foreign_key_reference)
                 child.setData(0, self._ROLE_KIND, "column")
                 child.setData(0, self._ROLE_KEYS, (key, column.name.lower(), is_key))
+                if markers:
+                    child.setToolTip(0, f"{', '.join(markers)} key column: {column.name}")
                 excluded = (key, column.name.lower()) in self._excluded
                 child.setCheckState(0, Qt.Unchecked if excluded else Qt.Checked)
         self._tree.expandAll()
@@ -1346,7 +1425,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Excel Schema → Mermaid ER Diagram")
         self.setWindowIcon(app_icon())
-        self.resize(1100, 760)
+        self.resize(1450, 760)
         # A floor so the window can't shrink small enough to clip the action bar
         # or collapse the panels; every action is also reachable from the menu.
         self.setMinimumSize(960, 600)
@@ -1587,9 +1666,9 @@ class MainWindow(QMainWindow):
         self._export_btn.clicked.connect(self.export_diagram)
         self._preview_btn.clicked.connect(self.preview_browser)
 
-        self._build_menu_bar()
-
         self.setCentralWidget(central)
+        self._build_sql_dock()
+        self._build_menu_bar()
 
         # Match the OS: default the diagram's own theme/background to dark when
         # the app starts dark, and apply palette-derived colours everywhere.
@@ -1641,6 +1720,9 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(act("E&xit", self.close, QKeySequence.StandardKey.Quit))
 
+        view_menu = bar.addMenu("&View")
+        view_menu.addAction(self._sql_dock.toggleViewAction())
+
         diagram_menu = bar.addMenu("&Diagram")
         diagram_menu.addAction(
             act("&Render selected", self._render_selection,
@@ -1662,6 +1744,44 @@ class MainWindow(QMainWindow):
         diagram_menu.addAction(
             act("&Preview in browser", self.preview_browser, schema_only=True)
         )
+
+    def _build_sql_dock(self):
+        """Create the fixed right-side panel with the SQL Server export query."""
+        self._sql_dock = QDockWidget("T-SQL statement", self)
+        self._sql_dock.setObjectName("sqlServerQueryDock")
+        self._sql_dock.setAllowedAreas(Qt.RightDockWidgetArea)
+        self._sql_dock.setFeatures(QDockWidget.DockWidgetClosable)
+
+        panel = QWidget(self._sql_dock)
+        layout = QVBoxLayout(panel)
+        hint = QLabel(
+            "Run this in the SQL Server database you want to document, then export "
+            "the results with column headers to an .xlsx file."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._sql_query_view = QPlainTextEdit()
+        self._sql_query_view.setObjectName("sqlServerSchemaQuery")
+        self._sql_query_view.setAccessibleName("SQL Server schema export query")
+        self._sql_query_view.setReadOnly(True)
+        self._sql_query_view.setFont(QFont("Menlo, Consolas, monospace"))
+        self._sql_query_view.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self._sql_query_view.setPlainText(SQL_SERVER_SCHEMA_QUERY)
+        layout.addWidget(self._sql_query_view, 1)
+
+        copy_button = QPushButton("Copy T-SQL")
+        copy_button.clicked.connect(self.copy_sql_query)
+        layout.addWidget(copy_button)
+
+        self._sql_dock.setWidget(panel)
+        self.addDockWidget(Qt.RightDockWidgetArea, self._sql_dock)
+        self.resizeDocks([self._sql_dock], [410], Qt.Horizontal)
+
+    def copy_sql_query(self):
+        """Copy the displayed SQL Server schema query to the clipboard."""
+        QGuiApplication.clipboard().setText(SQL_SERVER_SCHEMA_QUERY)
+        self._status.setText("T-SQL statement copied to clipboard.")
 
     def open_file_dialog(self):
         """Open the file picker from the menu / Ctrl+O and load the choice."""
