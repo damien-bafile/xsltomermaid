@@ -151,9 +151,11 @@ SELECT
     c.name AS [ColumnName],
     ty.name AS [DataType],
     CASE
-        WHEN c.max_length = -1 THEN N'max'
+        WHEN ty.name IN (N'varchar', N'nvarchar', N'varbinary')
+            AND c.max_length = -1 THEN N'max'
         WHEN ty.name IN (N'nchar', N'nvarchar') THEN CONVERT(varchar(10), c.max_length / 2)
-        WHEN c.max_length > 0 THEN CONVERT(varchar(10), c.max_length)
+        WHEN ty.name IN (N'char', N'varchar', N'binary', N'varbinary')
+            THEN CONVERT(varchar(10), c.max_length)
     END AS [Length],
     NULLIF(c.precision, 0) AS [Precision],
     NULLIF(c.scale, 0) AS [Scale],
