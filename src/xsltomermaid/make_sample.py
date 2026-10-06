@@ -1,13 +1,13 @@
 """Generate a small sample schema workbook (sample_schema.xlsx) for testing.
 
-Run: python make_sample.py
+Run: uv run xsltomermaid-sample
 """
 
 from __future__ import annotations
 
 from openpyxl import Workbook
 
-from excel_to_mermaid import EXPECTED_HEADERS
+from .excel_to_mermaid import EXPECTED_HEADERS
 
 # schema, table, order, name, type, len, prec, scale, null, id, comp, pk, fk, default, computed, collation, desc
 ROWS = [

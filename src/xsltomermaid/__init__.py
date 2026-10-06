@@ -1,0 +1,1 @@
+"""Excel schema to Mermaid diagram application."""

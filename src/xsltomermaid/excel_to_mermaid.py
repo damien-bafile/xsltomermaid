@@ -842,7 +842,7 @@ if __name__ == "__main__":  # pragma: no cover
     import sys
 
     if len(sys.argv) < 2:
-        print("Usage: python excel_to_mermaid.py <file.xlsx>")
+        print("Usage: python -m xsltomermaid.excel_to_mermaid <file.xlsx>")
         raise SystemExit(1)
     _schema, _mermaid = workbook_to_mermaid(sys.argv[1])
     print(_mermaid)

@@ -21,16 +21,16 @@ ONEFILE = os.environ.get("XSLTOMERMAID_ONEFILE", "1") != "0"
 
 # Bundle the vendored mermaid.js and the app icon next to the app.
 datas = [
-    ("vendor/mermaid.min.js", "vendor"),
-    ("assets/app_icon.ico", "assets"),
-    ("assets/app_icon.png", "assets"),
+    ("src/xsltomermaid/vendor/mermaid.min.js", "vendor"),
+    ("src/xsltomermaid/assets/app_icon.ico", "assets"),
+    ("src/xsltomermaid/assets/app_icon.png", "assets"),
 ]
 
-ICON = "assets/app_icon.ico"
+ICON = "src/xsltomermaid/assets/app_icon.ico"
 
 a = Analysis(
-    ["main.py"],
-    pathex=[],
+    ["src/xsltomermaid/launcher.py"],
+    pathex=["src"],
     binaries=[],
     datas=datas,
     # python_calamine (the fast xlsx reader) is imported lazily inside a

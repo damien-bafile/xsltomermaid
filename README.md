@@ -46,31 +46,32 @@ creates and manages it from `pyproject.toml`/`uv.lock`.
 
 ```bash
 uv sync            # install dependencies (incl. dev tools) into .venv
-uv run main.py     # launch the GUI
+uv run xsltomermaid  # launch the GUI
 ```
 
 Generate a sample workbook to try it out:
 
 ```bash
-uv run make_sample.py   # writes sample_schema.xlsx
-uv run main.py          # then drag sample_schema.xlsx onto the window
+uv run xsltomermaid-sample  # writes sample_schema.xlsx
+uv run xsltomermaid          # then drag sample_schema.xlsx onto the window
 ```
 
 You can also pass a file to auto-load on startup:
 
 ```bash
-uv run main.py sample_schema.xlsx
+uv run xsltomermaid sample_schema.xlsx
 ```
 
-> Prefer plain pip? `pip install -r requirements.txt` still works; `requirements.txt`
-> mirrors the runtime dependencies in `pyproject.toml`.
+For a plain pip install, use `pip install .`. If you manage dependencies separately,
+`pip install -r requirements.txt` installs the runtime dependencies without the CLI
+entry points.
 
 ## Command line
 
 Generate the diagram without the GUI:
 
 ```bash
-uv run excel_to_mermaid.py sample_schema.xlsx
+uv run python -m xsltomermaid.excel_to_mermaid sample_schema.xlsx
 ```
 
 ## Screenshots (headless self-test)
@@ -81,15 +82,15 @@ display. Both modes use Qt's offscreen platform, so no screen is needed.
 Screenshot the **whole window** (data table + Mermaid source):
 
 ```bash
-QT_QPA_PLATFORM=offscreen uv run main.py sample_schema.xlsx --screenshot window.png
+QT_QPA_PLATFORM=offscreen uv run xsltomermaid sample_schema.xlsx --screenshot window.png
 ```
 
 Screenshot the **rendered ER diagram** itself (real boxes-and-arrows), as PNG or
 SVG by extension:
 
 ```bash
-QT_QPA_PLATFORM=offscreen uv run main.py sample_schema.xlsx --screenshot-diagram diagram.png
-QT_QPA_PLATFORM=offscreen uv run main.py sample_schema.xlsx --screenshot-diagram diagram.svg
+QT_QPA_PLATFORM=offscreen uv run xsltomermaid sample_schema.xlsx --screenshot-diagram diagram.png
+QT_QPA_PLATFORM=offscreen uv run xsltomermaid sample_schema.xlsx --screenshot-diagram diagram.svg
 ```
 
 The diagram is rendered by the vendored `mermaid.js` in a headless `QWebEngineView`,
@@ -120,14 +121,16 @@ erDiagram
 
 | File | Purpose |
 |------|---------|
-| `excel_to_mermaid.py` | Pure-Python core: read the sheet, build the schema model, emit Mermaid. No Qt required. |
-| `main.py` | PySide6 GUI with drag-and-drop and the `--screenshot*` CLI modes. |
-| `diagram_view.py` | Renders the Mermaid diagram in a `QWebEngineView` and exports it as SVG/PNG. |
-| `vendor/mermaid.min.js` | Locally bundled Mermaid (MIT) so rendering works offline. |
-| `make_sample.py` | Writes a small `sample_schema.xlsx` for testing. |
-| `test_excel_to_mermaid.py` | Tests for the core (no Qt needed). |
-| `test_screenshot.py` | Headless tests — screenshots the window and the rendered diagram. |
-| `pyproject.toml` / `uv.lock` | uv project definition and locked dependencies. |
+| `src/xsltomermaid/excel_to_mermaid.py` | Pure-Python core: read the sheet, build the schema model, emit Mermaid. No Qt required. |
+| `src/xsltomermaid/main.py` | PySide6 GUI with drag-and-drop and the `--screenshot*` CLI modes. |
+| `src/xsltomermaid/diagram_view.py` | Renders the Mermaid diagram in a `QWebEngineView` and exports it as SVG/PNG. |
+| `src/xsltomermaid/services.py` | Application services for coordinating schema import workflows. |
+| `src/xsltomermaid/assets/` | Packaged application icons. |
+| `src/xsltomermaid/vendor/mermaid.min.js` | Locally bundled Mermaid (MIT) so rendering works offline. |
+| `src/xsltomermaid/make_sample.py` | Writes a small `sample_schema.xlsx` for testing. |
+| `tests/test_excel_to_mermaid.py` | Tests for the core (no Qt needed). |
+| `tests/test_screenshot.py` | Headless tests — screenshots the window and the rendered diagram. |
+| `pyproject.toml` / `uv.lock` | Package definition and locked dependencies. |
 
 ## Tests
 

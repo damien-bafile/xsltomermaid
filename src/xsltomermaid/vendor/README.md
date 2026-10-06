@@ -14,5 +14,5 @@ To update, replace the file with a newer UMD build, e.g. via npm:
 ```bash
 npm pack mermaid@<version>
 tar xzf mermaid-<version>.tgz
-cp package/dist/mermaid.min.js vendor/mermaid.min.js
+cp package/dist/mermaid.min.js src/xsltomermaid/vendor/mermaid.min.js
 ```

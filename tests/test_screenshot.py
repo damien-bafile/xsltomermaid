@@ -3,8 +3,7 @@
 Runs Qt with the offscreen platform so it works in CI with no display. The test
 asserts the window actually painted something (a PNG of a sensible size).
 
-Run: QT_QPA_PLATFORM=offscreen python test_screenshot.py
- or: uv run --extra – ...  (see README); pytest also picks it up.
+Run: QT_QPA_PLATFORM=offscreen uv run pytest tests/test_screenshot.py
 """
 
 from __future__ import annotations
@@ -31,13 +30,13 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-import main as app_module  # noqa: E402
-from make_sample import ROWS  # noqa: E402
+from xsltomermaid import main as app_module  # noqa: E402
+from xsltomermaid.make_sample import ROWS  # noqa: E402
 
 
 def test_fit_scale_caps_large_exports():
     """A huge diagram at high scale is clamped to stay within the size caps."""
-    from diagram_view import MAX_PNG_DIM, MAX_PNG_PIXELS, _fit_scale
+    from xsltomermaid.diagram_view import MAX_PNG_DIM, MAX_PNG_PIXELS, _fit_scale
 
     # Small diagram: requested scale is kept as-is.
     assert _fit_scale(400, 300, 2.0) == 2.0
@@ -54,7 +53,7 @@ def test_fit_scale_caps_large_exports():
 
 
 def test_render_style_defaults_to_left_to_right():
-    from diagram_view import RenderStyle
+    from xsltomermaid.diagram_view import RenderStyle
 
     assert RenderStyle().layout_direction == "LR"
 
@@ -67,7 +66,7 @@ def test_diagram_options_bar_constructs_headlessly():
 
 
 def test_column_selector_marks_primary_and_foreign_keys():
-    from excel_to_mermaid import Column, Table
+    from xsltomermaid.excel_to_mermaid import Column, Table
 
     app = QApplication.instance() or QApplication([])
     selector = app_module.ColumnSelector()
@@ -135,7 +134,7 @@ def test_sql_query_dock_is_fixed_on_right_and_copyable():
     ],
 )
 def test_column_sorting_preserves_selection_and_source(mode, pk, fk, expected):
-    from excel_to_mermaid import Column, Schema, Table, filter_columns, generate_mermaid
+    from xsltomermaid.excel_to_mermaid import Column, Schema, Table, filter_columns, generate_mermaid
 
     app = QApplication.instance() or QApplication([])
     table = Table("dbo", "Example", [
@@ -192,7 +191,7 @@ def test_extracted_data_header_sorting_is_numeric_and_non_destructive():
 
 
 def test_diagram_zoom_label_tracks_webengine_zoom():
-    import diagram_view
+    import xsltomermaid.diagram_view as diagram_view
     from PySide6.QtTest import QTest
 
     if not diagram_view.WEBENGINE_AVAILABLE:
@@ -210,8 +209,8 @@ def test_diagram_zoom_label_tracks_webengine_zoom():
 
 
 def test_schema_to_drawio_creates_table_vertices_and_edges():
-    import diagram_view
-    from excel_to_mermaid import build_schema
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import build_schema
 
     records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
     schema = build_schema(records)
@@ -232,7 +231,7 @@ def test_schema_to_drawio_creates_table_vertices_and_edges():
 
 
 def test_svg_dimensions_handles_fractional_and_exponent_sizes():
-    import diagram_view
+    import xsltomermaid.diagram_view as diagram_view
 
     w, h = diagram_view._svg_dimensions('<svg width=".5" height="1e3"></svg>')
     assert w == 0.5
@@ -253,8 +252,8 @@ def test_svg_dimensions_handles_fractional_and_exponent_sizes():
 
 
 def test_schema_to_drawio_dark_variant():
-    import diagram_view
-    from excel_to_mermaid import Relationship, Schema, Table
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
 
     schema = Schema(
         tables=[Table("dbo", "A"), Table("dbo", "B")],
@@ -279,8 +278,8 @@ def test_schema_to_drawio_dark_variant():
 
 
 def test_schema_to_drawio_includes_table_names_and_fk_labels():
-    import diagram_view
-    from excel_to_mermaid import build_schema
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import build_schema
 
     records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
     schema = build_schema(records)
@@ -300,8 +299,8 @@ def test_schema_to_drawio_includes_table_names_and_fk_labels():
 def test_schema_to_excalidraw_scene_is_valid_and_bound():
     import json
 
-    import diagram_view
-    from excel_to_mermaid import build_schema
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import build_schema
 
     records = [dict(zip(app_module.EXPECTED_HEADERS, row)) for row in ROWS]
     schema = build_schema(records)
@@ -336,8 +335,8 @@ def test_schema_to_excalidraw_scene_is_valid_and_bound():
 def test_schema_to_excalidraw_relationship_matching_is_case_insensitive():
     import json
 
-    import diagram_view
-    from excel_to_mermaid import Relationship, Schema, Table
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
 
     schema = Schema(
         tables=[Table("dbo", "Customer"), Table("dbo", "Order")],
@@ -351,8 +350,8 @@ def test_schema_to_excalidraw_relationship_matching_is_case_insensitive():
 def test_schema_to_excalidraw_dark_mode():
     import json
 
-    import diagram_view
-    from excel_to_mermaid import Relationship, Schema, Table
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
 
     schema = Schema(
         tables=[Table("dbo", "A"), Table("dbo", "B")],
@@ -371,8 +370,8 @@ def test_schema_to_excalidraw_dark_mode():
 def test_schema_to_excalidraw_spacing_grows_with_label_length():
     import json
 
-    import diagram_view
-    from excel_to_mermaid import Relationship, Schema, Table
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
 
     def gap(label):
         schema = Schema(
@@ -389,8 +388,8 @@ def test_schema_to_excalidraw_spacing_grows_with_label_length():
 
 
 def test_schema_to_drawio_spacing_grows_with_label_length():
-    import diagram_view
-    from excel_to_mermaid import Relationship, Schema, Table
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
 
     def gap(label):
         schema = Schema(
@@ -411,8 +410,8 @@ def test_schema_to_drawio_spacing_grows_with_label_length():
 
 
 def test_schema_to_drawio_relationship_matching_is_case_insensitive():
-    import diagram_view
-    from excel_to_mermaid import Relationship, Schema, Table
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
 
     schema = Schema(
         tables=[Table("dbo", "Customer"), Table("dbo", "Order")],
@@ -433,8 +432,8 @@ def test_schema_to_drawio_relationship_matching_is_case_insensitive():
 
 
 def test_schema_to_drawio_qualified_names_avoid_ambiguous_table_matches():
-    import diagram_view
-    from excel_to_mermaid import Relationship, Schema, Table
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
 
     schema = Schema(
         tables=[
@@ -455,8 +454,8 @@ def test_schema_to_drawio_qualified_names_avoid_ambiguous_table_matches():
 
 
 def test_schema_to_drawio_qualified_case_collision_is_ambiguous():
-    import diagram_view
-    from excel_to_mermaid import Relationship, Schema, Table
+    import xsltomermaid.diagram_view as diagram_view
+    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
 
     schema = Schema(
         tables=[Table("dbo", "Customer"), Table("DBO", "customer"), Table("dbo", "Order")],
@@ -483,7 +482,7 @@ def _png_size(path: str) -> tuple[int, int]:
 def _ensure_sample(path: str):
     from openpyxl import Workbook
 
-    from excel_to_mermaid import EXPECTED_HEADERS
+    from xsltomermaid.excel_to_mermaid import EXPECTED_HEADERS
 
     wb = Workbook()
     ws = wb.active
@@ -549,7 +548,7 @@ def test_export_drawio_checks_schema_before_prompt(monkeypatch):
 
 
 def test_large_export_warns_but_does_not_block(monkeypatch):
-    from excel_to_mermaid import Schema, Table
+    from xsltomermaid.excel_to_mermaid import Schema, Table
 
     app = QApplication.instance() or QApplication([])
     window = app_module.MainWindow()
@@ -617,7 +616,7 @@ def test_export_rendered_format_requires_webengine(monkeypatch, tmp_path):
 
 def test_diagram_screenshot(tmp_path):
     """Render the actual Mermaid ER diagram to PNG and SVG (needs WebEngine)."""
-    import diagram_view
+    import xsltomermaid.diagram_view as diagram_view
 
     if not diagram_view.WEBENGINE_AVAILABLE:
         pytest.skip("PySide6 WebEngine not available")
@@ -769,7 +768,7 @@ def test_trace_path_disconnected_keeps_selection_and_offers_no_undo(tmp_path):
 
 
 def test_large_render_warning_asks_once_per_selection(monkeypatch):
-    from excel_to_mermaid import Column, Schema, Table
+    from xsltomermaid.excel_to_mermaid import Column, Schema, Table
 
     app = QApplication.instance() or QApplication([])
     window = app_module.MainWindow()
@@ -806,7 +805,7 @@ def test_large_render_warning_asks_once_per_selection(monkeypatch):
 
 
 def test_empty_load_reports_no_table_data():
-    from excel_to_mermaid import Schema
+    from xsltomermaid.excel_to_mermaid import Schema
 
     app = QApplication.instance() or QApplication([])
     window = app_module.MainWindow()
@@ -820,7 +819,7 @@ def test_empty_load_reports_no_table_data():
 
 def _window_with_schema(tables, rels):
     """A MainWindow with an in-memory schema loaded (no file, no render)."""
-    from excel_to_mermaid import Schema, Table
+    from xsltomermaid.excel_to_mermaid import Schema, Table
 
     app = QApplication.instance() or QApplication([])
     window = app_module.MainWindow()
@@ -831,7 +830,7 @@ def _window_with_schema(tables, rels):
 
 def _diamond():
     """A→B, A→C, B→D, C→D — two equally short A→D paths."""
-    from excel_to_mermaid import Relationship
+    from xsltomermaid.excel_to_mermaid import Relationship
 
     return ["A", "B", "C", "D"], [
         Relationship("A", "B", "ab"),
@@ -842,7 +841,7 @@ def _diamond():
 
 
 def _abcd_chain():
-    from excel_to_mermaid import Relationship
+    from xsltomermaid.excel_to_mermaid import Relationship
 
     return ["A", "B", "C", "D", "E"], [
         Relationship("A", "B", "ab"),
@@ -954,7 +953,7 @@ def _set_related_direction(window, value):
 
 def _hub_schema(children=12):
     """One parent H referencing `children` child tables (a fan-out hub)."""
-    from excel_to_mermaid import Relationship
+    from xsltomermaid.excel_to_mermaid import Relationship
 
     kids = [f"C{i}" for i in range(children)]
     rels = [Relationship("H", kid, "fk") for kid in kids]
@@ -1041,7 +1040,7 @@ def test_module_import_sets_webengine_flags_for_cli_mode():
         (
             "import os, sys; "
             "sys.argv=['main.py','sample.xlsx','--screenshot-diagram','diagram.png']; "
-            "import main; "
+            "import xsltomermaid.main; "
             "print(os.environ.get('QT_QPA_PLATFORM','')); "
             "print(os.environ.get('QTWEBENGINE_DISABLE_SANDBOX','')); "
             "print(os.environ.get('QTWEBENGINE_CHROMIUM_FLAGS','')); "

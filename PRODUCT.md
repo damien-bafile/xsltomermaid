@@ -85,16 +85,16 @@ schema-to-diagram converter with Mermaid as its rendering engine.
 ## Brand Commitments
 
 - Name: **xsltomermaid** (app window title: "Excel Schema → Mermaid ER Diagram").
-- App icon assets exist: `assets/app_icon.svg`, `assets/app_icon.png`, `assets/app_icon.ico`.
+- App icon assets exist: `src/xsltomermaid/assets/app_icon.svg`, `src/xsltomermaid/assets/app_icon.png`, `src/xsltomermaid/assets/app_icon.ico`.
 - No further binding voice, personality, or identity constraints have been established.
 
 ## Evidence on Hand
 
 - `README.md` — accurate description of behavior, input contract, and workflows.
-- `make_sample.py` — generates a real sample workbook (`sample_schema.xlsx`) for trying the
+- `src/xsltomermaid/make_sample.py` — generates a real sample workbook (`sample_schema.xlsx`) for trying the
   tool; the example ER output in the README is genuine.
-- Test suite: `test_excel_to_mermaid.py` (core), `test_screenshot.py` (headless GUI +
-  rendered-diagram capture), `test_selection_preset.py`.
+- Test suite: `tests/test_excel_to_mermaid.py` (core), `tests/test_screenshot.py` (headless GUI +
+  rendered-diagram capture), `tests/test_selection_preset.py`.
 - No customer names, testimonials, benchmarks, pricing, or usage claims exist — future work
   must not fabricate any.
 

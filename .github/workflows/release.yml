@@ -48,7 +48,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          uv run python make_sample.py
+          uv run xsltomermaid-sample
           # Windowed GUI exe: Start-Process -Wait so PowerShell blocks until it exits.
           $p = Start-Process -FilePath ".\dist\xsltomermaid.exe" `
             -ArgumentList "sample_schema.xlsx", "--screenshot", "window.png" `

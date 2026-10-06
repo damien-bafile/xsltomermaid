@@ -64,8 +64,8 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 def resource_path(relative: str) -> Path:
     """Resolve a bundled data file, both in dev and inside a PyInstaller build.
 
-    When frozen, PyInstaller unpacks data files under ``sys._MEIPASS``; in a normal
-    checkout they sit next to this module.
+    When frozen, PyInstaller unpacks data files under ``sys._MEIPASS``; otherwise
+    they are installed alongside this package.
     """
     base = getattr(sys, "_MEIPASS", None)
     if base:

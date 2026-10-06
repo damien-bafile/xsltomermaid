@@ -1,6 +1,6 @@
 """Render ``assets/app_icon.svg`` to the PNG + multi-size ICO the app uses.
 
-Run:  python make_icon.py   (needs PySide6; QtSvg does the rasterising)
+Run:  uv run python -m xsltomermaid.make_icon (needs PySide6; QtSvg does the rasterising)
 
 Outputs:
     assets/app_icon.png   256x256 PNG (window icon on Linux/macOS, previews)

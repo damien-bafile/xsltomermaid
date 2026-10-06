@@ -1,6 +1,6 @@
 """Qt (PySide6) desktop app: drag an Excel schema file in, get a Mermaid ER diagram.
 
-Run with:  python main.py
+Run with:  uv run xsltomermaid
 """
 
 from __future__ import annotations
@@ -98,30 +98,29 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from diagram_view import (
+from .diagram_view import (
     DiagramView,
     RenderStyle,
     resource_path,
     schema_to_drawio,
     schema_to_excalidraw,
 )
-from excel_to_mermaid import (
+from .excel_to_mermaid import (
     EXPECTED_HEADERS,
     DiagramOptions,
     Schema,
     Table,
-    build_schema,
     filter_columns,
     filter_schema,
     generate_mermaid,
-    read_rows,
     related_tables,
     route_paths,
     unresolved_foreign_keys,
     wrap_mermaid_html,
 )
-from make_sample import write_sample
-from selection_preset import dump_selection_toml, load_selection_toml
+from .make_sample import write_sample
+from .selection_preset import dump_selection_toml, load_selection_toml
+from .services import SchemaImportService
 
 # Above this many tables we don't auto-render the whole diagram (it's slow and
 # Mermaid chokes); the user picks a subset instead.
@@ -483,27 +482,25 @@ class LoadWorker(QThread):
     loaded = Signal(object, object, str)  # rows, schema, mermaid_text
     failed = Signal(str)  # error message
 
-    def __init__(self, path: str, parent=None):
+    def __init__(self, path: str, parent=None, importer=None):
         super().__init__(parent)
         self._path = path
+        self._importer = importer or SchemaImportService()
 
     def run(self):  # noqa: D401 - QThread entry point
         try:
-            self.staged.emit("Reading file…")
-            rows = read_rows(
-                self._path,
-                progress=lambda fraction: self.progressed.emit(int(fraction * 50)),
+            previous_stage = None
+
+            def report_progress(stage: str, percent: int) -> None:
+                nonlocal previous_stage
+                if stage != previous_stage:
+                    self.staged.emit(stage)
+                    previous_stage = stage
+                self.progressed.emit(percent)
+
+            rows, schema, mermaid_text = self._importer.load(
+                self._path, report_progress
             )
-            self.staged.emit("Building schema…")
-            schema = build_schema(
-                rows,
-                progress=lambda fraction: self.progressed.emit(
-                    50 + int(fraction * 40)
-                ),
-            )
-            self.staged.emit("Generating diagram…")
-            mermaid_text = generate_mermaid(schema)
-            self.progressed.emit(95)
             self.loaded.emit(rows, schema, mermaid_text)
         except Exception as exc:  # noqa: BLE001 - surface any parse error to the UI
             self.failed.emit(str(exc))
@@ -1502,6 +1499,7 @@ class MainWindow(QMainWindow):
         self._rendering: bool = False
         self._diagram_rendered: bool = False
         self._drawio_schema: Schema | None = None
+        self._importer = SchemaImportService()
 
         central = QWidget()
         outer = QVBoxLayout(central)
@@ -1936,9 +1934,7 @@ class MainWindow(QMainWindow):
     def load_file(self, path: str):
         """Load a file synchronously (used by tests and the CLI)."""
         try:
-            rows = read_rows(path)
-            schema = build_schema(rows)
-            mermaid_text = generate_mermaid(schema)
+            rows, schema, mermaid_text = self._importer.load(path)
         except Exception as exc:  # noqa: BLE001 - surface any parse error to the user
             QMessageBox.critical(self, "Could not read file", str(exc))
             return
@@ -1958,7 +1954,7 @@ class MainWindow(QMainWindow):
         self._pending_path = path
         self._set_loading(True, os.path.basename(path))
 
-        worker = LoadWorker(path, self)
+        worker = LoadWorker(path, self, self._importer)
         worker.progressed.connect(self._progress.setValue)
         worker.staged.connect(self._status.setText)
         worker.loaded.connect(self._on_loaded)

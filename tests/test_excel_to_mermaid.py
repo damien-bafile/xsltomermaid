@@ -1,9 +1,9 @@
 """Tests for the pure-Python core (no Qt / no Excel needed).
 
-Run: python test_excel_to_mermaid.py   (or: python -m pytest test_excel_to_mermaid.py)
+Run: python -m pytest tests/test_excel_to_mermaid.py
 """
 
-from excel_to_mermaid import (
+from xsltomermaid.excel_to_mermaid import (
     DiagramOptions,
     Relationship,
     Schema,
@@ -125,7 +125,7 @@ def test_related_tables_excludes_selected_and_is_case_insensitive():
 
 
 def test_unresolved_foreign_keys():
-    from excel_to_mermaid import Column, unresolved_foreign_keys
+    from xsltomermaid.excel_to_mermaid import Column, unresolved_foreign_keys
 
     a = Table("dbo", "A", [Column("dbo", "A", 1, "AID", "int", is_primary_key=True)])
     b = Table(
@@ -219,7 +219,7 @@ def test_filter_schema_include_related_pulls_in_neighbours():
 def test_filter_schema_include_related_is_single_layer():
     # Chain: A -> B -> C. Selecting A with related should pull in B (one hop),
     # but not C (which is two hops away), regardless of relationship order.
-    from excel_to_mermaid import Relationship, Schema, Table
+    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
 
     schema = Schema(
         tables=[Table("", "A"), Table("", "B"), Table("", "C")],
@@ -258,6 +258,39 @@ def test_filter_columns_drops_selected_columns():
 def test_filter_columns_empty_is_noop():
     schema = build_schema(SAMPLE_ROWS)
     assert filter_columns(schema, set()) is schema
+
+
+def test_schema_import_service_coordinates_import_steps(monkeypatch):
+    from xsltomermaid import services
+
+    rows = [{"TableName": "Customer"}]
+    schema = Schema()
+    monkeypatch.setattr(
+        services,
+        "read_rows",
+        lambda path, progress: (progress(0.5), rows)[1],
+    )
+    monkeypatch.setattr(
+        services,
+        "build_schema",
+        lambda values, progress: (progress(0.75), schema)[1],
+    )
+    monkeypatch.setattr(services, "generate_mermaid", lambda value: "erDiagram\n")
+    progress = []
+
+    result = services.SchemaImportService().load(
+        "schema.xlsx", lambda stage, percent: progress.append((stage, percent))
+    )
+
+    assert result == (rows, schema, "erDiagram\n")
+    assert progress == [
+        ("Reading file…", 0),
+        ("Reading file…", 25),
+        ("Building schema…", 50),
+        ("Building schema…", 80),
+        ("Generating diagram…", 90),
+        ("Generating diagram…", 95),
+    ]
 
 
 def test_generate_mermaid():
