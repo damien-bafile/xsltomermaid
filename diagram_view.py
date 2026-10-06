@@ -787,6 +787,14 @@ class DiagramView(QWidget):
             )
             self._view.loadFinished.connect(self._on_load_finished)
             layout.addWidget(self._view)
+            self._zoom_label = QLabel("Zoom: 100%")
+            self._zoom_label.setAlignment(Qt.AlignRight)
+            self._zoom_label.setToolTip("Ctrl+scroll to zoom the diagram.")
+            layout.addWidget(self._zoom_label)
+            self._zoom_timer = QTimer(self)
+            self._zoom_timer.setInterval(200)
+            self._zoom_timer.timeout.connect(self._update_zoom_label)
+            self._zoom_timer.start()
         else:
             label = QLabel(
                 "The rendered-diagram view needs PySide6's WebEngine module.\n"
@@ -797,6 +805,9 @@ class DiagramView(QWidget):
             label.setWordWrap(True)
             # Use the palette text colour so it stays legible in dark mode.
             layout.addWidget(label)
+
+    def _update_zoom_label(self):
+        self._zoom_label.setText(f"Zoom: {self._view.zoomFactor():.0%}")
 
     # -- rendering ---------------------------------------------------------
     def set_diagram(self, mermaid_text: str, style: RenderStyle | None = None):
@@ -1028,6 +1039,8 @@ class DiagramView(QWidget):
         return path
 
     def cleanup(self):
+        if self._view is not None:
+            self._zoom_timer.stop()
         if self._workdir:
             shutil.rmtree(self._workdir, ignore_errors=True)
             self._workdir = None

@@ -101,6 +101,12 @@ def test_column_selector_marks_primary_and_foreign_keys():
 def test_sql_query_dock_is_fixed_on_right_and_copyable():
     app = QApplication.instance() or QApplication([])
     window = app_module.MainWindow()
+    window.show()
+    app.processEvents()
+    assert window._sql_dock.isHidden()
+    assert not window._sql_dock.toggleViewAction().isChecked()
+    window._sql_dock.toggleViewAction().trigger()
+    assert window._sql_dock.isVisible()
 
     assert window.dockWidgetArea(window._sql_dock) == app_module.Qt.RightDockWidgetArea
     assert window._sql_dock.allowedAreas() == app_module.Qt.RightDockWidgetArea
@@ -112,6 +118,94 @@ def test_sql_query_dock_is_fixed_on_right_and_copyable():
     window.copy_sql_query()
     assert app.clipboard().text() == app_module.SQL_SERVER_SCHEMA_QUERY
     window._diagram_view.cleanup()
+    window.close()
+    del app
+
+
+@pytest.mark.parametrize(
+    "mode,pk,fk,expected",
+    [
+        ("order", False, False, ["zeta", "Id", "ParentId", "alpha"]),
+        ("name", False, False, ["alpha", "Id", "ParentId", "zeta"]),
+        ("name_desc", False, False, ["zeta", "ParentId", "Id", "alpha"]),
+        ("type", False, False, ["alpha", "Id", "ParentId", "zeta"]),
+        ("name", True, False, ["Id", "alpha", "ParentId", "zeta"]),
+        ("name", False, True, ["ParentId", "alpha", "Id", "zeta"]),
+        ("name_desc", True, True, ["Id", "ParentId", "zeta", "alpha"]),
+    ],
+)
+def test_column_sorting_preserves_selection_and_source(mode, pk, fk, expected):
+    from excel_to_mermaid import Column, Schema, Table, filter_columns, generate_mermaid
+
+    app = QApplication.instance() or QApplication([])
+    table = Table("dbo", "Example", [
+        Column("dbo", "Example", 1, "zeta", "varchar"),
+        Column("dbo", "Example", 2, "Id", "int", is_primary_key=True),
+        Column("dbo", "Example", 3, "ParentId", "int",
+               foreign_key_reference="dbo.Parent.Id"),
+        Column("dbo", "Example", 4, "alpha", "bit"),
+    ])
+    selector = app_module.ColumnSelector()
+    selector.set_tables([table])
+    selector._tree.topLevelItem(0).child(0).setCheckState(0, app_module.Qt.Unchecked)
+    selector._filter.setText("Id")
+    selector._sort.setCurrentIndex(selector._sort.findData(mode))
+    selector._pk_first.setChecked(pk)
+    selector._fk_first.setChecked(fk)
+
+    assert [c.name for c in selector.ordered_columns(table)] == expected
+    children = list(selector._children(selector._tree.topLevelItem(0)))
+    assert [c.text(0).split("  [")[0] for c in children] == expected
+    assert next(c for c in children if c.text(0) == "zeta").checkState(0) == app_module.Qt.Unchecked
+    assert next(c for c in children if c.text(0) == "alpha").isHidden()
+    assert selector.excluded_pairs() == {("example", "zeta")}
+    schema = selector.sorted_schema(filter_columns(Schema([table], []), selector.excluded_pairs()))
+    assert [c.name for c in schema.tables[0].columns] == [n for n in expected if n != "zeta"]
+    mermaid = generate_mermaid(schema)
+    positions = [mermaid.index(f" {name}") for name in expected if name != "zeta"]
+    assert positions == sorted(positions)
+    assert [c.name for c in table.columns] == ["zeta", "Id", "ParentId", "alpha"]
+    del app
+
+
+def test_extracted_data_header_sorting_is_numeric_and_non_destructive():
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    rows = [
+        [str(order) if h == "ColumnOrder" else name if h == "ColumnName" else ""
+         for h in app_module.EXPECTED_HEADERS]
+        for order, name in [(10, "zeta"), (2, "Alpha"), (1, "beta")]
+    ]
+    window._table_model.set_rows(rows)
+    order_column = app_module.EXPECTED_HEADERS.index("ColumnOrder")
+    name_column = app_module.EXPECTED_HEADERS.index("ColumnName")
+    proxy = window._table.model()
+    window._table.sortByColumn(order_column, app_module.Qt.AscendingOrder)
+    assert [proxy.index(i, order_column).data() for i in range(3)] == ["1", "2", "10"]
+    window._table.sortByColumn(order_column, app_module.Qt.DescendingOrder)
+    assert [proxy.index(i, order_column).data() for i in range(3)] == ["10", "2", "1"]
+    window._table.sortByColumn(name_column, app_module.Qt.AscendingOrder)
+    assert [proxy.index(i, name_column).data() for i in range(3)] == ["Alpha", "beta", "zeta"]
+    assert window._table_model._rows == rows
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_diagram_zoom_label_tracks_webengine_zoom():
+    import diagram_view
+    from PySide6.QtTest import QTest
+
+    if not diagram_view.WEBENGINE_AVAILABLE:
+        pytest.skip("PySide6 WebEngine not available")
+    app = QApplication.instance() or QApplication([])
+    view = diagram_view.DiagramView()
+    assert view._zoom_label.text() == "Zoom: 100%"
+    for zoom, text in [(1.25, "125%"), (0.5, "50%"), (1.0, "100%")]:
+        view._view.setZoomFactor(zoom)
+        QTest.qWait(250)
+        assert view._zoom_label.text() == f"Zoom: {text}"
+    view.cleanup()
+    assert not view._zoom_timer.isActive()
     del app
 
 
