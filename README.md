@@ -27,8 +27,13 @@ DefaultValue | ComputedDefinition | Collation | Description
    **save/load selected tables** as `.toml` presets (including source filename),
    or **preview** it in your browser.
 7. Uses **Left → Right** as the default rendered layout direction.
-8. Shows **PK/FK markers** in the column selector and includes a right-docked,
-   copyable **SQL Server schema query** that produces the columns expected by the app.
+8. Shows **PK/FK markers** in the column selector, with column sorting by name or
+   data type and **PK first / FK first** checkboxes. These choices apply to each
+   diagram table after **Render selected** (PK precedes FK when both are enabled).
+   Click extracted-data column headers to sort ascending or descending.
+9. Shows the diagram's **zoom percentage**; use **Ctrl+scroll** to zoom.
+10. Includes a right-docked, copyable **SQL Server schema query** that produces the
+    expected columns. It is **hidden by default**; open it via **View → T-SQL statement**.
 
 Foreign-key references are parsed flexibly — `dbo.Customer.CustomerID`,
 `Customer.CustomerID`, `Customer(CustomerID)`, and a bare `Customer` all resolve to

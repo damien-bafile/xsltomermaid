@@ -51,6 +51,7 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QEvent,
     QModelIndex,
+    QSortFilterProxyModel,
     Qt,
     QThread,
     QTimer,
@@ -953,6 +954,29 @@ class ColumnSelector(QWidget):
         layout.addWidget(self._filter)
 
         self._tree = QTreeWidget()
+        sort_row = QHBoxLayout()
+        sort_row.addWidget(QLabel("Sort columns:"))
+        self._sort = QComboBox()
+        for label, value in (
+            ("Original order", "order"),
+            ("Name A–Z", "name"),
+            ("Name Z–A", "name_desc"),
+            ("Data type", "type"),
+        ):
+            self._sort.addItem(label, value)
+        self._sort.currentIndexChanged.connect(self._rebuild_view)
+        sort_row.addWidget(self._sort)
+        self._pk_first = QCheckBox("PK first")
+        self._fk_first = QCheckBox("FK first")
+        for checkbox in (self._pk_first, self._fk_first):
+            checkbox.setToolTip(
+                "Place these key columns above other columns in each table. "
+                "Applies to the diagram after Render selected."
+            )
+            checkbox.toggled.connect(self._rebuild_view)
+            sort_row.addWidget(checkbox)
+        sort_row.addStretch(1)
+        layout.addLayout(sort_row)
         self._tree.setHeaderHidden(True)
         self._tree.setUniformRowHeights(True)
         self._tree.itemChanged.connect(self._on_item_changed)
@@ -1025,6 +1049,32 @@ class ColumnSelector(QWidget):
             return [self._tables[index]]
         return self._tables
 
+    def ordered_columns(self, table: Table):
+        columns = list(table.columns)
+        mode = self._sort.currentData()
+        if mode in ("name", "name_desc"):
+            columns.sort(key=lambda c: c.name.casefold(), reverse=mode == "name_desc")
+        elif mode == "type":
+            columns.sort(key=lambda c: (c.data_type.casefold(), c.name.casefold()))
+        # Stable grouping retains the chosen order within each key group.
+        columns.sort(
+            key=lambda c: (
+                0 if self._pk_first.isChecked() and c.is_primary_key
+                else 1 if self._fk_first.isChecked() and c.foreign_key_reference
+                else 2
+            )
+        )
+        return columns
+
+    def sorted_schema(self, schema: Schema) -> Schema:
+        return Schema(
+            tables=[
+                Table(t.schema, t.name, self.ordered_columns(t))
+                for t in schema.tables
+            ],
+            relationships=schema.relationships,
+        )
+
     def _rebuild_view(self):
         """(Re)build the tree for the current dropdown scope."""
         if not self._tables:
@@ -1080,7 +1130,7 @@ class ColumnSelector(QWidget):
             parent = QTreeWidgetItem(self._tree, [f"{table.name}  ({len(table.columns)})"])
             parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
             parent.setData(0, self._ROLE_KIND, "table")
-            for column in table.columns:
+            for column in self.ordered_columns(table):
                 markers = []
                 if column.is_primary_key:
                     markers.append("PK")
@@ -1408,9 +1458,19 @@ class ExtractedDataModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self._headers)
 
     def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid() or role not in (Qt.DisplayRole, Qt.ToolTipRole):
+        if not index.isValid():
             return None
-        return self._rows[index.row()][index.column()] or None
+        value = self._rows[index.row()][index.column()]
+        if role == Qt.UserRole:
+            if self._headers[index.column()] in ("ColumnOrder", "Length", "Precision", "Scale"):
+                try:
+                    return int(value)
+                except (ValueError, TypeError):
+                    return -1
+            return value.casefold()
+        if role in (Qt.DisplayRole, Qt.ToolTipRole):
+            return value or None
+        return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role != Qt.DisplayRole:
@@ -1501,8 +1561,14 @@ class MainWindow(QMainWindow):
 
         # A model + view (not per-cell widgets) so only visible rows are realised.
         self._table_model = ExtractedDataModel(EXPECTED_HEADERS, self)
+        self._table_proxy = QSortFilterProxyModel(self)
+        self._table_proxy.setSourceModel(self._table_model)
+        self._table_proxy.setSortRole(Qt.UserRole)
         self._table = QTableView()
-        self._table.setModel(self._table_model)
+        self._table.setModel(self._table_proxy)
+        self._table.setSortingEnabled(True)
+        self._table.sortByColumn(-1, Qt.AscendingOrder)
+        self._table.setToolTip("Click a column header to sort; click again to reverse.")
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
         # Keep rows single-line and let long free-text cells elide rather than
@@ -1777,6 +1843,7 @@ class MainWindow(QMainWindow):
         self._sql_dock.setWidget(panel)
         self.addDockWidget(Qt.RightDockWidgetArea, self._sql_dock)
         self.resizeDocks([self._sql_dock], [410], Qt.Horizontal)
+        self._sql_dock.hide()
 
     def copy_sql_query(self):
         """Copy the displayed SQL Server schema query to the clipboard."""
@@ -2182,7 +2249,9 @@ class MainWindow(QMainWindow):
         # Refresh the column picker for the tables now in play, then apply the
         # user's column choices on top of the table filter.
         self._columns.set_tables(filtered.tables)
-        final = filter_columns(filtered, self._columns.excluded_pairs())
+        final = self._columns.sorted_schema(
+            filter_columns(filtered, self._columns.excluded_pairs())
+        )
         self._drawio_schema = final
 
         mermaid_text = generate_mermaid(final, self._options_bar.diagram_options())
