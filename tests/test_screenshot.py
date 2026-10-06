@@ -122,18 +122,17 @@ def test_sql_query_dock_is_fixed_on_right_and_copyable():
 
 
 @pytest.mark.parametrize(
-    "mode,pk,fk,expected",
+    "mode,keys_first,expected",
     [
-        ("order", False, False, ["zeta", "Id", "ParentId", "alpha"]),
-        ("name", False, False, ["alpha", "Id", "ParentId", "zeta"]),
-        ("name_desc", False, False, ["zeta", "ParentId", "Id", "alpha"]),
-        ("type", False, False, ["alpha", "Id", "ParentId", "zeta"]),
-        ("name", True, False, ["Id", "alpha", "ParentId", "zeta"]),
-        ("name", False, True, ["ParentId", "alpha", "Id", "zeta"]),
-        ("name_desc", True, True, ["Id", "ParentId", "zeta", "alpha"]),
+        ("order", False, ["zeta", "Id", "ParentId", "alpha"]),
+        ("name", False, ["alpha", "Id", "ParentId", "zeta"]),
+        ("name_desc", False, ["zeta", "ParentId", "Id", "alpha"]),
+        ("type", False, ["alpha", "Id", "ParentId", "zeta"]),
+        ("name", True, ["Id", "ParentId", "alpha", "zeta"]),
+        ("name_desc", True, ["Id", "ParentId", "zeta", "alpha"]),
     ],
 )
-def test_column_sorting_preserves_selection_and_source(mode, pk, fk, expected):
+def test_column_sorting_preserves_selection_and_source(mode, keys_first, expected):
     from xsltomermaid.excel_to_mermaid import Column, Schema, Table, filter_columns, generate_mermaid
 
     app = QApplication.instance() or QApplication([])
@@ -149,8 +148,7 @@ def test_column_sorting_preserves_selection_and_source(mode, pk, fk, expected):
     selector._tree.topLevelItem(0).child(0).setCheckState(0, app_module.Qt.Unchecked)
     selector._filter.setText("Id")
     selector._sort.setCurrentIndex(selector._sort.findData(mode))
-    selector._pk_first.setChecked(pk)
-    selector._fk_first.setChecked(fk)
+    selector._keys_first.setChecked(keys_first)
 
     assert [c.name for c in selector.ordered_columns(table)] == expected
     children = list(selector._children(selector._tree.topLevelItem(0)))

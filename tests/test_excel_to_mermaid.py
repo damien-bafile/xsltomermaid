@@ -162,6 +162,64 @@ def test_reference_parsing():
     assert _parse_reference_table("Customer(CustomerID)") == "Customer"
     assert _parse_reference_table("Customer") == "Customer"
     assert _parse_reference_table("") is None
+    # A schema-qualified table with "(Column)" — previously misread as "dbo".
+    assert _parse_reference_table("dbo.Customer(CustomerID)") == "Customer"
+    assert _parse_reference_table("dbo.OrderLine(OrderID, LineNo)") == "OrderLine"
+    assert _parse_reference_table("[dbo].[Customer].[CustomerID]") == "Customer"
+
+
+def _row(table, order, column, pk=False, fk=""):
+    return {"SchemaName": "dbo", "TableName": table, "ColumnOrder": order,
+            "ColumnName": column, "DataType": "int", "IsPrimaryKey": int(pk),
+            "IsNullable": int(not pk), "ForeignKeyReference": fk}
+
+
+COMPOSITE_ROWS = [
+    _row("Order", 1, "OrderID", pk=True),
+    # Composite PK where one part is also an FK.
+    _row("OrderLine", 1, "OrderID", pk=True, fk="dbo.Order.OrderID"),
+    _row("OrderLine", 2, "LineNo", pk=True),
+    # A composite FK spread over two columns, plus a second one to the same key.
+    _row("Shipment", 1, "ShipmentID", pk=True),
+    _row("Shipment", 2, "OrderID", fk="dbo.OrderLine.OrderID"),
+    _row("Shipment", 3, "LineNo", fk="dbo.OrderLine.LineNo"),
+    _row("Shipment", 4, "ReturnOrderID", fk="dbo.OrderLine.OrderID"),
+    _row("Shipment", 5, "ReturnLineNo", fk="dbo.OrderLine.LineNo"),
+    # Two separate single-column FKs to one parent stay separate.
+    _row("Audit", 1, "AuditID", pk=True),
+    _row("Audit", 2, "CreatedBy", fk="dbo.Order.OrderID"),
+    _row("Audit", 3, "ModifiedBy", fk="dbo.Order.OrderID"),
+]
+
+
+def test_composite_foreign_keys_become_one_relationship_each():
+    schema = build_schema(COMPOSITE_ROWS)
+    rels = {(r.parent_table, r.child_table, r.label) for r in schema.relationships}
+    assert rels == {
+        ("Order", "OrderLine", "OrderID"),
+        ("OrderLine", "Shipment", "OrderID, LineNo"),
+        ("OrderLine", "Shipment", "ReturnOrderID, ReturnLineNo"),
+        ("Order", "Audit", "CreatedBy"),
+        ("Order", "Audit", "ModifiedBy"),
+    }
+
+
+def test_partial_composite_foreign_key_keeps_its_column():
+    rows = COMPOSITE_ROWS[:3] + [
+        _row("Note", 1, "NoteID", pk=True),
+        _row("Note", 2, "OrderID", fk="dbo.OrderLine.OrderID"),
+    ]
+    rels = build_schema(rows).relationships
+    assert ("OrderLine", "Note", "OrderID") in {
+        (r.parent_table, r.child_table, r.label) for r in rels
+    }
+
+
+def test_composite_keys_in_mermaid():
+    mermaid = generate_mermaid(build_schema(COMPOSITE_ROWS))
+    assert "int OrderID PK,FK" in mermaid
+    assert "int LineNo PK" in mermaid
+    assert 'OrderLine ||--o{ Shipment : "OrderID, LineNo"' in mermaid
 
 
 def test_build_schema_tables_and_columns():

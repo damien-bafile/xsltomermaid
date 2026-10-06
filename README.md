@@ -28,8 +28,8 @@ DefaultValue | ComputedDefinition | Collation | Description
    or **preview** it in your browser.
 7. Uses **Left → Right** as the default rendered layout direction.
 8. Shows **PK/FK markers** in the column selector, with column sorting by name or
-   data type and **PK first / FK first** checkboxes. These choices apply to each
-   diagram table after **Render selected** (PK precedes FK when both are enabled).
+   data type and a **PK, FK first** checkbox (primary keys, then foreign keys).
+   These choices apply to each diagram table after **Render selected**.
    Click extracted-data column headers to sort ascending or descending.
 9. Shows the diagram's **zoom percentage**; use **Ctrl+scroll** to zoom.
 10. Includes a right-docked, copyable **SQL Server schema query** that produces the
