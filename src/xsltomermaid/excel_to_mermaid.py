@@ -355,54 +355,110 @@ def build_schema(
     return Schema(tables=ordered_tables, relationships=relationships)
 
 
-def _parse_reference_table(reference: str) -> str | None:
-    """Extract the referenced table name from a foreign-key reference string.
+_REF_COLUMNS_RE = re.compile(r"^(?P<table>[^(]*)\((?P<columns>[^)]*)\)\s*$")
 
-    Handles ``schema.Table.Column``, ``Table.Column``, ``Table(Column)`` and a
-    bare ``Table``.
+
+def _parse_reference(reference: str) -> tuple[str | None, list[str]]:
+    """Split a foreign-key reference into ``(table, [referenced columns])``.
+
+    Handles ``schema.Table.Column``, ``Table.Column``, ``Table(Column)``,
+    ``schema.Table(ColA, ColB)`` (a composite key in one cell), a bare
+    ``Table``, and SQL-Server-style ``[schema].[Table].[Column]`` quoting.
     """
     ref = _norm(reference)
     if not ref:
-        return None
-    # Strip a trailing "(Column)" part if present.
-    ref = re.split(r"[(\[]", ref, maxsplit=1)[0].strip()
-    if not ref:
-        return None
-    parts = [p for p in re.split(r"[.\s]+", ref) if p]
+        return None, []
+    match = _REF_COLUMNS_RE.match(ref)
+    if match:
+        # "(Column[, Column])" names the columns, so the rest is [schema.]Table.
+        columns = [
+            c for c in (re.sub(r'[\[\]"`]', "", p).strip()
+                        for p in match["columns"].split(","))
+            if c
+        ]
+        ref = match["table"]
+    else:
+        columns = []
+    parts = [p for p in re.split(r"[.\s]+", re.sub(r'[\[\]"`]', "", ref)) if p]
     if not parts:
-        return None
+        return None, columns
+    if match:
+        return parts[-1], columns  # [schema .] TABLE ( columns )
     if len(parts) >= 3:
-        return parts[-2]  # schema . TABLE . column
+        return parts[-2], [parts[-1]]  # schema . TABLE . column
     if len(parts) == 2:
-        return parts[0]  # TABLE . column
-    return parts[0]  # bare table (or table with no column specified)
+        return parts[0], [parts[1]]  # TABLE . column
+    return parts[0], []  # bare table (or table with no column specified)
+
+
+def _parse_reference_table(reference: str) -> str | None:
+    """Extract the referenced table name from a foreign-key reference string."""
+    return _parse_reference(reference)[0]
 
 
 def _derive_relationships(
     tables: list[Table], by_name: dict[str, Table]
 ) -> list[Relationship]:
+    """One relationship per foreign key.
+
+    A composite foreign key arrives as several FK columns in the child, each
+    referencing one column of the parent's composite primary key. Those are
+    merged into a single relationship (labelled ``ColA, ColB``) rather than
+    drawing one parallel edge per column. Separate single-column FKs to the
+    same parent (e.g. ``createdby`` / ``modifiedby``) stay separate edges.
+    """
     seen: set[tuple[str, str, str]] = set()
     relationships: list[Relationship] = []
+
+    def add(parent_label: str, child: str, columns: list[Column]) -> None:
+        label = ", ".join(c.name for c in columns)
+        key = (parent_label.lower(), child.lower(), label.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        relationships.append(
+            Relationship(parent_table=parent_label, child_table=child, label=label)
+        )
+
     for table in tables:
+        # Composite-key candidates, per parent: FK columns in column order
+        # that reference one of the parent's (multi-column) primary key.
+        pending: dict[str, list[tuple[Column, str]]] = {}
+        labels: dict[str, str] = {}
+
+        def flush(parent_key: str) -> None:
+            for column, _ in pending.pop(parent_key, []):
+                add(labels[parent_key], table.name, [column])
+
         for column in table.columns:
             if not column.foreign_key_reference:
                 continue
-            parent_name = _parse_reference_table(column.foreign_key_reference)
+            parent_name, ref_columns = _parse_reference(column.foreign_key_reference)
             if not parent_name:
                 continue
             parent = by_name.get(parent_name.lower())
             parent_label = parent.name if parent else parent_name
-            key = (parent_label.lower(), table.name.lower(), column.name.lower())
-            if key in seen:
+            parent_key = parent_label.lower()
+            pk = {c.name.lower() for c in parent.columns if c.is_primary_key} if parent else set()
+            ref = ref_columns[0].lower() if len(ref_columns) == 1 else ""
+
+            if len(pk) < 2 or ref not in pk:
+                add(parent_label, table.name, [column])
                 continue
-            seen.add(key)
-            relationships.append(
-                Relationship(
-                    parent_table=parent_label,
-                    child_table=table.name,
-                    label=column.name,
-                )
-            )
+
+            labels[parent_key] = parent_label
+            group = pending.setdefault(parent_key, [])
+            if any(r == ref for _, r in group):
+                # The same key column again: a second FK has started, so the
+                # one in progress was partial — keep its columns as-is.
+                flush(parent_key)
+                group = pending.setdefault(parent_key, [])
+            group.append((column, ref))
+            if {r for _, r in group} == pk:
+                add(parent_label, table.name, [c for c, _ in pending.pop(parent_key)])
+
+        for parent_key in list(pending):
+            flush(parent_key)
     return relationships
 
 

@@ -963,15 +963,13 @@ class ColumnSelector(QWidget):
             self._sort.addItem(label, value)
         self._sort.currentIndexChanged.connect(self._rebuild_view)
         sort_row.addWidget(self._sort)
-        self._pk_first = QCheckBox("PK first")
-        self._fk_first = QCheckBox("FK first")
-        for checkbox in (self._pk_first, self._fk_first):
-            checkbox.setToolTip(
-                "Place these key columns above other columns in each table. "
-                "Applies to the diagram after Render selected."
-            )
-            checkbox.toggled.connect(self._rebuild_view)
-            sort_row.addWidget(checkbox)
+        self._keys_first = QCheckBox("PK, FK first")
+        self._keys_first.setToolTip(
+            "Place primary-key columns, then foreign-key columns, above other "
+            "columns in each table. Applies to the diagram after Render selected."
+        )
+        self._keys_first.toggled.connect(self._rebuild_view)
+        sort_row.addWidget(self._keys_first)
         sort_row.addStretch(1)
         layout.addLayout(sort_row)
         self._tree.setHeaderHidden(True)
@@ -1054,13 +1052,12 @@ class ColumnSelector(QWidget):
         elif mode == "type":
             columns.sort(key=lambda c: (c.data_type.casefold(), c.name.casefold()))
         # Stable grouping retains the chosen order within each key group.
-        columns.sort(
-            key=lambda c: (
-                0 if self._pk_first.isChecked() and c.is_primary_key
-                else 1 if self._fk_first.isChecked() and c.foreign_key_reference
+        if self._keys_first.isChecked():
+            columns.sort(
+                key=lambda c: 0 if c.is_primary_key
+                else 1 if c.foreign_key_reference
                 else 2
             )
-        )
         return columns
 
     def sorted_schema(self, schema: Schema) -> Schema:

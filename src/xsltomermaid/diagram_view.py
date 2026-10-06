@@ -58,7 +58,7 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import QColor, QImage, QPainter, QPageSize, QPalette, QPdfWriter
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 
 def resource_path(relative: str) -> Path:
@@ -786,10 +786,12 @@ class DiagramView(QWidget):
                 QWebEngineSettings.LocalContentCanAccessFileUrls, True
             )
             self._view.loadFinished.connect(self._on_load_finished)
-            layout.addWidget(self._view)
+            layout.addWidget(self._view, 1)
             self._zoom_label = QLabel("Zoom: 100%")
-            self._zoom_label.setAlignment(Qt.AlignRight)
+            self._zoom_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._zoom_label.setToolTip("Ctrl+scroll to zoom the diagram.")
+            # Keep the label to a single text line; the view takes the rest.
+            self._zoom_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             layout.addWidget(self._zoom_label)
             self._zoom_timer = QTimer(self)
             self._zoom_timer.setInterval(200)
