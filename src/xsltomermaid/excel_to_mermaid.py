@@ -842,6 +842,18 @@ class DiagramOptions:
     keys_only: bool = False  # show only PK/FK attributes
 
 
+def mermaid_entity_ids(schema: Schema, options: DiagramOptions | None = None) -> dict[str, str]:
+    """``{entity id: table name}`` for the ids :func:`generate_mermaid` writes.
+
+    Lets the GUI map a click on a drawn table back to the table it shows.
+    """
+    opts = options or DiagramOptions()
+    return {
+        _entity_id(t.full_name if opts.prefix_schema else t.name): t.name
+        for t in schema.tables
+    }
+
+
 def generate_mermaid(schema: Schema, options: DiagramOptions | None = None) -> str:
     """Render a :class:`Schema` as a Mermaid ``erDiagram``."""
     opts = options or DiagramOptions()

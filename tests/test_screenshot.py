@@ -1518,3 +1518,61 @@ def test_details_panel_state_is_remembered():
     assert again._tabs.isVisible() and again._tabs.currentWidget() is again._columns
     again._diagram_view.cleanup()
     del app
+
+
+# -- diagram ↔ list selection --------------------------------------------------
+def test_entity_group_ids_parse_back_to_table_ids():
+    from xsltomermaid.diagram_view import entity_id_from_group
+
+    assert entity_id_from_group("entity-Customer-7db3a251-ee0f-5d85-b53f-42db636cc6f9") == "Customer"
+    assert entity_id_from_group(
+        "entity-msdyn_resourcerequirement-3ec22774-e93b-529c-bc12-1dfdb28f8e64"
+    ) == "msdyn_resourcerequirement"
+    assert entity_id_from_group("") is None
+    assert entity_id_from_group("node-1") is None
+
+
+def test_clicking_a_table_in_the_diagram_selects_it(tmp_path):
+    import xsltomermaid.diagram_view as diagram_view
+
+    if not diagram_view.WEBENGINE_AVAILABLE:
+        pytest.skip("PySide6 WebEngine not available")
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window.show()
+    sample = tmp_path / "s.xlsx"
+    _ensure_sample(str(sample))
+    window.load_file(str(sample))
+    view = window._diagram_view
+    assert _wait_for(lambda: view._shell_loaded, 20000)
+    view.current_svg()  # wait for Mermaid to finish drawing
+
+    def click(kind):
+        view._view.page().runJavaScript(
+            "var g=document.querySelector('#container g[id^=\"entity-OrderLine-\"]');"
+            f"g.dispatchEvent(new MouseEvent('{kind}', {{bubbles: true}}));"
+        )
+
+    click("click")
+    assert _wait_for(lambda: window._selector._list.currentItem() is not None
+                     and window._selector._list.currentItem().text() == "OrderLine", 5000)
+    assert window._columns._scope_tables()[0].name == "OrderLine"
+    assert not window._tabs.isVisible()  # single click doesn't open the panel
+    click("dblclick")
+    assert _wait_for(lambda: window._tabs.isVisible(), 5000)
+    assert window._tabs.currentWidget() is window._columns
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_highlighting_a_list_row_highlights_the_drawn_table(monkeypatch):
+    app, window = _window_with_schema(*_diamond())
+    window._entity_to_table = {"A": "A", "B": "B"}
+    seen = []
+    monkeypatch.setattr(window._diagram_view, "highlight_entity", seen.append)
+    window._selector.set_ready(True)
+    window._selector._list.setCurrentRow(1)  # "B"
+    window._selector._list.setCurrentRow(3)  # "D", not drawn
+    assert seen == ["B", ""]
+    window._diagram_view.cleanup()
+    del app

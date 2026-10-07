@@ -83,12 +83,38 @@ def resource_path(relative: str) -> Path:
 VENDOR_MERMAID = resource_path("vendor/mermaid.min.js")
 
 try:
-    from PySide6.QtWebEngineCore import QWebEngineSettings
+    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
     from PySide6.QtWebEngineWidgets import QWebEngineView
 
     WEBENGINE_AVAILABLE = True
 except ImportError:  # pragma: no cover - depends on PySide6-Addons being present
     WEBENGINE_AVAILABLE = False
+
+# The diagram page reports clicks by logging "xsltomermaid:<kind>:<entity id>";
+# a tiny bridge that needs no extra script (QWebChannel would need qwebchannel.js).
+_BRIDGE_PREFIX = "xsltomermaid:"
+# Mermaid's ER renderer gives each table's group the id
+# "entity-<our entity id>-<uuid>"; our ids are [0-9A-Za-z_] only.
+_ENTITY_GROUP_RE = re.compile(r"^entity-(.+)-[0-9a-f]{8}-[0-9a-f-]{27}$")
+
+
+def entity_id_from_group(group_id: str) -> str | None:
+    """``"entity-Customer-7db3…"`` → ``"Customer"`` (None if it isn't one)."""
+    match = _ENTITY_GROUP_RE.match(group_id or "")
+    return match.group(1) if match else None
+
+
+if WEBENGINE_AVAILABLE:
+
+    class _BridgePage(QWebEnginePage):
+        """Forwards the diagram's bridge messages; everything else is ignored."""
+
+        bridged = Signal(str, str)  # kind ("click" | "dblclick"), group id
+
+        def javaScriptConsoleMessage(self, level, message, line, source):  # noqa: N802
+            if message.startswith(_BRIDGE_PREFIX):
+                kind, _, group = message[len(_BRIDGE_PREFIX):].partition(":")
+                self.bridged.emit(kind, group)
 
 
 def _mermaid_config(style: RenderStyle) -> dict:
@@ -133,6 +159,10 @@ def _shell_html() -> str:
   body { margin: 0; padding: 12px; min-height: 100%; box-sizing: border-box;
          background: #ffffff; display: flex; }
   #container { margin: auto; font-family: "Trebuchet MS", Verdana, Arial, sans-serif; }
+  /* The selected table: a glow that doesn't move the layout. Page CSS, so
+     exports (which copy only inline attributes) never carry it. */
+  #container g[id^="entity-"] { cursor: pointer; }
+  #container g.xsel { filter: drop-shadow(0 0 2px #2f81f7) drop-shadow(0 0 4px #2f81f7); }
 </style>
 <script src="mermaid.min.js"></script>
 </head>
@@ -164,6 +194,34 @@ def _shell_html() -> str:
     svg.style.height = (vb.height * scale) + 'px';
   };
   window.addEventListener('resize', function () { window.fitDiagram(false); });
+  // Click a table to select it, double-click to open it, click the canvas or
+  // press Esc to clear. Messages go to Python through the console bridge.
+  window.selectEntity = function (groupId) {
+    document.querySelectorAll('#container g.xsel').forEach(function (g) {
+      g.classList.remove('xsel');
+    });
+    if (!groupId) return;
+    var g = document.getElementById(groupId);
+    if (g) {
+      g.classList.add('xsel');
+      if (g.scrollIntoViewIfNeeded) g.scrollIntoViewIfNeeded(true);
+    }
+  };
+  window.selectEntityByName = function (entityId) {
+    var g = document.querySelector('#container g[id^="entity-' + entityId + '-"]');
+    window.selectEntity(g ? g.id : '');
+    return !!g;
+  };
+  function report(kind, event) {
+    var g = event.target.closest && event.target.closest('#container g[id^="entity-"]');
+    window.selectEntity(g ? g.id : '');
+    console.log('xsltomermaid:' + kind + ':' + (g ? g.id : ''));
+  }
+  document.addEventListener('click', function (e) { report('click', e); });
+  document.addEventListener('dblclick', function (e) { report('dblclick', e); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { window.selectEntity(''); console.log('xsltomermaid:click:'); }
+  });
   window.renderDiagram = function (text, config, background, canvas, fit) {
     var seq = ++window._renderSeq;
     window._mermaidDone = false;
@@ -800,6 +858,9 @@ class DiagramView(QWidget):
     render_started = Signal()
     render_finished = Signal(bool)  # True on success, False on error/timeout
     render_error = Signal(str)  # why a render failed (before render_finished)
+    # A table in the diagram was clicked (entity id, or "" for empty canvas);
+    # the bool is True for a double-click.
+    entity_clicked = Signal(str, bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -824,6 +885,9 @@ class DiagramView(QWidget):
             shell_path.write_text(_shell_html(), encoding="utf-8")
             self._shell_url = QUrl.fromLocalFile(str(shell_path))
             self._view = QWebEngineView(self)
+            self._page = _BridgePage(self._view)
+            self._page.bridged.connect(self._on_bridge)
+            self._view.setPage(self._page)
             self._view.settings().setAttribute(
                 QWebEngineSettings.LocalContentCanAccessFileUrls, True
             )
@@ -893,6 +957,21 @@ class DiagramView(QWidget):
         self._view.setZoomFactor(1.0)
         self._update_zoom_label()
         self._view.page().runJavaScript("window.fitDiagram && window.fitDiagram(true)")
+
+    def _on_bridge(self, kind: str, group_id: str):
+        if kind not in ("click", "dblclick"):
+            return
+        self.entity_clicked.emit(entity_id_from_group(group_id) or "", kind == "dblclick")
+
+    def highlight_entity(self, entity_id: str):
+        """Highlight one table in the drawn diagram ("" clears)."""
+        if self._view is None or not self._shell_loaded:
+            return
+        self._view.page().runJavaScript(
+            "window.selectEntityByName && window.selectEntityByName({})".format(
+                json.dumps(entity_id or "")
+            )
+        )
 
     def zoom_by(self, factor: float):
         """Zoom the diagram in (>1) or out (<1); the keyboard twin of Ctrl+scroll."""

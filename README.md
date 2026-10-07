@@ -23,6 +23,11 @@ DefaultValue | ComputedDefinition | Collation | Description
    column picker, Mermaid source and SQL sit in a **Details** panel on the right.
    It starts closed and opens from the **Details** button, **Ctrl+I**, or
    **Ctrl+1–4** for a specific view.
+   **Click a table in the diagram** to select it: it's highlighted, the table
+   list scrolls to it, and the Columns view shows just its columns.
+   **Double-click** opens the Details panel there. Clicking empty canvas or
+   pressing Esc clears the selection. Selecting a row in the list highlights
+   that table in the diagram.
    **Renders** the diagram live in-app (a "Rendered diagram" tab powered by a
    locally vendored `mermaid.js`, so no internet is needed). The diagram
    **follows your ticks**: changing tables or columns redraws it a moment later.
