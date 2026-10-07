@@ -816,7 +816,7 @@ class MainWindow(QMainWindow):
 
         diagram_menu = bar.addMenu("&Diagram")
         diagram_menu.addAction(
-            act("&Render selected", self._render_selection,
+            act("&Draw ticked", self._render_selection,
                 QKeySequence("F5"), schema_only=True)
         )
         # Enabled only while a render is in flight (see _set_rendering).
@@ -1632,7 +1632,11 @@ class MainWindow(QMainWindow):
             )
             self._status.setText(
                 f"Loaded {self._loaded_name} — {_plural(total, 'table')}. "
-                "Select tables on the left to render a diagram."
+                + (
+                    "Pick a cluster on the map, or tick tables on the left."
+                    if self.map_visible()
+                    else "Tick tables on the left to draw a diagram."
+                )
             )
             return
 
@@ -1654,14 +1658,14 @@ class MainWindow(QMainWindow):
                 f"This selection is too large to render as a diagram "
                 f"({_plural(shown, 'table')}, {_plural(col_count, 'column')} — about "
                 f"{len(mermaid_text) // 1000:,} KB of Mermaid).\n\n"
-                "Narrow it down with the filter and pick fewer tables, then click "
-                "“Render selected”. The full selection is still available in the "
-                "“Mermaid source” tab and via Save .mmd / .md."
+                "Narrow it down with the filter and tick fewer tables, then click "
+                "“Draw ticked”. The full selection is still available in the "
+                "Mermaid tab and via Save .mmd / .md."
             )
             self._status.setText(
                 f"Loaded {self._loaded_name} — {tables_phrase} selected, "
                 f"{_plural(col_count, 'column')}: too large to render "
-                "(select fewer tables)."
+                "(tick fewer tables)."
             )
             return
 
@@ -1685,7 +1689,7 @@ class MainWindow(QMainWindow):
         if self._options_bar.hide_audit_links() and self._audit_share > 0:
             stats += (
                 f" · audit and system links hidden ({self._audit_share:.0%} of all "
-                "links; More ▸ to show)"
+                "links; More to show)"
             )
         # Dynamics tables run to hundreds of columns; at that width the
         # relationships are lost in the attribute lists.

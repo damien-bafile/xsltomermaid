@@ -1714,6 +1714,29 @@ def test_map_selection_draws_as_the_diagram_and_is_undoable(monkeypatch):
     del app
 
 
+def test_map_words_say_tick_and_show_a_selection_the_filter_hides():
+    app, window = _big_window()
+    window.show()
+    window.show_map(True)
+    btn = window._map_view._draw_btn
+    window._map_view.select(["C3", "C4"])
+    window._map_view._on_selection_changed()
+    assert btn.text() == "Draw these 2"
+    window._selector.check_tables(["C1"])
+    window._map_view.set_ticked(window._selector.selected_tables())
+    assert btn.text() == "Draw these 2 (replaces 1 ticked)"
+    note = window._selector._mapsel_note
+    assert note.isHidden()
+    window._selector._filter.setText("C1")
+    assert not note.isHidden() and "2 selected on the map, all hidden" in note.text()
+    note.linkActivated.emit("show")
+    assert window._selector._filter.text() == "" and note.isHidden()
+    assert window._selector._select_shown_btn.text() == "Tick &shown"
+    assert window._selector._render_btn.text() == "D&raw ticked"
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_map_single_selection_focuses_the_table_and_filter_dims_others():
     app, window = _big_window()
     window.show()

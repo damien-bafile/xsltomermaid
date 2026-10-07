@@ -966,7 +966,7 @@ class DiagramView(QWidget):
                 self._strip.addWidget(btn)
             self._view.setAccessibleName("Rendered diagram")
             self._view.setAccessibleDescription(
-                "A picture of the diagram. Its text form is in the Mermaid source tab."
+                "A picture of the diagram. Its text form is in the Mermaid tab."
             )
             layout.addLayout(self._strip)
             self._zoom_timer = QTimer(self)
@@ -977,7 +977,7 @@ class DiagramView(QWidget):
             label = QLabel(
                 "The rendered-diagram view needs PySide6's WebEngine module.\n"
                 "Install it with:  uv add PySide6-Addons\n\n"
-                "The Mermaid source (other tab) and text export still work."
+                "The Mermaid tab and text export still work."
             )
             label.setAlignment(Qt.AlignCenter)
             label.setWordWrap(True)
@@ -1094,7 +1094,7 @@ class DiagramView(QWidget):
             return
         self.show_message(
             "Render cancelled.\n\n"
-            "Adjust the tables, columns, or options, then click “Render selected”."
+            "Adjust the tables, columns, or options, then click “Draw ticked”."
         )
 
     def _on_load_finished(self, ok: bool):
@@ -1121,7 +1121,7 @@ class DiagramView(QWidget):
         self.render_finished.emit(False)
         self.show_message(
             "Mermaid couldn't draw this diagram.\n\n"
-            "Try fewer tables or columns, or open the “Mermaid source” tab to "
+            "Try fewer tables or columns, or open the Mermaid tab to "
             "find the line the error points to.",
             detail=reason,
         )

@@ -37,6 +37,7 @@ from .schema_map import name_prefix
 from .theme import (
     _ACCENT,
     _ACCENT_WASH,
+    _link_hex,
     _muted_hex,
 )
 
@@ -175,6 +176,13 @@ class TableSelector(QWidget):
         self._filter.setClearButtonEnabled(True)
         self._filter.textChanged.connect(self._apply_filter_text)
         layout.addWidget(self._filter)
+        # The map selection tints rows; say so when the filters hide them.
+        self._map_selection: set[str] = set()
+        self._mapsel_note = QLabel()
+        self._mapsel_note.setWordWrap(True)
+        self._mapsel_note.setVisible(False)
+        self._mapsel_note.linkActivated.connect(lambda _href: self.clear_filters())
+        layout.addWidget(self._mapsel_note)
 
         # How to read a long list: order, and which publisher prefix.
         view_row = QHBoxLayout()
@@ -231,7 +239,7 @@ class TableSelector(QWidget):
         layout.addLayout(count_row)
 
         button_row = QHBoxLayout()
-        self._select_shown_btn = QPushButton("&Select shown")
+        self._select_shown_btn = QPushButton("Tick &shown")
         self._clear_btn = QPushButton("&Clear")
         self._select_shown_btn.setToolTip("Tick every table currently visible in the list.")
         self._clear_btn.setToolTip("Untick every table. Can be undone.")
@@ -356,9 +364,9 @@ class TableSelector(QWidget):
         # don't auto-render. Undo only appears when there's something to undo.
         layout.addSpacing(4)
         action_row = QHBoxLayout()
-        self._render_btn = QPushButton("&Render selected")
+        self._render_btn = QPushButton("D&raw ticked")
         self._render_btn.setToolTip(
-            "Redraw the diagram now (F5). Small selections update automatically; "
+            "Draw the ticked tables now (F5). Small selections update automatically; "
             f"more than {RENDER_WARN_LIMIT} tables wait for this."
         )
         self._render_btn.clicked.connect(lambda: self.applied.emit())
@@ -492,6 +500,32 @@ class TableSelector(QWidget):
                 or (prefix is not None and name_prefix(item.text()) != prefix)
                 or (hide_lonely and links is not None and sum(links) == 0)
             )
+        self._update_mapsel_note()
+
+    def clear_filters(self):
+        """Show every table again: no text, prefix, Ticked only or Hide unconnected."""
+        for widget in (self._filter, self._prefix, self._ticked_only, self._hide_unconnected):
+            widget.blockSignals(True)
+        self._filter.clear()
+        self._prefix.setCurrentIndex(0)
+        self._ticked_only.setChecked(False)
+        self._hide_unconnected.setChecked(False)
+        for widget in (self._filter, self._prefix, self._ticked_only, self._hide_unconnected):
+            widget.blockSignals(False)
+        self._apply_filters()
+
+    def _update_mapsel_note(self):
+        hidden = sum(
+            1 for item in self._items() if item.isHidden() and item.text() in self._map_selection
+        )
+        if hidden:
+            n = len(self._map_selection)
+            self._mapsel_note.setText(
+                f"{n:,} selected on the map"
+                + (f", {hidden:,} hidden by the filters" if hidden < n else ", all hidden by the filters")
+                + f' · <a href="show" style="color:{_link_hex(self)}">Show</a>'
+            )
+        self._mapsel_note.setVisible(bool(hidden))
 
     def _fill_prefixes(self, names):
         counts: dict[str, int] = {}
@@ -527,11 +561,13 @@ class TableSelector(QWidget):
     def mark_map_selection(self, names):
         """Tint the rows of the tables selected on the map."""
         wanted = set(names)
+        self._map_selection = wanted
         self._list.blockSignals(True)
         for item in self._items():
             item.setData(_ROLE_MAPSEL, item.text() in wanted)
         self._list.blockSignals(False)
         self._list.viewport().update()
+        self._update_mapsel_note()
 
     def set_drawn(self, names):
         """Mark the tables currently drawn in the diagram."""
