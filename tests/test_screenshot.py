@@ -193,6 +193,13 @@ def test_extracted_data_header_sorting_is_numeric_and_non_destructive():
     del app
 
 
+@pytest.fixture(autouse=True)
+def _isolated_settings(tmp_path, monkeypatch):
+    """Each test starts from empty settings: remembered options, recent files
+    and window layout must not leak from one test into the next."""
+    monkeypatch.setenv("XSLTOMERMAID_SETTINGS", str(tmp_path / "settings.ini"))
+
+
 def _wait_for(condition, timeout_ms: int = 3000) -> bool:
     """Pump events until ``condition()`` is true (PySide6 lacks QTest.qWaitFor)."""
     import time
@@ -1234,5 +1241,83 @@ def test_preview_in_browser_works_offline(tmp_path, monkeypatch):
     assert '<script src="mermaid.min.js">' in html_text
     assert "cdn.jsdelivr" not in html_text
     assert (page.parent / "mermaid.min.js").stat().st_size > 100_000
+    window._diagram_view.cleanup()
+    del app
+
+
+# -- session memory, recent files, ticked-only filter, empty state -----------
+def _fresh_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv("XSLTOMERMAID_SETTINGS", str(tmp_path / "settings.ini"))
+
+
+def test_diagram_options_survive_a_restart(tmp_path, monkeypatch):
+    _fresh_settings(tmp_path, monkeypatch)
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    bar = window._options_bar
+    bar._orientation.setCurrentIndex(1)  # Top → Bottom
+    bar._keys_only.setChecked(True)
+    bar._font.setValue(16)
+    bar._more.setChecked(True)
+    window.close()
+    window._diagram_view.cleanup()
+
+    again = app_module.MainWindow()
+    bar = again._options_bar
+    assert bar.render_style().layout_direction == "TB"
+    assert bar.diagram_options().keys_only
+    assert bar.render_style().font_size == 16
+    assert bar._more.isChecked() and bar._more_box.isVisibleTo(bar)
+    again._diagram_view.cleanup()
+    del app
+
+
+def test_recent_files_are_remembered_newest_first(tmp_path, monkeypatch):
+    _fresh_settings(tmp_path, monkeypatch)
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    a, b = tmp_path / "a.xlsx", tmp_path / "b.xlsx"
+    _ensure_sample(str(a))
+    _ensure_sample(str(b))
+    window.load_file(str(a))
+    window.load_file(str(b))
+    window.load_file(str(a))
+    assert window.recent_files() == [str(a), str(b)]
+    window._rebuild_recent_menu()
+    labels = [x.text() for x in window._recent_menu.actions() if x.text()]
+    assert labels[:2] == ["&1  a.xlsx", "&2  b.xlsx"]
+
+    # A vanished file is dropped from the list when picked.
+    os.remove(b)
+    monkeypatch.setattr(app_module.QMessageBox, "information", lambda *a, **k: None)
+    window._open_recent(str(b))
+    assert window.recent_files() == [str(a)]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_ticked_only_filter_shows_just_the_selection():
+    app, window = _window_with_schema(*_diamond())
+    sel = window._selector
+    sel.set_ready(True)
+    sel.check_tables(["B", "D"])
+    sel._ticked_only.setChecked(True)
+    shown = [i.text() for i in sel._items() if not i.isHidden()]
+    assert shown == ["B", "D"]
+    sel._filter.setText("d")  # combines with the text filter
+    assert [i.text() for i in sel._items() if not i.isHidden()] == ["D"]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_extracted_data_tab_explains_the_format_until_a_file_loads(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    assert window._table_stack.currentWidget() is window._table_empty
+    assert "ForeignKeyReference" in window._table_empty.text()
+    sample = tmp_path / "s.xlsx"
+    _ensure_sample(str(sample))
+    window.load_file(str(sample))
+    assert window._table_stack.currentWidget() is window._table
     window._diagram_view.cleanup()
     del app
