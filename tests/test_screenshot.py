@@ -1851,3 +1851,14 @@ def test_table_list_sorts_by_cluster():
     assert "cluster: msdyn_project" in next(i for i in sel._items() if i.text() == "msdyn_task").toolTip()
     window._diagram_view.cleanup()
     del app
+
+
+def test_headless_capture_of_a_big_schema_includes_the_map(tmp_path):
+    app, window = _big_window()
+    window._apply_loaded(str(tmp_path / "big.xlsx"), [], window._schema, "")
+    assert window.map_visible() and window._map_view.schema_map() is None  # never shown
+    window.capture(str(tmp_path / "w.png"))
+    assert window._map_view.schema_map() is not None
+    assert len(window._map_view._items) > 50
+    window._diagram_view.cleanup()
+    del app
