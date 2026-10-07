@@ -22,10 +22,13 @@ DefaultValue | ComputedDefinition | Collation | Description
 5. Puts the **diagram at the centre of the window**. The extracted rows,
    column picker, Mermaid source and SQL sit in a **Details** panel on the right.
    It starts closed and opens from the **Details** button, **Ctrl+I**, or
-   **Ctrl+1–4** for a specific view.
+   **Ctrl+1–5** for a specific view.
    **Click a table in the diagram** to select it: it's highlighted, the table
    list scrolls to it, and the Columns view shows just its columns.
-   **Double-click** opens the Details panel there. Clicking empty canvas or
+   **Double-click** opens the Details panel on the **Table** view: the table's
+   columns (tick to show them) and every table it references or is referenced
+   by, each with **Add**. Double-clicking a connected table moves the view to it,
+   and Dynamics' audit and ownership links are folded into their own group. Clicking empty canvas or
    pressing Esc clears the selection. Selecting a row in the list highlights
    that table in the diagram.
    **Renders** the diagram live in-app (a "Rendered diagram" tab powered by a

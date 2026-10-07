@@ -1560,7 +1560,8 @@ def test_clicking_a_table_in_the_diagram_selects_it(tmp_path):
     assert not window._tabs.isVisible()  # single click doesn't open the panel
     click("dblclick")
     assert _wait_for(lambda: window._tabs.isVisible(), 5000)
-    assert window._tabs.currentWidget() is window._columns
+    assert window._tabs.currentWidget() is window._inspector
+    assert window._inspector.current_table() == "OrderLine"
     window._diagram_view.cleanup()
     del app
 
@@ -1574,5 +1575,87 @@ def test_highlighting_a_list_row_highlights_the_drawn_table(monkeypatch):
     window._selector._list.setCurrentRow(1)  # "B"
     window._selector._list.setCurrentRow(3)  # "D", not drawn
     assert seen == ["B", ""]
+    window._diagram_view.cleanup()
+    del app
+
+
+
+# -- the Table view (per-table inspector) ---------------------------------------
+def _audit_rows():
+    from tests_rows import row  # noqa: F401  (placeholder, replaced below)
+
+
+def _inspector_window(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    sample = tmp_path / "s.xlsx"
+    _ensure_sample(str(sample))
+    window.load_file(str(sample))
+    return app, window
+
+
+def test_table_view_shows_columns_and_both_directions_of_links(tmp_path):
+    app, window = _inspector_window(tmp_path)
+    window._selector.clear_selection()
+    window._selector.check_tables(["Order"])
+    window._render_selection()
+    window._focus_table("Order")
+    ins = window._inspector
+    assert ins.current_table() == "Order"
+    assert ins._columns.count() == 4
+    groups = [ins._links.topLevelItem(i) for i in range(ins._links.topLevelItemCount())]
+    assert [g.text(0) for g in groups] == ["References (1)", "Referenced by (1)"]
+    out_row, in_row = groups[0].child(0), groups[1].child(0)
+    assert (out_row.text(0), out_row.text(1)) == ("Customer  ·  via CustomerID", "Add")
+    assert out_row.data(0, app_module.Qt.UserRole) == "Customer"
+    assert (in_row.text(0), in_row.text(1)) == ("OrderLine  ·  via OrderID", "Add")
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_table_view_add_ticks_the_table_and_can_be_undone(tmp_path, monkeypatch):
+    app, window = _inspector_window(tmp_path)
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    window._selector.clear_selection()
+    window._selector.check_tables(["Order"])
+    window._focus_table("Order")
+    window._inspector.add_requested.emit("Customer")
+    assert set(window._selector.selected_tables()) == {"Order", "Customer"}
+    assert window._selector._undo_btn.text() == "&Undo add"
+    window._selector.undo_last_change()
+    assert window._selector.selected_tables() == ["Order"]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_table_view_column_ticks_change_the_diagram_columns(tmp_path):
+    app, window = _inspector_window(tmp_path)
+    window._focus_table("Customer")
+    item = next(
+        window._inspector._columns.item(i)
+        for i in range(window._inspector._columns.count())
+        if window._inspector._columns.item(i).data(app_module.Qt.UserRole) == "Email"
+    )
+    item.setCheckState(app_module.Qt.Unchecked)
+    assert ("customer", "email") in window._columns.excluded_pairs()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_table_view_folds_audit_and_ownership_links():
+    from xsltomermaid.excel_to_mermaid import Column, Relationship, Table
+
+    app, window = _window_with_schema(["systemuser", "a", "b"], [
+        Relationship("systemuser", "a", "createdby", ("createdby",), ("systemuserid",)),
+        Relationship("systemuser", "b", "modifiedby", ("modifiedby",), ("systemuserid",)),
+        Relationship("systemuser", "b", "approver", ("approver",), ("systemuserid",)),
+    ])
+    window._schema.tables[0].columns.append(Column("", "systemuser", 1, "systemuserid", "guid"))
+    window._focus_table("systemuser")
+    group = window._inspector._links.topLevelItem(1)  # Referenced by
+    assert group.text(0) == "Referenced by (3)"
+    assert group.child(0).text(0) == "b  ·  via approver"
+    folded = group.child(1)
+    assert folded.text(0) == "Audit and ownership links (2)" and not folded.isExpanded()
     window._diagram_view.cleanup()
     del app

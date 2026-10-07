@@ -123,6 +123,7 @@ from .diagram_view import (
     schema_to_excalidraw,
 )
 from .excel_to_mermaid import (
+    is_audit_relationship,
     mermaid_entity_ids,
     EXPECTED_HEADERS,
     DiagramOptions,
@@ -1131,6 +1132,193 @@ class TableSelector(QWidget):
         self._path_hint.setStyleSheet(f"color: {muted}; font-size: 11px;")
 
 
+class TableInspector(QWidget):
+    """The Details panel's Table view: one table, its columns and neighbours.
+
+    Shows the table picked in the diagram or the list. Column ticks change the
+    diagram (shared with the Columns view); each foreign-key neighbour has an
+    Add action, and double-clicking one moves the view to it. Dynamics' audit
+    and ownership links are folded into their own collapsed group, since one
+    table can have thousands of them.
+    """
+
+    column_toggled = Signal(str, str, bool)  # table, column, included
+    add_requested = Signal(str)  # tick this table
+    select_requested = Signal(str)  # move the view (and selection) here
+
+    _ROLE_TABLE = Qt.UserRole
+    _ADD_COL = 1
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._table = ""
+        self._drawn: set[str] = set()
+        self._updating = False
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        self._title = QLabel()
+        self._title.setStyleSheet("font-weight: 600;")
+        self._title.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._meta = QLabel()
+        self._meta.setWordWrap(True)
+        self._empty = QLabel(
+            "Click a table in the diagram, or select one in the list, to see "
+            "its columns and the tables it connects to."
+        )
+        self._empty.setWordWrap(True)
+        self._empty.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        layout.addWidget(self._title)
+        layout.addWidget(self._meta)
+        layout.addWidget(self._empty)
+
+        split = QSplitter(Qt.Vertical)
+        self._columns = QListWidget()
+        self._columns.setAccessibleName("Columns of the selected table")
+        self._columns.setUniformItemSizes(True)
+        self._columns.itemChanged.connect(self._on_column_changed)
+        self._links = QTreeWidget()
+        self._links.setAccessibleName("Tables connected to the selected table")
+        self._links.setColumnCount(2)
+        self._links.setHeaderHidden(True)
+        self._links.setRootIsDecorated(True)
+        self._links.setUniformRowHeights(True)
+        self._links.itemClicked.connect(self._on_link_clicked)
+        self._links.itemActivated.connect(self._on_link_activated)
+        header = self._links.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        split.addWidget(self._columns)
+        split.addWidget(self._links)
+        split.setSizes([300, 300])
+        self._split = split
+        layout.addWidget(split, 1)
+        self._hint = QLabel(
+            "Tick columns to show them. Double-click a connected table to move "
+            "to it; Add (or Space) ticks it in the diagram."
+        )
+        self._hint.setWordWrap(True)
+        layout.addWidget(self._hint)
+        self.retheme()
+        self.show_table(None, [], [], set(), set())
+
+    def current_table(self) -> str:
+        return self._table
+
+    def show_table(self, table, outgoing, incoming, drawn: set[str], excluded: set):
+        """Fill the view for ``table`` (None shows the empty state).
+
+        ``outgoing`` / ``incoming`` are the table's relationships, ``drawn`` the
+        lowercase names of tables in the diagram, ``excluded`` the hidden
+        (table, column) pairs.
+        """
+        self._table = table.name if table is not None else ""
+        self._drawn = drawn
+        has = table is not None
+        for widget in (self._title, self._meta, self._split, self._hint):
+            widget.setVisible(has)
+        self._empty.setVisible(not has)
+        if not has:
+            self._columns.clear()
+            self._links.clear()
+            return
+
+        key = table.name.lower()
+        shown = sum(1 for c in table.columns if (key, c.name.lower()) not in excluded)
+        self._title.setText(table.full_name)
+        in_diagram = "in the diagram" if key in drawn else "not in the diagram"
+        self._meta.setText(
+            f"{_plural(len(table.columns), 'column')} · {shown:,} shown · "
+            f"{_plural(len(outgoing), 'reference')} out · "
+            f"{len(incoming):,} in · {in_diagram}"
+        )
+
+        self._updating = True
+        self._columns.clear()
+        for column in table.columns:
+            marks = [m for m, on in (("PK", column.is_primary_key),
+                                     ("FK", bool(column.foreign_key_reference))) if on]
+            text = f"{column.name}  ·  {column.rendered_type()}"
+            if marks:
+                text += f"  [{', '.join(marks)}]"
+            item = QListWidgetItem(text)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setData(Qt.UserRole, column.name)
+            excluded_here = (key, column.name.lower()) in excluded
+            item.setCheckState(Qt.Unchecked if excluded_here else Qt.Checked)
+            self._columns.addItem(item)
+        self._updating = False
+
+        self._links.clear()
+        self._add_group("References", [(r.parent_table, r) for r in outgoing])
+        self._add_group("Referenced by", [(r.child_table, r) for r in incoming])
+
+    def _add_group(self, title: str, pairs):
+        regular = [(t, r) for t, r in pairs if not is_audit_relationship(r)]
+        audit = [(t, r) for t, r in pairs if is_audit_relationship(r)]
+        group = QTreeWidgetItem(self._links, [f"{title} ({len(pairs):,})"])
+        group.setFirstColumnSpanned(True)
+        group.setFlags(group.flags() & ~Qt.ItemIsSelectable)
+        self._add_rows(group, regular)
+        if audit:
+            folded = QTreeWidgetItem(group, [f"Audit and ownership links ({len(audit):,})"])
+            folded.setFirstColumnSpanned(True)
+            folded.setFlags(folded.flags() & ~Qt.ItemIsSelectable)
+            self._add_rows(folded, audit)
+            folded.setExpanded(False)
+        group.setExpanded(True)
+
+    def _add_rows(self, parent, pairs):
+        for other, rel in sorted(pairs, key=lambda p: (p[0].lower(), p[1].label.lower())):
+            drawn = other.lower() in self._drawn
+            # One cell, table first: the panel is narrow and the column names
+            # are long, so a separate "through" column squeezed the table out.
+            row = QTreeWidgetItem(
+                parent, [f"{other}  ·  via {rel.label}", "in diagram" if drawn else "Add"]
+            )
+            row.setData(0, self._ROLE_TABLE, other)
+            row.setToolTip(0, f"{other} (through {rel.label}). Double-click to show it here.")
+            row.setToolTip(self._ADD_COL, "" if drawn else f"Tick {other} in the diagram")
+            if not drawn:
+                font = row.font(self._ADD_COL)
+                font.setUnderline(True)
+                row.setFont(self._ADD_COL, font)
+                row.setForeground(self._ADD_COL, QColor(_link_hex(self)))
+
+    def _on_column_changed(self, item):
+        if self._updating or not self._table:
+            return
+        self.column_toggled.emit(
+            self._table, item.data(Qt.UserRole), item.checkState() == Qt.Checked
+        )
+
+    def _on_link_clicked(self, item, column):
+        other = item.data(0, self._ROLE_TABLE)
+        if other and column == self._ADD_COL and other.lower() not in self._drawn:
+            self.add_requested.emit(other)
+
+    def _on_link_activated(self, item, _column):
+        other = item.data(0, self._ROLE_TABLE)
+        if other:
+            self.select_requested.emit(other)
+
+    def keyPressEvent(self, event):  # noqa: N802 (Qt naming)
+        item = self._links.currentItem() if self._links.hasFocus() else None
+        other = item.data(0, self._ROLE_TABLE) if item is not None else None
+        if event.key() == Qt.Key_Space and other and other.lower() not in self._drawn:
+            self.add_requested.emit(other)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def retheme(self):
+        muted = f"color: {_muted_hex(self)};"
+        for label in (self._meta, self._empty, self._hint):
+            label.setStyleSheet(muted)
+
+
 class ColumnSelector(QWidget):
     """A tab with a checkable tree (table → columns) to choose diagram columns.
 
@@ -1485,6 +1673,19 @@ class ColumnSelector(QWidget):
     @staticmethod
     def _children(parent):
         return (parent.child(i) for i in range(parent.childCount()))
+
+    def set_column_included(self, table: str, column: str, included: bool):
+        """Include or leave out one column (the Table view's ticks)."""
+        pair = (table.lower(), column.lower())
+        if (pair not in self._excluded) == included:
+            return
+        if included:
+            self._excluded.discard(pair)
+        else:
+            self._excluded.add(pair)
+        self._sync_tree_checks()
+        self._update_count()
+        self.changed.emit()
 
     def excluded_pairs(self) -> set[tuple[str, str]]:
         return set(self._excluded)
@@ -2021,8 +2222,14 @@ class MainWindow(QMainWindow):
         self._table_stack = QStackedWidget()
         self._table_stack.addWidget(self._table_empty)
         self._table_stack.addWidget(self._table)
+        self._inspector = TableInspector()
+        self._inspector.column_toggled.connect(self._columns_set_included)
+        self._inspector.add_requested.connect(self._add_table_from_inspector)
+        self._inspector.select_requested.connect(self._focus_table)
+        tabs.addTab(self._inspector, "Table")
+        tabs.setTabToolTip(0, "The selected table: its columns and connected tables")
         tabs.addTab(self._table_stack, "Data")
-        tabs.setTabToolTip(0, "The rows read from the spreadsheet")
+        tabs.setTabToolTip(1, "The rows read from the spreadsheet")
 
         self._columns = ColumnSelector()
         self._columns.changed.connect(self._on_selection_edited)
@@ -2150,7 +2357,7 @@ class MainWindow(QMainWindow):
         self._details_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._details_btn.setToolTip(
             "Show or hide the Details panel: extracted data, columns, Mermaid "
-            "source and SQL (Ctrl+I; Ctrl+1–4 open a view)."
+            "source and SQL (Ctrl+I; Ctrl+1–5 open a view)."
         )
         self._details_btn.setStyleSheet(
             "QToolButton { border: none; padding: 2px 6px; border-radius: 4px; }"
@@ -2377,6 +2584,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._details_action)
         for number, (label, widget) in enumerate(
             [
+                ("&Table", self._inspector),
                 ("E&xtracted data", self._table_stack),
                 ("&Columns", self._columns),
                 ("&Mermaid source", self._mermaid_view),
@@ -2581,21 +2789,61 @@ class MainWindow(QMainWindow):
         empty canvas (or Esc) clears the selection.
         """
         name = self._entity_to_table.get(entity_id, "")
-        self._selector.focus_table(name)
-        self._columns.focus_table(name)
+        self._focus_table(name, from_diagram=True)
         if not name:
             return
         if double:
-            self.show_details(self._columns)
+            self.show_details(self._inspector)
         else:
             self._status.setText(
-                f"{html.escape(name)} selected · double-click it to open its columns"
+                f"{html.escape(name)} selected · double-click it for its columns "
+                "and connected tables"
             )
 
     def _on_list_table_changed(self, name: str):
         """A row was highlighted in the list: highlight that table if drawn."""
         entity = next((e for e, t in self._entity_to_table.items() if t == name), "")
         self._diagram_view.highlight_entity(entity)
+        self._columns.focus_table(name)
+        self._refresh_inspector(name)
+
+    def _focus_table(self, name: str, from_diagram: bool = False):
+        """Make ``name`` the selected table everywhere ("" clears)."""
+        self._selector.focus_table(name)
+        self._columns.focus_table(name)
+        if not from_diagram:
+            entity = next((e for e, t in self._entity_to_table.items() if t == name), "")
+            self._diagram_view.highlight_entity(entity)
+        self._refresh_inspector(name)
+
+    def _refresh_inspector(self, name: str | None = None):
+        """Show ``name`` (default: the current one) in the Table view."""
+        if name is None:
+            name = self._inspector.current_table()
+        schema = self._schema
+        table = None
+        if schema is not None and name:
+            table = next((t for t in schema.tables if t.name == name), None)
+        if table is None:
+            self._inspector.show_table(None, [], [], set(), set())
+            return
+        key = table.name.lower()
+        outgoing = [r for r in schema.relationships if r.child_table.lower() == key]
+        incoming = [r for r in schema.relationships if r.parent_table.lower() == key]
+        drawn = {t.name.lower() for t in (self._drawio_schema.tables if self._drawio_schema else [])}
+        self._inspector.show_table(
+            table, outgoing, incoming, drawn, self._columns.excluded_pairs()
+        )
+
+    def _columns_set_included(self, table: str, column: str, included: bool):
+        self._columns.set_column_included(table, column, included)
+
+    def _add_table_from_inspector(self, name: str):
+        """Tick a connected table from the Table view (undoable, auto-renders)."""
+        self._selector.snapshot_for_undo("add")
+        if self._selector.check_tables([name]):
+            self._on_selection_edited()
+            self._status.setText(f"Added {html.escape(name)} to the diagram.")
 
     # -- details panel ----------------------------------------------------
     def set_details_visible(self, visible: bool):
@@ -3049,6 +3297,7 @@ class MainWindow(QMainWindow):
         )
         self._drawio_schema = final
         self._set_sql_schema(final)
+        self._refresh_inspector()
 
         mermaid_text = generate_mermaid(final, self._options_bar.diagram_options())
         self._entity_to_table = mermaid_entity_ids(final, self._options_bar.diagram_options())
