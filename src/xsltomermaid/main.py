@@ -497,6 +497,10 @@ class MainWindow(QMainWindow):
         # bottom strip with the zoom controls, instead of spending a row.
         self._diagram_view.add_status_widget(self._render_status)
         self._diagram_view.add_status_widget(self._stop_btn)
+        # Lasting states the app chose (audit links hidden, automatic Keys
+        # only) sit beside it as chips, each undone with a click.
+        for chip in self._options_bar.state_chips():
+            self._diagram_view.add_status_widget(chip)
         # The canvas shows either the ER diagram or, for big schemas, the map.
         self._map_view = SchemaMapView()
         self._canvas = QStackedWidget()
@@ -587,6 +591,7 @@ class MainWindow(QMainWindow):
         self._selector._filter.textChanged.connect(lambda t: self._map_view.set_filter(t))
         self._selector.related_requested.connect(self._add_related_tables)
         self._selector.path_requested.connect(self._find_shortest_path)
+        self._selector.undone.connect(self._on_selection_undone)
 
         body = QSplitter(Qt.Horizontal)
         self._body = body
@@ -1070,6 +1075,7 @@ class MainWindow(QMainWindow):
             box.setChecked(True)
             box.blockSignals(False)
             self._sync_map_hide_audit(True)
+        self._options_bar.set_audit_share(self._audit_share)
 
     def _draw_from_map(self, names: list[str]):
         """Tick the map's selection (replacing the ticks, undoably) and draw it.
@@ -1087,12 +1093,17 @@ class MainWindow(QMainWindow):
         if schema is not None and schema.tables and not keys.isChecked():
             per_table = sum(len(t.columns) for t in schema.tables) / len(schema.tables)
             if per_table > 50:
-                keys.setChecked(True)  # re-renders via the options bar
+                self._options_bar.set_keys_only_auto()  # re-renders
                 self._status.setText(
                     f"Drew {len(schema.tables)} tables with Keys only on (about "
                     f"{int(per_table)} columns per table) · "
                     f'<a href="undo-keys" style="color:{_link_hex(self)}">Show all columns</a>'
                 )
+
+    def _on_selection_undone(self, action: str):
+        """Undo draw also undoes the Keys only the draw switched on."""
+        if action == "draw" and self._options_bar.keys_only_auto():
+            self._options_bar._keys_only.setChecked(False)
 
     def _focus_table(self, name: str, from_diagram: bool = False, from_map: bool = False):
         """Make ``name`` the selected table everywhere ("" clears)."""
@@ -1686,11 +1697,6 @@ class MainWindow(QMainWindow):
             f"{tables_phrase} · {_plural(col_count, 'column')} · "
             f"{_plural(rel_count, 'relationship')}"
         )
-        if self._options_bar.hide_audit_links() and self._audit_share > 0:
-            stats += (
-                f" · audit and system links hidden ({self._audit_share:.0%} of all "
-                "links; More to show)"
-            )
         # Dynamics tables run to hundreds of columns; at that width the
         # relationships are lost in the attribute lists.
         if col_count / max(shown, 1) > 50 and not self._options_bar.diagram_options().keys_only:

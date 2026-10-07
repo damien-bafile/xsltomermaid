@@ -1953,6 +1953,31 @@ def test_drawing_wide_tables_turns_keys_only_on_with_an_undo(tmp_path):
     del app
 
 
+def test_state_chips_and_undo_draw_restores_keys_only(tmp_path):
+    app, window = _audit_heavy_window(tmp_path)
+    bar = window._options_bar
+    assert not bar._audit_chip.isHidden()
+    assert bar._audit_chip.text().startswith("Audit links hidden (")
+    assert bar._keys_chip.isHidden()
+    window._draw_from_map(["t0", "t1", "t2"])
+    assert bar.keys_only_auto() and not bar._keys_chip.isHidden()
+    assert "audit and system links hidden" not in window._status.text()
+    window._selector.undo_last_change()  # Undo draw
+    assert not bar._keys_only.isChecked() and bar._keys_chip.isHidden()
+    window._draw_from_map(["t0", "t1", "t2"])
+    bar._keys_chip.click()
+    assert not bar._keys_only.isChecked()
+    bar._keys_only.setChecked(True)  # the user's own choice: no chip, kept on undo
+    assert bar._keys_chip.isHidden()
+    window._selector.undo_last_change()
+    assert bar._keys_only.isChecked()
+    bar._audit_chip.click()
+    assert not bar.hide_audit_links() and bar._audit_chip.isHidden()
+    assert not window._map_view._hide.isChecked()
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()

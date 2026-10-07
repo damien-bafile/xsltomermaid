@@ -155,6 +155,7 @@ class TableSelector(QWidget):
     current_table_changed = Signal(str)  # the highlighted row ("" for none)
     related_requested = Signal()  # user asked to also tick the related tables
     path_requested = Signal()  # user asked for the shortest path between two tables
+    undone = Signal(str)  # the undo button restored the selection before this action
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -759,8 +760,10 @@ class TableSelector(QWidget):
             return
         self.set_selected_tables(self._undo_snapshot)
         self._undo_snapshot = None
+        label = self._undo_btn.text().replace("&Undo", "").strip()
         self._undo_btn.setText("&Undo")
         self._undo_btn.setVisible(False)
+        self.undone.emit(label)
         self.applied.emit()
 
     def retheme(self):
