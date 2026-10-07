@@ -392,7 +392,18 @@ class SchemaMapView(QWidget):
 
     def set_ticked(self, names):
         self._ticked = set(names)
+        self._update_draw_button(self.selected())
         self._restyle()
+
+    def _update_draw_button(self, names):
+        """Name what drawing does: it replaces the ticked tables."""
+        if not names:
+            self._draw_btn.setText("Draw selection")
+            return
+        text = f"Draw these {len(names):,}"
+        if self._ticked and self._ticked != set(names):
+            text += f" (replaces {len(self._ticked):,} ticked)"
+        self._draw_btn.setText(text)
 
     def set_filter(self, text: str):
         self._filter = text.strip().lower()
@@ -401,7 +412,7 @@ class SchemaMapView(QWidget):
     def _on_selection_changed(self, emit: bool = True):
         names = self.selected()
         self._draw_btn.setEnabled(bool(names))
-        self._draw_btn.setText(f"Draw these {len(names):,}" if names else "Draw selection")
+        self._update_draw_button(names)
         self._restyle()
         if emit:
             self.selection_changed.emit(names)

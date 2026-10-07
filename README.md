@@ -62,7 +62,7 @@ this export.
   size, fit to view, notes, a schema-name prefix, and *Hide audit and system
   links*.
 - **Selections over 60 tables** don't redraw on every tick. They show *Out of
-  date* until you press **Render selected** (F5). If Mermaid can't draw a
+  date* until you press **Draw ticked** (F5). If Mermaid can't draw a
   diagram, its error message is shown on the canvas.
 
 ### Big schemas: the schema map
