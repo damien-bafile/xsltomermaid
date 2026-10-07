@@ -153,7 +153,11 @@ def _shell_html() -> str:
     var scale = 1;
     if (force || window._fit) {
       var w = window.innerWidth - 24, h = window.innerHeight - 24;
-      scale = Math.max(0.05, Math.min(w / vb.width, h / vb.height, 1.5));
+      scale = Math.min(w / vb.width, h / vb.height, 1.5);
+      // Below about half size the column text is unreadable, so automatic
+      // fitting stops there and the view scrolls; the Fit button (force)
+      // still shows the whole diagram.
+      scale = Math.max(force ? 0.05 : 0.5, scale);
     }
     svg.style.maxWidth = 'none';
     svg.style.width = (vb.width * scale) + 'px';

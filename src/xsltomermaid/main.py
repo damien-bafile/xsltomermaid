@@ -101,6 +101,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QToolButton,
@@ -1150,7 +1151,7 @@ class ColumnSelector(QWidget):
         # A dropdown to focus on one table's columns (fast for huge schemas).
         scope_row = QHBoxLayout()
         self._scope = QComboBox()
-        scope_label = QLabel("Sho&w:")
+        scope_label = QLabel("Show:")
         scope_label.setBuddy(self._scope)
         self._scope.setAccessibleName("Show columns for")
         scope_row.addWidget(scope_label)
@@ -1176,7 +1177,7 @@ class ColumnSelector(QWidget):
         self._tree = QTreeWidget()
         sort_row = QHBoxLayout()
         self._sort = QComboBox()
-        sort_label = QLabel("S&ort columns:")
+        sort_label = QLabel("Sort columns:")
         sort_label.setBuddy(self._sort)
         self._sort.setAccessibleName("Sort columns")
         sort_row.addWidget(sort_label)
@@ -1555,6 +1556,8 @@ class DiagramOptionsBar(QWidget):
             self._keys_only,
         ):
             chk.toggled.connect(lambda _v: self.changed.emit())
+            # Never clip a checkbox label when the canvas narrows.
+            chk.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
 
         # Row 1: the everyday choices. Each label is the buddy of its control,
         # so screen readers name the dropdown and Alt+letter jumps to it.
@@ -1575,7 +1578,7 @@ class DiagramOptionsBar(QWidget):
         # The rest is fine-tuning, so it sits behind a disclosure, closed by
         # default, that keeps the bar to one line.
         self._more = QToolButton()
-        self._more.setText("More options")
+        self._more.setText("More")
         self._more.setCheckable(True)
         self._more.setArrowType(Qt.RightArrow)
         self._more.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -1588,6 +1591,7 @@ class DiagramOptionsBar(QWidget):
         )
         self._more.toggled.connect(self._on_more_toggled)
         row1.addWidget(self._more)
+        self._row1 = row1
         outer.addLayout(row1)
 
         self._more_box = QWidget()
@@ -1606,6 +1610,10 @@ class DiagramOptionsBar(QWidget):
         row2.addStretch(1)
         self._more_box.setVisible(False)
         outer.addWidget(self._more_box)
+
+    def add_trailing_widget(self, widget):
+        """Add a control at the right end of the first row (e.g. Details)."""
+        self._row1.addWidget(widget)
 
     @staticmethod
     def _buddy(text: str, widget) -> QLabel:
@@ -1988,7 +1996,8 @@ class MainWindow(QMainWindow):
         self._table_stack = QStackedWidget()
         self._table_stack.addWidget(self._table_empty)
         self._table_stack.addWidget(self._table)
-        tabs.addTab(self._table_stack, "Extracted data")
+        tabs.addTab(self._table_stack, "Data")
+        tabs.setTabToolTip(0, "The rows read from the spreadsheet")
 
         self._columns = ColumnSelector()
         self._columns.changed.connect(self._on_selection_edited)
@@ -2002,7 +2011,7 @@ class MainWindow(QMainWindow):
         self._mermaid_view.setPlaceholderText(
             "The generated Mermaid erDiagram will appear here."
         )
-        tabs.addTab(self._mermaid_view, "Mermaid source")
+        tabs.addTab(self._mermaid_view, "Mermaid")
 
         # SQL query: a T-SQL SELECT over the diagram's tables, joined on their
         # foreign keys, listing the columns chosen in the Columns tab.
@@ -2026,22 +2035,30 @@ class MainWindow(QMainWindow):
         self._sql_top.setValue(100)
         self._sql_top.setSpecialValueText("No limit")
         self._sql_top.setToolTip("SELECT TOP (n). 0 means no limit.")
-        for text, widget in (
-            ("Start &table:", self._sql_root),
-            ("&Join:", self._sql_join),
-            ("Row l&imit:", self._sql_top),
+        # Size to their longest value so the narrow panel never clips them.
+        self._sql_join.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self._sql_top.setMinimumWidth(self._sql_top.fontMetrics().horizontalAdvance("1000000") + 48)
+        # Two rows so the controls fit the narrow Details panel: the start
+        # table gets the width its long names need; the rest share row two.
+        sql_row2 = QHBoxLayout()
+        sql_row2.setSpacing(8)
+        for row, text, widget in (
+            (sql_row, "Start table:", self._sql_root),
+            (sql_row2, "&Join:", self._sql_join),
+            (sql_row2, "Row limit:", self._sql_top),
         ):
             label = QLabel(text)
             label.setBuddy(widget)
             widget.setAccessibleName(text.replace("&", "").rstrip(":"))
-            sql_row.addWidget(label)
-            sql_row.addWidget(widget)
-        sql_row.addStretch(1)
+            row.addWidget(label)
+            row.addWidget(widget, 1 if widget is self._sql_root else 0)
+        sql_row2.addStretch(1)
         self._copy_sql_btn = QPushButton("Copy S&QL")
         self._copy_sql_btn.setToolTip("Copy the query to the clipboard (Ctrl+Shift+Q).")
         self._copy_sql_btn.clicked.connect(self.copy_sql)
-        sql_row.addWidget(self._copy_sql_btn)
+        sql_row2.addWidget(self._copy_sql_btn)
         sql_layout.addLayout(sql_row)
+        sql_layout.addLayout(sql_row2)
         self._sql_view = QPlainTextEdit()
         self._sql_view.setReadOnly(True)
         self._sql_view.setFont(QFont("Menlo, Consolas, monospace"))
@@ -2089,11 +2106,33 @@ class MainWindow(QMainWindow):
         self._diagram_view.add_status_widget(self._render_status)
         self._diagram_view.add_status_widget(self._stop_btn)
         diagram_layout.addWidget(self._diagram_view, 1)
-        tabs.addTab(diagram_tab, "Rendered diagram")
-        tabs.addTab(self._sql_tab, "SQL query")
+        tabs.addTab(self._sql_tab, "SQL")
+        tabs.setUsesScrollButtons(False)
 
+        # Diagram-first: the diagram is the centre of the window, always in
+        # view; the other views sit in a Details panel on the right, closed
+        # by default so the canvas gets the width.
         self._tabs = tabs
         self._diagram_tab = diagram_tab
+        tabs.setMinimumWidth(300)
+        tabs.setVisible(False)
+        self._details_btn = QToolButton()
+        self._details_btn.setText("Details")
+        self._details_btn.setCheckable(True)
+        self._details_btn.setArrowType(Qt.LeftArrow)
+        self._details_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._details_btn.setToolTip(
+            "Show or hide the Details panel: extracted data, columns, Mermaid "
+            "source and SQL (Ctrl+I; Ctrl+1–4 open a view)."
+        )
+        self._details_btn.setStyleSheet(
+            "QToolButton { border: none; padding: 2px 6px; border-radius: 4px; }"
+            f"QToolButton:hover, QToolButton:focus {{ background: {_ACCENT_WASH}; }}"
+            "QToolButton:checked { background: transparent; font-weight: 600; }"
+            f"QToolButton:checked:hover {{ background: {_ACCENT_WASH}; }}"
+        )
+        self._details_btn.toggled.connect(self.set_details_visible)
+        self._options_bar.add_trailing_widget(self._details_btn)
 
         # Left: table picker to limit what gets rendered. Right: the tabs.
         self._selector = TableSelector()
@@ -2105,10 +2144,13 @@ class MainWindow(QMainWindow):
         body = QSplitter(Qt.Horizontal)
         self._body = body
         body.addWidget(self._selector)
+        body.addWidget(diagram_tab)
         body.addWidget(tabs)
         body.setStretchFactor(0, 0)
         body.setStretchFactor(1, 1)
-        body.setSizes([280, 820])
+        body.setStretchFactor(2, 0)
+        body.setCollapsible(1, False)
+        body.setSizes([280, 940, 380])
         outer.addWidget(body, 1)
 
         # The bottom bar holds one job, getting the diagram out: Export is the
@@ -2227,6 +2269,14 @@ class MainWindow(QMainWindow):
         if app is not None:
             self._options_bar.apply_system_defaults(system_is_dark(app))
         self._restore_session()
+        # The canvas is the first thing anyone sees, so it says what to do.
+        self._diagram_view.show_message(
+            "No spreadsheet loaded yet.\n\n"
+            "Drop an Excel schema file on the bar above, or click it to browse. "
+            "New here? Use “try a sample”.\n\n"
+            "Once a file loads, the diagram appears here. The Details panel "
+            "(Ctrl+I) shows the extracted rows, columns, Mermaid source and SQL."
+        )
         save_options = lambda *_: self._options_bar.save_state(app_settings())  # noqa: E731
         self._options_bar.changed.connect(save_options)
         self._options_bar._more.toggled.connect(save_options)
@@ -2291,6 +2341,25 @@ class MainWindow(QMainWindow):
             act("&Actual size", self._diagram_view.reset_zoom,
                 QKeySequence("Ctrl+0"), schema_only=True)
         )
+        view_menu.addSeparator()
+        self._details_action = QAction("&Details panel", self)
+        self._details_action.setCheckable(True)
+        self._details_action.setShortcut(QKeySequence("Ctrl+I"))
+        self._details_action.toggled.connect(self.set_details_visible)
+        view_menu.addAction(self._details_action)
+        for number, (label, widget) in enumerate(
+            [
+                ("E&xtracted data", self._table_stack),
+                ("&Columns", self._columns),
+                ("&Mermaid source", self._mermaid_view),
+                ("&SQL query", self._sql_tab),
+            ],
+            start=1,
+        ):
+            action = QAction(label, self)
+            action.setShortcut(QKeySequence(f"Ctrl+{number}"))
+            action.triggered.connect(lambda _c=False, w=widget: self.show_details(w))
+            view_menu.addAction(action)
         view_menu.addSeparator()
         view_menu.addAction(self._sql_dock.toggleViewAction())
 
@@ -2475,6 +2544,24 @@ class MainWindow(QMainWindow):
             self.retheme()
         super().changeEvent(event)
 
+    # -- details panel ----------------------------------------------------
+    def set_details_visible(self, visible: bool):
+        """Open or close the Details panel, keeping its two toggles in step."""
+        visible = bool(visible)
+        self._tabs.setVisible(visible)
+        for toggle in (self._details_btn, getattr(self, "_details_action", None)):
+            if toggle is not None and toggle.isChecked() != visible:
+                toggle.blockSignals(True)
+                toggle.setChecked(visible)
+                toggle.blockSignals(False)
+        self._details_btn.setArrowType(Qt.RightArrow if visible else Qt.LeftArrow)
+        app_settings().setValue("window/details_open", visible)
+
+    def show_details(self, widget):
+        """Open the Details panel on one of its views."""
+        self._tabs.setCurrentWidget(widget)
+        self.set_details_visible(True)
+
     # -- recent files and session state --------------------------------------
     def recent_files(self) -> list[str]:
         value = app_settings().value("recent/files", [])
@@ -2533,15 +2620,24 @@ class MainWindow(QMainWindow):
         geometry = settings.value("window/geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
-        split = settings.value("window/splitter")
+        split = settings.value("window/splitter3")
         if split is not None:
             self._body.restoreState(split)
+        open_ = str(settings.value("window/details_open", "false")).lower() in ("true", "1")
+        self.set_details_visible(open_)
+        tab = settings.value("window/details_tab")
+        try:
+            if tab is not None and 0 <= int(tab) < self._tabs.count():
+                self._tabs.setCurrentIndex(int(tab))
+        except (TypeError, ValueError):
+            pass
         self._options_bar.restore_state(settings)
 
     def closeEvent(self, event):  # noqa: N802 (Qt naming)
         settings = app_settings()
         settings.setValue("window/geometry", self.saveGeometry())
-        settings.setValue("window/splitter", self._body.saveState())
+        settings.setValue("window/splitter3", self._body.saveState())
+        settings.setValue("window/details_tab", self._tabs.currentIndex())
         super().closeEvent(event)
 
     # -- loading -----------------------------------------------------------
@@ -2713,12 +2809,6 @@ class MainWindow(QMainWindow):
         for action in self._schema_actions:
             action.setEnabled(True)
 
-        # Land on the diagram — the reason they opened the file — once one is
-        # actually rendered. Only in the live window: headless captures, the CLI
-        # and tests grab the window before it's shown and should keep landing on
-        # the data table.
-        if self.isVisible() and self._diagram_rendered:
-            self._tabs.setCurrentWidget(self._diagram_tab)
 
     def _add_related_tables(self):
         """Add the one-hop FK neighbours of the checked tables.
@@ -2981,6 +3071,13 @@ class MainWindow(QMainWindow):
             f"{tables_phrase} · {_plural(col_count, 'column')} · "
             f"{_plural(rel_count, 'relationship')}"
         )
+        # Dynamics tables run to hundreds of columns; at that width the
+        # relationships are lost in the attribute lists.
+        if col_count / max(shown, 1) > 50 and not self._options_bar.diagram_options().keys_only:
+            stats += (
+                f" · about {col_count // max(shown, 1)} columns per table: "
+                "try Keys only (Alt+K) to see the relationships"
+            )
         self._status.setText(
             f'<span style="color:{_muted_hex(self)}">Loaded '
             f'{html.escape(self._loaded_name)} —</span> '
