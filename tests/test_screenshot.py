@@ -1234,9 +1234,11 @@ def test_preview_in_browser_works_offline(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module.webbrowser, "open", opened.append)
     window.preview_browser()
     from pathlib import Path
-    from urllib.parse import unquote, urlparse
+    from urllib.parse import urlparse
+    from urllib.request import url2pathname
 
-    page = Path(unquote(urlparse(opened[0]).path.lstrip("/")))
+    # url2pathname handles both file:///C:/… (Windows) and file:///tmp/… (CI).
+    page = Path(url2pathname(urlparse(opened[0]).path))
     html_text = page.read_text(encoding="utf-8")
     assert '<script src="mermaid.min.js">' in html_text
     assert "cdn.jsdelivr" not in html_text
