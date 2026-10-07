@@ -1,10 +1,24 @@
-# xsltomermaid — Excel schema → Mermaid ER diagram
+# xsltomermaid: Excel schema → ER diagram
 
-A small Qt (PySide6) desktop app: **drag an Excel file in, get a Mermaid entity-
-relationship diagram of the database it describes.**
+A Windows/Linux/macOS desktop app (Qt / PySide6): **drag in a spreadsheet that
+describes a database, get an entity-relationship diagram of it.** It renders
+offline with a bundled Mermaid, copes with very large schemas (a 1,772-table
+Dynamics 365 export opens on a map of clusters), and exports to Draw.io,
+Excalidraw, PDF, PNG, SVG, Mermaid and T-SQL.
 
-The app expects a spreadsheet where **each row defines one database column**, with
-these headers (extra columns are ignored, order and casing are flexible):
+## Download
+
+Get the latest Windows executable from the
+[Releases page](https://github.com/damien-bafile/xsltomermaid/releases/latest):
+`xsltomermaid-vX.Y.Z.exe` is a single file, with nothing to install. Inside the
+app, **Help → Check for updates** tells you when a newer release is out.
+
+To run from source on any platform, see [Install & run](#install--run-from-source).
+
+## The input
+
+One row per **database column**, with these headers (any order and case; extra
+columns are ignored). Only `TableName` and `ColumnName` are required:
 
 ```
 SchemaName | TableName | ColumnOrder | ColumnName | DataType | Length | Precision |
@@ -12,157 +26,175 @@ Scale | IsNullable | IsIdentity | IsComputed | IsPrimaryKey | ForeignKeyReferenc
 DefaultValue | ComputedDefinition | Collation | Description
 ```
 
-## What it does
+Relationships come from `ForeignKeyReference`. All of these resolve to the
+`Customer` table: `dbo.Customer.CustomerID`, `Customer.CustomerID`,
+`Customer(CustomerID)`, `[dbo].[Customer].[CustomerID]` and a bare `Customer`.
+Composite keys work too, written either as one reference per column or as
+`dbo.OrderLine(OrderID, LineNo)`.
 
-1. **Drag & drop** (or browse to) an `.xlsx` / `.xlsm` file.
-2. **Extracts** the rows and shows them in a table so you can confirm what was read.
-3. **Groups** rows into tables and derives relationships from `ForeignKeyReference`.
-4. **Generates** a Mermaid `erDiagram` with each table, its columns, `PK`/`FK`
-   markers, and one relationship line per foreign key.
-5. Puts the **diagram at the centre of the window**. The extracted rows,
-   column picker, Mermaid source and SQL sit in a **Details** panel on the right.
-   It starts closed and opens from the **Details** button, **Ctrl+I**, or
-   **Ctrl+1–5** for a specific view.
-   Big schemas open on the **schema map**. The **Diagram | Map** switch (or
-   Ctrl+M) changes view. Every table is a point, sized by its links and grouped
-   into clusters of closely linked tables, each named after its most-connected
-   table. Click a cluster's name to select the whole cluster, or drag to select
-   a region (Ctrl+click adds or removes a table). The keyboard works too:
-   arrows move between tables, Space selects, Enter opens, and Ctrl+A selects
-   the cluster. **Draw these N** draws the selection as the ER diagram; it
-   replaces the ticks and can be undone. The table filter highlights matches,
-   ticked tables show as dashed rings, the map's selection is tinted in the
-   list, and tables with no links are listed underneath.
-   **Audit and system links** (`createdby`, `modifiedby`, `owning…`,
-   `organizationid`, `transactioncurrencyid`) are hidden automatically when
-   they make up more than 30% of links, as in a Dynamics export. That is one
-   setting for the map, diagram, SQL and exports, and *Keys only* then leaves
-   out those columns too. Drawing wide tables (more than 50 columns each)
-   switches *Keys only* on, with a link to show all columns again.
-   The **table list** shows each table's links (↗ out, ↙ in; audit and system
-   links not counted) and a dot for tables in the diagram. Sort it by name,
-   **Most connected** or **By cluster** (the map's clusters, with a header for
-   each), filter it to one
-   publisher **prefix** (`msdyn_`, `hsl_`, …), or **Hide unconnected** tables.
-   **Click a table in the diagram** to select it: it's highlighted, the table
-   list scrolls to it, and the Columns view shows just its columns.
-   **Double-click** opens the Details panel on the **Table** view: the table's
-   columns (tick to show them) and every table it references or is referenced
-   by, each with **Add**. Double-clicking a connected table moves the view to
-   it, and Dynamics' audit and ownership links are folded into their own group.
-   Clicking empty canvas or pressing Esc clears the selection. With the diagram
-   focused, the **arrow keys** move between tables and **Enter** opens the
-   selected one. Selecting a row in the list highlights that table in the
-   diagram.
-   **Renders** the diagram live in-app, using a locally bundled `mermaid.js`,
-   so no internet is needed. The diagram
-   **follows your ticks**: changing tables or columns redraws it a moment later.
-   Selections over 60 tables wait for **Render selected** (F5) and show an
-   *Out of date* marker until then. Exports always use the current selection.
-   If Mermaid can't draw a diagram, its error message is shown in the tab.
-6. **Exports** from one **Export** button (its arrow picks Draw.io, Excalidraw,
-   PDF, PNG or SVG, and the last format is remembered). Exports have their own
-   **Background** (White by default, Transparent, or Match the view), so a dark
-   on-screen diagram still exports ready for a white page. **PNG scale** is set
-   in the same menu. Save dialogs suggest the spreadsheet's name and remember
-   the folder, and the status line offers **Show in folder** afterwards.
-   Export is disabled until some tables are ticked. **Preview in browser**
-   works offline too. The **Mermaid** menu copies the source or saves it as
-   `.mmd` / `.md`. The **Table list** menu (beside "Tables in diagram") saves
-   or loads the ticked tables as `.toml` presets, including the source filename.
-7. Uses **Left → Right** as the default rendered layout direction. Orientation,
-   theme, background, relationship labels and *Keys only* sit in the options
-   bar. Spacing, font size, fit width, notes, schema prefix and **Hide audit
-   and system links** (for the diagram, SQL and exports) are under **More**.
-8. Shows **PK/FK markers** in the column selector, with column sorting by name or
-   data type and a **PK, FK first** checkbox (primary keys, then foreign keys).
-   **Clear** (tables) and **All / None / Keys only** (columns) can be undone.
-   Click extracted-data column headers to sort ascending or descending.
-9. **Remembers your session**: **File → Open Recent** lists the last 8
-   spreadsheets, and the window layout and diagram options come back on the
-   next launch. Theme and background still follow the OS's light/dark mode.
-   **Ticked only** under the table list shows just the selection, which helps
-   on schemas with thousands of tables.
-10. Writes a **T-SQL query** in the **SQL** view: a `SELECT` over the
-    diagram's tables, joined on their foreign keys (composite keys included),
-    listing the columns chosen in the Columns tab. You choose the starting table,
-    `INNER` or `LEFT` joins, and a `TOP (n)` row limit. Anything that can't be a
-    clean join is written as a `--` comment: a second foreign key between the
-    same tables, a self-reference, unknown join columns, or tables with no
-    foreign-key path. **Copy SQL** or **Ctrl+Shift+Q** copies it.
-11. **Fits the diagram to the view** (enlarged up to 150% when small, shrunk
-    when large) and centres it. The strip under the diagram has **− / + / Fit**
-    zoom buttons beside the render status. You can also zoom with
-    **Ctrl+scroll** or **Ctrl++ / Ctrl+- / Ctrl+0** (View menu); Ctrl+0 is a
-    true 100% until **Fit** is pressed.
-12. Includes a right-docked, copyable **SQL Server schema query** that produces the
-    expected columns. It is **hidden by default**; open it via **View → T-SQL statement**.
-13. **Help → Check for updates…** asks GitHub for the latest release and, if it's
-    newer than the running version, offers to open its download page. The app
-    makes no network calls unless you choose this. **Help → About** shows the
-    running version.
+Using SQL Server? **View → T-SQL statement** shows a query that produces exactly
+this export.
 
-Foreign-key references are parsed flexibly — `dbo.Customer.CustomerID`,
-`Customer.CustomerID`, `Customer(CustomerID)`, and a bare `Customer` all resolve to
-the `Customer` table.
+## How it works
 
-## Install & run (uv)
+1. **Drop** an `.xlsx` / `.xlsm` file on the window (or click to browse).
+2. **Pick tables** in the list on the left. Small schemas are drawn straight
+   away; big ones open on the [schema map](#big-schemas-the-schema-map).
+3. **Read the diagram** in the centre. It redraws a moment after you tick or
+   untick tables or columns.
+4. **Check the details** in the panel on the right: the selected table, the
+   rows that were read, the column picker, the Mermaid source and a SQL query.
+5. **Export** with the **Export** button, or copy the Mermaid or SQL.
 
-This project uses [uv](https://docs.astral.sh/uv/). No manual venv needed — `uv`
-creates and manages it from `pyproject.toml`/`uv.lock`.
+## Features
+
+### The workspace
+
+- **The diagram is the centre of the window**, fitted to the view (enlarged up
+  to 150% when small, scrolling below 50% so text stays readable) and centred.
+  The strip underneath shows the render status and **− / % / + / Fit** zoom
+  controls. The percentage is the real on-screen scale.
+- **Click a table** to select it: it's highlighted, and the table list scrolls
+  to it. **Double-click** (or **Enter**) opens it in the Table view. With the
+  diagram focused, the **arrow keys** move between tables and **Esc** clears.
+- **The options bar** has Orientation (Left → Right by default), Theme,
+  Background, Relationship labels and *Keys only*. **More** adds spacing, font
+  size, fit to view, notes, a schema-name prefix, and *Hide audit and system
+  links*.
+- **Selections over 60 tables** don't redraw on every tick. They show *Out of
+  date* until you press **Render selected** (F5). If Mermaid can't draw a
+  diagram, its error message is shown on the canvas.
+
+### Big schemas: the schema map
+
+Schemas over 60 tables open on the **map**, and the **Diagram | Map** switch
+(Ctrl+M) changes view.
+
+- **Every table is a point**, sized by its links and grouped into **clusters**
+  of closely linked tables, each named after its most-connected table. On a
+  1,772-table Dynamics export that gives clusters such as `msdyn_project`, `sla`,
+  `systemuser`, `contact` and `account`.
+- **Select** a cluster by clicking its name, a region by dragging, or single
+  tables with Ctrl+click. The keyboard works too: arrows move, **Space**
+  selects, **Enter** opens and **Ctrl+A** selects the cluster.
+- **Draw these N** turns the selection into the ER diagram. It replaces the
+  ticks and can be undone.
+- The table filter highlights matches on the map, ticked tables show as dashed
+  rings, and tables with no links at all are listed underneath.
+
+### Dynamics 365 / Dataverse exports
+
+- **Audit and system links are hidden automatically** when they make up more
+  than 30% of all links (about 70% in a typical Dynamics export). These are
+  `createdby`, `modifiedby`, the `owning…` columns, `organizationid` and
+  `transactioncurrencyid`. It's one setting for the map, diagram, SQL and
+  exports, and *Keys only* then leaves those columns out too.
+- **Wide tables:** drawing tables that average more than 50 columns switches
+  *Keys only* on, with a link to show all columns again.
+- **Solution-layering columns** (`overwritetime`, `componentstate`) aren't
+  marked as primary keys.
+
+### The table list
+
+- Each row shows the table's links, **↗ out** and **↙ in** (audit and system
+  links not counted), and a dot when the table is in the diagram.
+- **Sort** by name, **Most connected**, or **By cluster** (the map's clusters,
+  with a header for each).
+- **Filter** by text (Ctrl+F) or by publisher **prefix** (`msdyn_`, `hsl_`, …),
+  or use **Ticked only** and **Hide unconnected**.
+- **Add related tables** ticks the neighbours of the ticked tables (choose the
+  foreign-key direction). **Trace path between tables** finds the shortest
+  foreign-key route between two tables, optionally via a third.
+- **Clear** and the bulk actions can be undone. The **Table list** menu saves
+  and loads the ticked tables as `.toml` presets.
+
+### The Details panel
+
+Closed by default; open it with **Details**, **Ctrl+I**, or **Ctrl+1–5** for a
+specific view.
+
+| View | What it shows |
+|---|---|
+| **Table** | The selected table's columns (tick to show them) and every table it references or is referenced by, each with **Add**. Audit links are folded into their own group. Double-click a connected table to move to it. |
+| **Data** | The rows read from the spreadsheet, sortable by column. Before a file loads, it explains the expected format. |
+| **Columns** | Include or leave out columns per table; sort by name or type; *PK, FK first*; **All / None / Keys only**, which can be undone. |
+| **Mermaid** | The generated `erDiagram` source. |
+| **SQL** | A T-SQL `SELECT` over the diagram's tables, joined on their foreign keys (composite keys included). Choose the start table, `INNER` or `LEFT` joins and a `TOP (n)` limit. Anything that can't be a clean join (a second foreign key between the same tables, a self-reference, a table with no path) is written as a `--` comment. |
+
+### Exporting
+
+- **Export** saves Draw.io, Excalidraw, PDF, PNG or SVG. Its arrow picks the
+  format (remembered), the **Background** (White by default, Transparent, or
+  Match the view, so a dark on-screen diagram still exports ready for a white
+  page) and the **PNG scale**.
+- Save dialogs suggest the spreadsheet's name and remember the folder; the
+  status line then offers **Show in folder**.
+- **Mermaid** copies the source or saves it as `.mmd` / `.md`. **Preview in
+  browser** opens the diagram in your browser, offline.
+
+### Session and updates
+
+- **File → Open Recent** lists the last 8 spreadsheets. The window layout,
+  Details panel and diagram options come back next launch. Theme and
+  background follow the OS light/dark mode.
+- **Help → Check for updates** asks GitHub for the latest release. The app
+  makes no network calls unless you choose this.
+
+## Keyboard shortcuts
+
+| Keys | Action |
+|---|---|
+| Ctrl+O | Open a spreadsheet |
+| Ctrl+F | Filter the table list |
+| F5 · Ctrl+Enter | Render the selection now |
+| Esc | Stop rendering · clear the diagram selection |
+| Ctrl+M | Switch between diagram and map |
+| Ctrl+I | Show or hide the Details panel |
+| Ctrl+1 … Ctrl+5 | Details: Table · Data · Columns · Mermaid · SQL |
+| Ctrl++ · Ctrl+- · Ctrl+0 | Zoom in · out · true 100% (until **Fit**) |
+| Arrows · Enter | Move between tables · open one (diagram or map) |
+| Ctrl+E | Export the diagram |
+| Ctrl+Shift+C · Ctrl+Shift+Q | Copy Mermaid · copy SQL |
+| Ctrl+S · Ctrl+L | Save as `.mmd` · load a table list |
+
+Most controls also have an Alt+letter mnemonic, shown underlined.
+
+## Install & run from source
+
+This project uses [uv](https://docs.astral.sh/uv/), which creates and manages
+the virtual environment from `pyproject.toml` / `uv.lock`:
 
 ```bash
-uv sync            # install dependencies (incl. dev tools) into .venv
-uv run xsltomermaid  # launch the GUI
+uv sync                      # install dependencies (incl. dev tools) into .venv
+uv run xsltomermaid          # launch the GUI
+uv run xsltomermaid-sample   # write sample_schema.xlsx to try it with
+uv run xsltomermaid sample_schema.xlsx   # open a file on startup
 ```
 
-Generate a sample workbook to try it out:
+With plain pip, use `pip install .`. `pip install -r requirements.txt` installs
+only the runtime dependencies, without the command-line entry points.
 
-```bash
-uv run xsltomermaid-sample  # writes sample_schema.xlsx
-uv run xsltomermaid          # then drag sample_schema.xlsx onto the window
-```
+## Command line and headless use
 
-You can also pass a file to auto-load on startup:
-
-```bash
-uv run xsltomermaid sample_schema.xlsx
-```
-
-For a plain pip install, use `pip install .`. If you manage dependencies separately,
-`pip install -r requirements.txt` installs the runtime dependencies without the CLI
-entry points.
-
-## Command line
-
-Generate the diagram without the GUI:
+Print the Mermaid for a whole spreadsheet, without the GUI:
 
 ```bash
 uv run python -m xsltomermaid.excel_to_mermaid sample_schema.xlsx
 ```
 
-## Screenshots (headless self-test)
-
-The app can screenshot **itself** — handy for CI or verifying output without a
-display. Both modes use Qt's offscreen platform, so no screen is needed.
-
-Screenshot the **whole window** (data table + Mermaid source):
+The app can also screenshot itself without a display (Qt's offscreen platform),
+which is handy for CI:
 
 ```bash
-QT_QPA_PLATFORM=offscreen uv run xsltomermaid sample_schema.xlsx --screenshot window.png
+# the whole window (a big schema captures its map)
+uv run xsltomermaid sample_schema.xlsx --screenshot window.png
+# just the rendered ER diagram, as PNG or SVG by extension
+uv run xsltomermaid sample_schema.xlsx --screenshot-diagram diagram.svg
 ```
 
-Screenshot the **rendered ER diagram** itself (real boxes-and-arrows), as PNG or
-SVG by extension:
-
-```bash
-QT_QPA_PLATFORM=offscreen uv run xsltomermaid sample_schema.xlsx --screenshot-diagram diagram.png
-QT_QPA_PLATFORM=offscreen uv run xsltomermaid sample_schema.xlsx --screenshot-diagram diagram.svg
-```
-
-The diagram is rendered by the vendored `mermaid.js` in a headless `QWebEngineView`,
-then the resulting `<svg>` is saved directly (SVG) or rasterised with QtSvg (PNG) —
-this works offscreen where a plain window grab of web content would come back blank.
+The diagram is drawn by the bundled `mermaid.js` in a headless
+`QWebEngineView`; the resulting `<svg>` is saved directly, or rasterised with
+QtSvg for PNG.
 
 ## Example output
 
@@ -181,35 +213,35 @@ erDiagram
     }
 ```
 
-> Note: Mermaid's ER parser only accepts a plain word for an attribute type, so
-> `varchar(100)` / `decimal(18,2)` are flattened to `varchar_100` / `decimal_18_2`.
+> Mermaid's ER syntax only accepts a plain word for an attribute type, so
+> `varchar(100)` and `decimal(18,2)` become `varchar_100` and `decimal_18_2`.
 
 ## Project layout
 
 | File | Purpose |
 |------|---------|
-| `src/xsltomermaid/excel_to_mermaid.py` | Pure-Python core: read the sheet, build the schema model, emit Mermaid. No Qt required. |
-| `src/xsltomermaid/main.py` | The main window (`MainWindow`), which wires everything together, and the `--screenshot*` CLI modes. |
-| `src/xsltomermaid/table_list.py` | The left-hand table list: filters, sorting, link counts, cluster headers. |
-| `src/xsltomermaid/inspector.py` | The Details panel's Table view: one table's columns and connected tables. |
+| `src/xsltomermaid/excel_to_mermaid.py` | The core: read the sheet, build the schema model, emit Mermaid. No Qt. |
+| `src/xsltomermaid/schema_map.py` | Clusters and lays out a whole schema for the map. No Qt. |
+| `src/xsltomermaid/sql_query.py` | Writes the T-SQL `SELECT … JOIN` for the SQL view. No Qt. |
+| `src/xsltomermaid/selection_preset.py` | Reads and writes `.toml` table-list presets. No Qt. |
+| `src/xsltomermaid/updates.py` | Checks the GitHub API for a newer release. No Qt. |
+| `src/xsltomermaid/main.py` | The main window, which wires everything together, and the CLI modes. |
+| `src/xsltomermaid/table_list.py` | The table list: filters, sorting, link counts, cluster headers. |
+| `src/xsltomermaid/inspector.py` | The Details panel's Table view. |
 | `src/xsltomermaid/column_selector.py` | The Details panel's Columns view. |
-| `src/xsltomermaid/options_bar.py` | The diagram options bar (orientation, theme, More, …). |
-| `src/xsltomermaid/widgets.py` | Small pieces: the drop area, status line, render status, data model, workers. |
-| `src/xsltomermaid/theme.py` | Colours, light/dark palettes, button styles and drawn status icons. |
+| `src/xsltomermaid/options_bar.py` | The diagram options bar. |
+| `src/xsltomermaid/map_view.py` | The schema map (`QGraphicsView`). |
+| `src/xsltomermaid/diagram_view.py` | Renders Mermaid in a `QWebEngineView`; SVG/PNG/PDF/Draw.io/Excalidraw export. |
+| `src/xsltomermaid/widgets.py` | Small pieces: drop area, status line, render status, data model, workers. |
+| `src/xsltomermaid/theme.py` | Colours, light/dark palettes, button styles, drawn status icons. |
 | `src/xsltomermaid/config.py` | Limits, export formats and per-user settings (`QSettings`). |
-| `src/xsltomermaid/diagram_view.py` | Renders the Mermaid diagram in a `QWebEngineView` and exports it as SVG/PNG. |
-| `src/xsltomermaid/services.py` | Application services for coordinating schema import workflows. |
-| `src/xsltomermaid/schema_map.py` | Clusters and lays out the whole schema for the map. No Qt required. |
-| `src/xsltomermaid/map_view.py` | The schema map view (QGraphicsView). |
-| `src/xsltomermaid/sql_query.py` | Writes the T-SQL `SELECT … JOIN` for the SQL query tab. No Qt required. |
-| `src/xsltomermaid/updates.py` | Checks the GitHub API for a newer release (Help → Check for updates). |
-| `src/xsltomermaid/__init__.py` | Holds `__version__`, the single source of the app version. |
-| `src/xsltomermaid/assets/` | Packaged application icons. |
-| `src/xsltomermaid/vendor/mermaid.min.js` | Locally bundled Mermaid (MIT) so rendering works offline. |
-| `src/xsltomermaid/make_sample.py` | Writes a small `sample_schema.xlsx` for testing. |
-| `tests/test_excel_to_mermaid.py` | Tests for the core (no Qt needed). |
-| `tests/test_screenshot.py` | Headless tests — screenshots the window and the rendered diagram. |
-| `pyproject.toml` / `uv.lock` | Package definition and locked dependencies. |
+| `src/xsltomermaid/services.py` | Coordinates loading a workbook into a schema. |
+| `src/xsltomermaid/make_sample.py` | Writes the sample workbook. |
+| `src/xsltomermaid/__init__.py` | `__version__`, the single source of the app version. |
+| `src/xsltomermaid/vendor/mermaid.min.js` | Bundled Mermaid (MIT), so rendering works offline. |
+| `src/xsltomermaid/assets/` | Application icons. |
+| `tests/` | Core, map, SQL, preset and update tests (no display needed), plus headless GUI tests in `test_screenshot.py`. |
+| `xsltomermaid.spec` | PyInstaller build definition. |
 
 ## Tests
 
@@ -217,52 +249,49 @@ erDiagram
 QT_QPA_PLATFORM=offscreen uv run pytest
 ```
 
-The core tests run without a display; the screenshot test runs Qt offscreen and
-skips automatically if the GUI stack isn't importable.
+The GUI tests run Qt offscreen and skip automatically if the GUI stack isn't
+available. CI runs the full suite on pushes to `main` and on every pull request.
 
-## Package as a standalone executable
+## Building the executable
 
-The app can be frozen into a self-contained executable (bundling Python, PySide6
-incl. QtWebEngine, and the vendored `mermaid.js`) with
-[PyInstaller](https://pyinstaller.org/), driven by `xsltomermaid.spec`:
+The app freezes into a self-contained executable (Python, PySide6 with
+QtWebEngine, and the bundled `mermaid.js`) with
+[PyInstaller](https://pyinstaller.org/):
 
 ```bash
-uv sync                              # installs PyInstaller (dev group)
+uv sync                                       # installs PyInstaller (dev group)
 uv run pyinstaller xsltomermaid.spec --noconfirm
 ```
 
-- **One-file (default):** produces a single `dist/xsltomermaid` (or
-  `dist/xsltomermaid.exe` on Windows). Big (~230 MB) because Qt + Chromium are
-  bundled, and slower to start.
-- **One-dir:** set `XSLTOMERMAID_ONEFILE=0` to instead produce
-  `dist/xsltomermaid/` containing the executable plus its libraries — faster to
-  start and the most reliable option for QtWebEngine. Distribute the whole folder
-  (zip it).
+- **One-file (default):** a single `dist/xsltomermaid(.exe)`, about 210 MB
+  because Qt and Chromium are bundled, and slower to start.
+- **One-dir:** set `XSLTOMERMAID_ONEFILE=0` for a `dist/xsltomermaid/` folder
+  with the executable and its libraries. It starts faster and is the most
+  reliable option for QtWebEngine; distribute the whole folder.
 
-> **Build on the target OS.** PyInstaller does not cross-compile — build the
-> Windows `.exe` on Windows, a macOS app on macOS, etc.
+PyInstaller doesn't cross-compile, so build on the target OS. Two GitHub
+Actions workflows build the Windows `.exe` on a Windows runner:
 
-### Get a Windows `.exe` without a Windows machine
+- **Build Windows exe** (`.github/workflows/build-windows.yml`) runs on pushes to
+  `main` and on demand, and uploads the exe as a run artifact (login required,
+  expires after 90 days).
+- **Release** (`.github/workflows/release.yml`) runs when a version tag is
+  pushed and publishes the exe as a GitHub Release, with release notes.
 
-Two GitHub Actions workflows build the `.exe` on a Windows runner:
+### Releasing a version
 
-- **CI build** (`.github/workflows/build-windows.yml`) — runs on pushes to `main`
-  / `claude/**` and on demand (**Actions** tab → "Build Windows exe" → *Run
-  workflow*). It uploads the exe as a run **artifact** (`xsltomermaid-windows`),
-  which requires a GitHub login and expires after 90 days.
-- **Release** (`.github/workflows/release.yml`) — runs when you push a version tag
-  and publishes the exe as a **GitHub Release** asset with a permanent, no-login
-  download link. First set `__version__` in `src/xsltomermaid/__init__.py` to
-  match the tag (`pyproject.toml` reads it from there, and the in-app update
-  check compares against it), run `uv lock`, and merge that. Then:
+1. Set `__version__` in `src/xsltomermaid/__init__.py` (for example `0.15.0`).
+   `pyproject.toml` reads it from there, and the in-app update check compares
+   against it. Merge that change to `main`.
+2. Tag the merged commit and push the tag:
 
-  ```bash
-  git tag v0.1.0
-  git push origin v0.1.0
-  ```
+   ```bash
+   git tag -a v0.15.0 -m "v0.15.0"
+   git push origin v0.15.0
+   ```
 
-  The asset is named `xsltomermaid-v0.1.0.exe` and appears on the repo's
-  **Releases** page.
+   The Release workflow builds, smoke-tests and publishes
+   `xsltomermaid-v0.15.0.exe`.
 
 ## License
 
