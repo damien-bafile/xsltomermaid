@@ -52,9 +52,11 @@ this export.
 ### The workspace
 
 - **The diagram is the centre of the window**, fitted to the view (enlarged up
-  to 150% when small, scrolling below 50% so text stays readable) and centred.
+  to 150% when small, scrolling below 75% so text stays readable) and centred.
   The strip underneath shows the render status and **− / % / + / Fit** zoom
-  controls. The percentage is the real on-screen scale.
+  controls. The percentage is the real on-screen scale. When you zoom or Fit
+  below a readable size it says so, and picking a table in the list, map or
+  Table view goes back to a readable size centred on it.
 - **Click a table** to select it: it's highlighted, and the table list scrolls
   to it. **Double-click** (or **Enter**) opens it in the Table view. With the
   diagram focused, the **arrow keys** move between tables and **Esc** clears.
@@ -83,8 +85,8 @@ Schemas over 25 tables open on the **map**, and the **Diagram | Map** switch
 - The table filter highlights matches on the map, ticked tables show as dashed
   rings, and tables with no links at all are listed underneath.
 - **Save map image…** saves the whole map as a PNG (4,000 px on the long side)
-  or SVG.
-- A drawn diagram too big to fit at 50% opens centred on its most-connected
+  or SVG, with the cluster names sized to the image.
+- A drawn diagram too big to fit at 75% opens centred on its most-connected
   table (its top, when the table is taller than the view), not the top-left
   corner.
 

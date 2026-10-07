@@ -186,10 +186,10 @@ def _shell_html() -> str:
     if (!window._actual && (force || window._fit)) {
       var w = window.innerWidth - 24, h = window.innerHeight - 24;
       scale = Math.min(w / vb.width, h / vb.height, 1.5);
-      // Below about half size the column text is unreadable, so automatic
-      // fitting stops there and the view scrolls; the Fit button (force)
-      // still shows the whole diagram.
-      scale = Math.max(force ? 0.05 : 0.5, scale);
+      // Below three-quarter size the column text (12px) drops under about
+      // 9px, so automatic fitting stops there and the view scrolls (centred
+      // on the busiest table); the Fit button (force) still shows it all.
+      scale = Math.max(force ? 0.05 : 0.75, scale);
     }
     svg.style.maxWidth = 'none';
     svg.style.width = (vb.width * scale) + 'px';
@@ -925,6 +925,7 @@ class DiagramView(QWidget):
         self._view = None
         self._render_gen = 0  # bumped per render so stale polls are ignored
         self._fit_scale = 1.0  # the page's own fit scale, for the zoom readout
+        self._font_px = RenderStyle().font_size  # the drawn text size at 100%
         # Keep-alive rendering: the shell page (mermaid.js) is loaded once, then
         # each diagram is drawn by a JS call rather than a full page reload.
         self._shell_url: QUrl | None = None
@@ -964,6 +965,11 @@ class DiagramView(QWidget):
                 "Ctrl+scroll, or Ctrl++ / Ctrl+- / Ctrl+0, to zoom the diagram."
             )
             self._zoom_label.setAccessibleName("Zoom level")
+            # Said when the text is drawn too small to read, with the way out.
+            self._small_hint = QLabel("Text too small to read · zoom in or double-click a table")
+            self._small_hint.setVisible(False)
+            self._small_hint.setAccessibleName("Diagram text is too small to read")
+            self._strip.addWidget(self._small_hint)
             for text, tip, slot in (
                 ("−", "Zoom out (Ctrl+-)", lambda: self.zoom_by(0.8)),
                 (None, None, None),
@@ -1007,6 +1013,7 @@ class DiagramView(QWidget):
         while the diagram was drawn at, say, 55%.
         """
         self._zoom_label.setText(f"{self._view.zoomFactor() * self._fit_scale:.0%}")
+        self._sync_small_hint()
         if self._shell_loaded:
             self._view.page().runJavaScript(
                 "window._lastScale || 1", self._on_fit_scale
@@ -1020,6 +1027,38 @@ class DiagramView(QWidget):
         if abs(scale - self._fit_scale) > 1e-6:
             self._fit_scale = scale
             self._zoom_label.setText(f"{self._view.zoomFactor() * scale:.0%}")
+            self._sync_small_hint()
+
+    # Drawn text smaller than this (in px) is unreadable; say so.
+    SMALL_TEXT_PX = 9.0
+
+    def effective_text_px(self) -> float:
+        """How tall the diagram's text is on screen right now."""
+        if self._view is None:
+            return float(self._font_px)
+        return self._font_px * self._view.zoomFactor() * self._fit_scale
+
+    def _sync_small_hint(self):
+        small = self._shell_loaded and self.effective_text_px() < self.SMALL_TEXT_PX
+        if small == self._small_hint.isHidden():
+            self._small_hint.setVisible(small)
+
+    def focus_entity(self, entity_id: str):
+        """Highlight a table and, if the text is too small to read, return to
+        the readable automatic fit (75% or more) centred on it."""
+        if self._view is None or not self._shell_loaded or not entity_id:
+            self.highlight_entity(entity_id)
+            return
+        if self.effective_text_px() < self.SMALL_TEXT_PX:
+            self._view.setZoomFactor(1.0)
+            self._view.page().runJavaScript(
+                "window._actual = false; window.fitDiagram(false)"
+            )
+            self._update_zoom_label()
+            # Scroll once the new size has laid out.
+            QTimer.singleShot(60, lambda: self.highlight_entity(entity_id))
+            return
+        self.highlight_entity(entity_id)
 
     def add_status_widget(self, widget):
         """Put a status widget (render status, Stop) at the strip's left end."""
@@ -1080,6 +1119,7 @@ class DiagramView(QWidget):
             return
         self._focus_entity = focus
         style = style or RenderStyle()
+        self._font_px = style.font_size
         self._render_gen += 1
         gen = self._render_gen
         self.render_started.emit()
