@@ -33,19 +33,21 @@ DefaultValue | ComputedDefinition | Collation | Description
    matches on the map, ticked tables show as rings, and tables with no links
    are listed underneath.
    The **table list** shows each table's links (↗ out, ↙ in; audit and system
-   links not counted) and a dot for tables in the diagram. Sort it by name or
-   **Most connected**, filter it to one publisher **prefix** (`msdyn_`, `hsl_`,
-   …), or **Hide unconnected** tables.
+   links not counted) and a dot for tables in the diagram. Sort it by name,
+   **Most connected** or **By cluster** (the map's clusters), filter it to one
+   publisher **prefix** (`msdyn_`, `hsl_`, …), or **Hide unconnected** tables.
    **Click a table in the diagram** to select it: it's highlighted, the table
    list scrolls to it, and the Columns view shows just its columns.
    **Double-click** opens the Details panel on the **Table** view: the table's
    columns (tick to show them) and every table it references or is referenced
-   by, each with **Add**. Double-clicking a connected table moves the view to it,
-   and Dynamics' audit and ownership links are folded into their own group. Clicking empty canvas or
-   pressing Esc clears the selection. Selecting a row in the list highlights
-   that table in the diagram.
-   **Renders** the diagram live in-app (a "Rendered diagram" tab powered by a
-   locally vendored `mermaid.js`, so no internet is needed). The diagram
+   by, each with **Add**. Double-clicking a connected table moves the view to
+   it, and Dynamics' audit and ownership links are folded into their own group.
+   Clicking empty canvas or pressing Esc clears the selection. With the diagram
+   focused, the **arrow keys** move between tables and **Enter** opens the
+   selected one. Selecting a row in the list highlights that table in the
+   diagram.
+   **Renders** the diagram live in-app, using a locally bundled `mermaid.js`,
+   so no internet is needed. The diagram
    **follows your ticks**: changing tables or columns redraws it a moment later.
    Selections over 60 tables wait for **Render selected** (F5) and show an
    *Out of date* marker until then. Exports always use the current selection.
@@ -62,8 +64,8 @@ DefaultValue | ComputedDefinition | Collation | Description
    or loads the ticked tables as `.toml` presets, including the source filename.
 7. Uses **Left → Right** as the default rendered layout direction. Orientation,
    theme, background, relationship labels and *Keys only* sit in the options
-   bar. Spacing, font size, fit width, notes and schema prefix are under
-   **More**.
+   bar. Spacing, font size, fit width, notes, schema prefix and **Hide audit
+   and system links** (for the diagram, SQL and exports) are under **More**.
 8. Shows **PK/FK markers** in the column selector, with column sorting by name or
    data type and a **PK, FK first** checkbox (primary keys, then foreign keys).
    **Clear** (tables) and **All / None / Keys only** (columns) can be undone.
