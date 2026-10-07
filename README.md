@@ -182,3 +182,7 @@ Two GitHub Actions workflows build the `.exe` on a Windows runner:
 
   The asset is named `xsltomermaid-v0.1.0.exe` and appears on the repo's
   **Releases** page.
+
+## License
+
+[MIT](LICENSE)
