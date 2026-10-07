@@ -98,6 +98,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QToolButton,
     QHeaderView,
     QTableView,
@@ -149,6 +150,8 @@ RENDER_WARN_LIMIT = 60
 # After the last tick, wait this long before re-rendering, so ticking several
 # tables in a row draws once rather than once per click.
 AUTO_RENDER_DELAY_MS = 400
+# How many files File → Open Recent remembers.
+RECENT_FILES_MAX = 8
 # Exporting more than this many tables to an interchange format (drawio /
 # excalidraw) warns that the file may be slow to open — but never blocks it.
 EXPORT_WARN_TABLES = 500
@@ -670,9 +673,16 @@ class TableSelector(QWidget):
         self._list.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self._list, 1)
 
+        count_row = QHBoxLayout()
         self._count = QLabel("No tables loaded yet")
         self._count.setStyleSheet(f"color: {_muted_hex(self)};")
-        layout.addWidget(self._count)
+        count_row.addWidget(self._count, 1)
+        # For big schemas: review what's ticked without scrolling 1,000+ rows.
+        self._ticked_only = QCheckBox("Ticked &only")
+        self._ticked_only.setToolTip("List only the tables that are ticked.")
+        self._ticked_only.toggled.connect(lambda _on: self._apply_filter_text(self._filter.text()))
+        count_row.addWidget(self._ticked_only)
+        layout.addLayout(count_row)
 
         button_row = QHBoxLayout()
         self._select_shown_btn = QPushButton("&Select shown")
@@ -844,6 +854,7 @@ class TableSelector(QWidget):
         for widget in (
             self._filter,
             self._list,
+            self._ticked_only,
             self._select_shown_btn,
             self._clear_btn,
             self._related_btn,
@@ -875,6 +886,7 @@ class TableSelector(QWidget):
             item.setCheckState(Qt.Unchecked)
             self._list.addItem(item)
         self._list.blockSignals(False)
+        self._ticked_only.setChecked(False)
         self._filter.clear()
         # Refill the From/To pickers and default them to the first two tables so
         # a path can be traced without any prior clicking.
@@ -904,8 +916,12 @@ class TableSelector(QWidget):
 
     def _apply_filter_text(self, text: str):
         needle = text.strip().lower()
+        ticked_only = self._ticked_only.isChecked()
         for item in self._items():
-            item.setHidden(needle not in item.text().lower())
+            item.setHidden(
+                needle not in item.text().lower()
+                or (ticked_only and item.checkState() != Qt.Checked)
+            )
 
     def _on_item_changed(self, _item):
         self._update_count()
@@ -937,6 +953,8 @@ class TableSelector(QWidget):
             item.setCheckState(state)
         self._list.blockSignals(False)
         self._update_count()
+        if self._ticked_only.isChecked():
+            self._apply_filter_text(self._filter.text())
 
     def selected_tables(self) -> list[str]:
         return [item.text() for item in self._items() if item.checkState() == Qt.Checked]
@@ -955,6 +973,8 @@ class TableSelector(QWidget):
                 newly += 1
         self._list.blockSignals(False)
         self._update_count()
+        if self._ticked_only.isChecked():
+            self._apply_filter_text(self._filter.text())
         return newly
 
     def set_selected_tables(self, names) -> tuple[int, list[str]]:
@@ -1570,6 +1590,53 @@ class DiagramOptionsBar(QWidget):
         # follows the light/dark scheme — nothing hand-coloured to update.
         pass
 
+    # Theme and background are left out on purpose: they follow the OS's light
+    # or dark mode at every launch (see apply_system_defaults).
+    def _remembered(self):
+        return [
+            ("orientation", self._orientation),
+            ("spacing", self._spacing),
+            ("font", self._font),
+            ("fit_width", self._fit_width),
+            ("notes", self._show_comments),
+            ("rel_labels", self._show_rel_labels),
+            ("prefix_schema", self._prefix_schema),
+            ("keys_only", self._keys_only),
+            ("more_open", self._more),
+        ]
+
+    def save_state(self, settings: QSettings):
+        for key, widget in self._remembered():
+            if isinstance(widget, QComboBox):
+                value = widget.currentIndex()
+            elif isinstance(widget, QSpinBox):
+                value = widget.value()
+            else:
+                value = widget.isChecked()
+            settings.setValue(f"diagram/{key}", value)
+
+    def restore_state(self, settings: QSettings):
+        """Put back the choices from the last session, without re-rendering."""
+        for key, widget in self._remembered():
+            value = settings.value(f"diagram/{key}")
+            if value is None:
+                continue
+            widget.blockSignals(True)
+            try:
+                if isinstance(widget, QComboBox):
+                    index = int(value)
+                    if 0 <= index < widget.count():
+                        widget.setCurrentIndex(index)
+                elif isinstance(widget, QSpinBox):
+                    widget.setValue(int(value))
+                else:
+                    widget.setChecked(str(value).lower() in ("true", "1"))
+            except (TypeError, ValueError):
+                pass  # a hand-edited or stale value: keep the default
+            finally:
+                widget.blockSignals(False)
+        self._on_more_toggled(self._more.isChecked())
+
     def apply_system_defaults(self, dark: bool):
         """Default the diagram's own theme + background to match the OS."""
         blocked = [
@@ -1843,7 +1910,29 @@ class MainWindow(QMainWindow):
         # Size columns from a sample of rows, not all of them, so auto-sizing a
         # huge sheet stays fast.
         table_header.setResizeContentsPrecision(50)
-        tabs.addTab(self._table, "Extracted data")
+        # Before a file loads, the tab explains what the sheet should look like
+        # instead of showing 17 empty column headers.
+        self._table_empty = QLabel(
+            "<p style='font-weight:600'>No spreadsheet loaded yet.</p>"
+            "<p>The sheet needs <b>one row per database column</b>. Only "
+            "<b>TableName</b> and <b>ColumnName</b> are required; these headers "
+            "are also understood, in any order and case:</p>"
+            "<p>" + " · ".join(h for h in EXPECTED_HEADERS
+                                if h not in ("TableName", "ColumnName")) + "</p>"
+            "<p>Foreign keys come from <b>ForeignKeyReference</b>, written as "
+            "<i>dbo.Customer.CustomerID</i>, <i>Customer.CustomerID</i>, "
+            "<i>Customer(CustomerID)</i> or just <i>Customer</i>. Running "
+            "SQL Server? <b>View → T-SQL statement</b> produces this export.</p>"
+        )
+        self._table_empty.setTextFormat(Qt.RichText)
+        self._table_empty.setWordWrap(True)
+        self._table_empty.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self._table_empty.setContentsMargins(24, 20, 24, 20)
+        self._table_empty.setMaximumWidth(760)
+        self._table_stack = QStackedWidget()
+        self._table_stack.addWidget(self._table_empty)
+        self._table_stack.addWidget(self._table)
+        tabs.addTab(self._table_stack, "Extracted data")
 
         self._columns = ColumnSelector()
         self._columns.changed.connect(self._on_selection_edited)
@@ -1906,6 +1995,7 @@ class MainWindow(QMainWindow):
         self._selector.path_requested.connect(self._find_shortest_path)
 
         body = QSplitter(Qt.Horizontal)
+        self._body = body
         body.addWidget(self._selector)
         body.addWidget(tabs)
         body.setStretchFactor(0, 0)
@@ -1996,6 +2086,10 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             self._options_bar.apply_system_defaults(system_is_dark(app))
+        self._restore_session()
+        save_options = lambda *_: self._options_bar.save_state(app_settings())  # noqa: E731
+        self._options_bar.changed.connect(save_options)
+        self._options_bar._more.toggled.connect(save_options)
         self.retheme()
 
     def _build_menu_bar(self):
@@ -2023,6 +2117,9 @@ class MainWindow(QMainWindow):
 
         file_menu = bar.addMenu("&File")
         file_menu.addAction(act("&Open…", self.open_file_dialog, QKeySequence.StandardKey.Open))
+        self._recent_menu = file_menu.addMenu("Open &Recent")
+        self._recent_menu.aboutToShow.connect(self._rebuild_recent_menu)
+        self._rebuild_recent_menu()
         file_menu.addAction(
             act("&Load table list…", self.load_table_selection_toml,
                 QKeySequence("Ctrl+L"), schema_only=True)
@@ -2219,6 +2316,75 @@ class MainWindow(QMainWindow):
             self.retheme()
         super().changeEvent(event)
 
+    # -- recent files and session state --------------------------------------
+    def recent_files(self) -> list[str]:
+        value = app_settings().value("recent/files", [])
+        if isinstance(value, str):  # QSettings returns a bare str for one item
+            value = [value]
+        return [str(v) for v in (value or []) if v]
+
+    def _remember_recent(self, path: str):
+        """Put ``path`` at the top of File → Open Recent (not the temp sample)."""
+        path = os.path.abspath(path)
+        sample = os.path.abspath(os.path.join(tempfile.gettempdir(), "sample_schema.xlsx"))
+        if os.path.normcase(path) == os.path.normcase(sample):
+            return
+        files = [f for f in self.recent_files()
+                 if os.path.normcase(f) != os.path.normcase(path)]
+        app_settings().setValue("recent/files", [path, *files][:RECENT_FILES_MAX])
+
+    def _rebuild_recent_menu(self):
+        menu = self._recent_menu
+        menu.clear()
+        files = self.recent_files()
+        for i, path in enumerate(files, start=1):
+            mnemonic = f"&{i}" if i < 10 else str(i)
+            action = menu.addAction(f"{mnemonic}  {os.path.basename(path)}")
+            action.setToolTip(path)
+            action.setStatusTip(path)
+            action.triggered.connect(lambda _c=False, p=path: self._open_recent(p))
+        if files:
+            menu.addSeparator()
+            menu.addAction("&Clear list", self._clear_recent)
+        else:
+            empty = menu.addAction("No recent files")
+            empty.setEnabled(False)
+        menu.setToolTipsVisible(True)
+
+    def _open_recent(self, path: str):
+        if not os.path.exists(path):
+            QMessageBox.information(
+                self,
+                "File not found",
+                f"{path}\n\nThis file has been moved or deleted, so it was "
+                "removed from the recent list.",
+            )
+            app_settings().setValue(
+                "recent/files", [f for f in self.recent_files() if f != path]
+            )
+            return
+        self.load_file_async(path)
+
+    def _clear_recent(self):
+        app_settings().remove("recent/files")
+
+    def _restore_session(self):
+        """Window size, panel split and diagram options from the last session."""
+        settings = app_settings()
+        geometry = settings.value("window/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        split = settings.value("window/splitter")
+        if split is not None:
+            self._body.restoreState(split)
+        self._options_bar.restore_state(settings)
+
+    def closeEvent(self, event):  # noqa: N802 (Qt naming)
+        settings = app_settings()
+        settings.setValue("window/geometry", self.saveGeometry())
+        settings.setValue("window/splitter", self._body.saveState())
+        super().closeEvent(event)
+
     # -- loading -----------------------------------------------------------
     def load_sample(self):
         """Write the bundled sample schema to a temp file and load it.
@@ -2338,6 +2504,8 @@ class MainWindow(QMainWindow):
         self._loaded_name = os.path.basename(path)
         self._render_confirmed_sig = None  # new file: forget the prior confirmation
         self._populate_table(rows)
+        self._table_stack.setCurrentWidget(self._table)
+        self._remember_recent(path)
         # The big drop target has done its job; shrink it to a file chip so the
         # tabs get the height, and wake up the (until now inert) table picker.
         self._drop.set_loaded(self._loaded_name)

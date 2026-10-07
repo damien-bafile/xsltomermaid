@@ -38,11 +38,16 @@ DefaultValue | ComputedDefinition | Collation | Description
    data type and a **PK, FK first** checkbox (primary keys, then foreign keys).
    **Clear** (tables) and **All / None / Keys only** (columns) can be undone.
    Click extracted-data column headers to sort ascending or descending.
-9. Shows the diagram's **zoom percentage**. Zoom with **Ctrl+scroll** or
+9. **Remembers your session**: **File → Open Recent** lists the last 8
+   spreadsheets, and the window layout and diagram options come back on the
+   next launch. Theme and background still follow the OS's light/dark mode.
+   **Ticked only** under the table list shows just the selection, which helps
+   on schemas with thousands of tables.
+10. Shows the diagram's **zoom percentage**. Zoom with **Ctrl+scroll** or
    **Ctrl+= / Ctrl+- / Ctrl+0** (View menu).
-10. Includes a right-docked, copyable **SQL Server schema query** that produces the
+11. Includes a right-docked, copyable **SQL Server schema query** that produces the
     expected columns. It is **hidden by default**; open it via **View → T-SQL statement**.
-11. **Help → Check for updates…** asks GitHub for the latest release and, if it's
+12. **Help → Check for updates…** asks GitHub for the latest release and, if it's
     newer than the running version, offers to open its download page. The app
     makes no network calls unless you choose this. **Help → About** shows the
     running version.
