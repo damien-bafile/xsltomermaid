@@ -857,6 +857,63 @@ class DiagramOptions:
     # FK columns that Keys only leaves out too (e.g. Dynamics audit columns
     # such as createdby / owninguser, when their links are hidden).
     hide_columns: frozenset = frozenset()
+    # Under Keys only, end each table with a "+N hidden" row so a reduced
+    # table doesn't pass for the whole thing.
+    note_hidden: bool = True
+
+
+# Under Keys only, a table with more key rows than this keeps its primary key
+# and the foreign keys to tables in the diagram; the rest are counted in the
+# "+N hidden" row. Dynamics tables carry dozens of lookups each.
+KEYS_ONLY_ROW_LIMIT = 12
+
+
+@dataclass
+class DrawnColumns:
+    """Which of a table's columns a diagram draws, and what it leaves out."""
+
+    columns: list[Column]
+    hidden: int = 0  # left out by Keys only (including collapsed FKs)
+    collapsed_fk: int = 0  # FKs left out because their table isn't drawn
+
+
+def linked_fk_columns(schema: Schema) -> dict[str, set[str]]:
+    """``{table: FK column names}`` whose relationship is in ``schema``.
+
+    Lowercase on both sides. These are the foreign keys that point at a table
+    that is drawn too, so Keys only keeps them when it trims a long table.
+    """
+    linked: dict[str, set[str]] = {}
+    for rel in schema.relationships:
+        columns = rel.child_columns or tuple(c.strip() for c in rel.label.split(","))
+        linked.setdefault(rel.child_table.lower(), set()).update(
+            c.lower() for c in columns if c
+        )
+    return linked
+
+
+def drawn_columns(
+    table: Table, options: DiagramOptions | None = None, linked: set[str] | None = None
+) -> DrawnColumns:
+    """The columns :func:`generate_mermaid` draws for ``table``.
+
+    ``linked`` is the lowercase FK columns whose parent is drawn (see
+    :func:`linked_fk_columns`); without it a long table isn't trimmed.
+    """
+    opts = options or DiagramOptions()
+    if not opts.keys_only:
+        return DrawnColumns(list(table.columns))
+    keys = [
+        c for c in table.columns
+        if c.is_primary_key
+        or (c.foreign_key_reference and c.name.lower() not in opts.hide_columns)
+    ]
+    collapsed = 0
+    if linked is not None and len(keys) > KEYS_ONLY_ROW_LIMIT:
+        kept = [c for c in keys if c.is_primary_key or c.name.lower() in linked]
+        collapsed = len(keys) - len(kept)
+        keys = kept
+    return DrawnColumns(keys, len(table.columns) - len(keys), collapsed)
 
 
 def mermaid_entity_ids(schema: Schema, options: DiagramOptions | None = None) -> dict[str, str]:
@@ -898,15 +955,11 @@ def generate_mermaid(schema: Schema, options: DiagramOptions | None = None) -> s
     if schema.relationships:
         lines.append("")
 
+    linked = linked_fk_columns(schema)
     for table in schema.tables:
         lines.append(f"    {entity_id(table.name)} {{")
-        for column in table.columns:
-            if opts.keys_only and (
-                not (column.is_primary_key or column.foreign_key_reference)
-                or (not column.is_primary_key and column.name.lower() in opts.hide_columns)
-            ):
-                continue
-
+        drawn = drawn_columns(table, opts, linked.get(table.name.lower(), set()))
+        for column in drawn.columns:
             keys = []
             if column.is_primary_key:
                 keys.append("PK")
@@ -931,6 +984,11 @@ def generate_mermaid(schema: Schema, options: DiagramOptions | None = None) -> s
             lines.append(
                 f"        {_attr_type(column)} {_attr_name(column)}{key_part}{comment_part}"
             )
+        if drawn.hidden and opts.note_hidden:
+            note = f"+{drawn.hidden:,} hidden by Keys only"
+            if drawn.collapsed_fk:
+                note += f", {drawn.collapsed_fk:,} of them FK"
+            lines.append(f'        more columns "{note}"')
         lines.append("    }")
 
     return "\n".join(lines) + "\n"

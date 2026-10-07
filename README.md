@@ -91,6 +91,11 @@ Schemas over 60 tables open on the **map**, and the **Diagram | Map** switch
   exports, and *Keys only* then leaves those columns out too.
 - **Wide tables:** drawing tables that average more than 50 columns switches
   *Keys only* on, with a link to show all columns again.
+- **Keys only says what it left out:** each table ends with a
+  "+N hidden by Keys only" row, and the Table view counts the columns actually
+  drawn. A table with more than 12 key columns keeps its primary key and the
+  foreign keys to tables in the diagram; the other foreign keys are counted in
+  that row.
 - **Solution-layering columns** (`overwritetime`, `componentstate`) aren't
   marked as primary keys.
 

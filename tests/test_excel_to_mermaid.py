@@ -478,3 +478,37 @@ def test_keys_only_can_drop_hidden_audit_columns():
     # The column row goes; hiding the link itself is the window's job.
     assert "int createdby FK" not in hidden
     assert "int primarycontact FK" in hidden and "accountid PK" in hidden
+
+
+def test_keys_only_ends_each_reduced_table_with_a_hidden_count():
+    schema = build_schema(SAMPLE_ROWS)
+    text = generate_mermaid(schema, DiagramOptions(keys_only=True))
+    customer = text[text.index("Customer {"):]
+    customer = customer[:customer.index("}")]
+    hidden = sum(1 for c in schema.tables[0].columns if not c.is_primary_key)
+    assert f'more columns "+{hidden} hidden by Keys only"' in customer
+    assert "more columns" not in generate_mermaid(schema)  # nothing hidden
+    off = generate_mermaid(schema, DiagramOptions(keys_only=True, note_hidden=False))
+    assert "more columns" not in off
+
+
+def test_keys_only_collapses_long_fk_lists_to_drawn_tables():
+    from xsltomermaid.excel_to_mermaid import KEYS_ONLY_ROW_LIMIT, drawn_columns, linked_fk_columns
+
+    rows = [_row("hub", 1, "hubid", pk=True)]
+    for i in range(KEYS_ONLY_ROW_LIMIT + 5):
+        rows.append(_row("hub", i + 2, f"ref{i}", fk=f"dbo.t{i}.t{i}id"))
+    rows += [_row("t0", 1, "t0id", pk=True), _row("t1", 1, "t1id", pk=True)]
+    schema = filter_schema(build_schema(rows), ["hub", "t0", "t1"])
+    hub = next(t for t in schema.tables if t.name == "hub")
+    opts = DiagramOptions(keys_only=True)
+    result = drawn_columns(hub, opts, linked_fk_columns(schema)["hub"])
+    assert [c.name for c in result.columns] == ["hubid", "ref0", "ref1"]
+    assert result.collapsed_fk == KEYS_ONLY_ROW_LIMIT + 3
+    assert result.hidden == result.collapsed_fk
+    text = generate_mermaid(schema, opts)
+    assert f"+{result.hidden} hidden by Keys only, {result.collapsed_fk} of them FK" in text
+    assert "ref5" not in text
+    # A short table keeps every key, drawn or not.
+    short = build_schema(rows[:4])
+    assert len(drawn_columns(short.tables[0], opts, set()).columns) == 4

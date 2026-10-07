@@ -1614,6 +1614,29 @@ def test_table_view_shows_columns_and_both_directions_of_links(tmp_path):
     del app
 
 
+def test_table_view_counts_match_the_diagram_under_keys_only(tmp_path):
+    app, window = _inspector_window(tmp_path)
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer"])
+    window._render_selection()
+    window._focus_table("Customer")
+    ins = window._inspector
+    total = ins._columns.count()
+    assert ins._meta.text().startswith(f"{total} of {total} columns drawn")
+    window._options_bar._keys_only.setChecked(True)  # re-renders
+    assert ins._meta.text().startswith(f"1 of {total} columns drawn (Keys only)")
+    hidden = [
+        ins._columns.item(i) for i in range(total)
+        if ins._columns.item(i).text().endswith("hidden by Keys only")
+    ]
+    assert len(hidden) == total - 1
+    assert all(i.checkState() == app_module.Qt.Checked for i in hidden)  # still ticked
+    assert "only key columns are drawn" in window._columns._count.text()
+    assert "hidden by Keys only" in window._mermaid_text
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_table_view_add_ticks_the_table_and_can_be_undone(tmp_path, monkeypatch):
     app, window = _inspector_window(tmp_path)
     monkeypatch.setattr(window, "_render_selection", lambda: None)
