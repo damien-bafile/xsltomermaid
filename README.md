@@ -23,18 +23,26 @@ DefaultValue | ComputedDefinition | Collation | Description
    column picker, Mermaid source and SQL sit in a **Details** panel on the right.
    It starts closed and opens from the **Details** button, **Ctrl+I**, or
    **Ctrl+1–5** for a specific view.
-   Big schemas open on the **schema map** (**Map** button or **View → Schema map**,
-   Ctrl+M). Every table is a point, sized by its links and grouped into
-   clusters of closely linked tables, each named after its most-connected
-   table. Dynamics' audit, ownership and system links are hidden by default,
-   so the real modules separate. Drag to select a region (Ctrl+click adds or
-   removes a table), then **Draw selection** to draw it as the ER diagram;
-   this replaces the ticks and can be undone. The table filter highlights
-   matches on the map, ticked tables show as rings, and tables with no links
-   are listed underneath.
+   Big schemas open on the **schema map**. The **Diagram | Map** switch (or
+   Ctrl+M) changes view. Every table is a point, sized by its links and grouped
+   into clusters of closely linked tables, each named after its most-connected
+   table. Click a cluster's name to select the whole cluster, or drag to select
+   a region (Ctrl+click adds or removes a table). The keyboard works too:
+   arrows move between tables, Space selects, Enter opens, and Ctrl+A selects
+   the cluster. **Draw these N** draws the selection as the ER diagram; it
+   replaces the ticks and can be undone. The table filter highlights matches,
+   ticked tables show as dashed rings, the map's selection is tinted in the
+   list, and tables with no links are listed underneath.
+   **Audit and system links** (`createdby`, `modifiedby`, `owning…`,
+   `organizationid`, `transactioncurrencyid`) are hidden automatically when
+   they make up more than 30% of links, as in a Dynamics export. That is one
+   setting for the map, diagram, SQL and exports, and *Keys only* then leaves
+   out those columns too. Drawing wide tables (more than 50 columns each)
+   switches *Keys only* on, with a link to show all columns again.
    The **table list** shows each table's links (↗ out, ↙ in; audit and system
    links not counted) and a dot for tables in the diagram. Sort it by name,
-   **Most connected** or **By cluster** (the map's clusters), filter it to one
+   **Most connected** or **By cluster** (the map's clusters, with a header for
+   each), filter it to one
    publisher **prefix** (`msdyn_`, `hsl_`, …), or **Hide unconnected** tables.
    **Click a table in the diagram** to select it: it's highlighted, the table
    list scrolls to it, and the Columns view shows just its columns.
@@ -85,7 +93,8 @@ DefaultValue | ComputedDefinition | Collation | Description
 11. **Fits the diagram to the view** (enlarged up to 150% when small, shrunk
     when large) and centres it. The strip under the diagram has **− / + / Fit**
     zoom buttons beside the render status. You can also zoom with
-    **Ctrl+scroll** or **Ctrl+= / Ctrl+- / Ctrl+0** (View menu).
+    **Ctrl+scroll** or **Ctrl++ / Ctrl+- / Ctrl+0** (View menu); Ctrl+0 is a
+    true 100% until **Fit** is pressed.
 12. Includes a right-docked, copyable **SQL Server schema query** that produces the
     expected columns. It is **hidden by default**; open it via **View → T-SQL statement**.
 13. **Help → Check for updates…** asks GitHub for the latest release and, if it's

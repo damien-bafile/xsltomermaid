@@ -460,3 +460,21 @@ def test_dynamics_solution_layering_columns_are_not_primary_keys():
     (rel,) = schema.relationships
     assert rel.parent_columns == ("bookableresourceid",)
     assert "int overwritetime PK" not in generate_mermaid(schema)
+
+
+def test_keys_only_can_drop_hidden_audit_columns():
+    rows = [
+        _row("account", 1, "accountid", pk=True),
+        _row("account", 2, "createdby", fk="dbo.systemuser.systemuserid"),
+        _row("account", 3, "primarycontact", fk="dbo.contact.contactid"),
+        _row("account", 4, "name"),
+    ]
+    schema = build_schema(rows)
+    plain = generate_mermaid(schema, DiagramOptions(keys_only=True))
+    assert "createdby" in plain and "primarycontact" in plain and " name" not in plain
+    hidden = generate_mermaid(
+        schema, DiagramOptions(keys_only=True, hide_columns=frozenset({"createdby"}))
+    )
+    # The column row goes; hiding the link itself is the window's job.
+    assert "int createdby FK" not in hidden
+    assert "int primarycontact FK" in hidden and "accountid PK" in hidden

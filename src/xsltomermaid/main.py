@@ -57,6 +57,7 @@ from PySide6.QtCore import (
     QPointF,
     QRectF,
     QSettings,
+    QSize,
     QSortFilterProxyModel,
     QUrl,
     Qt,
@@ -82,6 +83,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QMenu,
     QApplication,
     QCheckBox,
@@ -144,7 +146,13 @@ from .excel_to_mermaid import (
 from .make_sample import write_sample
 from .selection_preset import dump_selection_toml, load_selection_toml
 from .map_view import SchemaMapView
-from .schema_map import cluster_index, is_hidden_link, link_counts, name_prefix
+from .schema_map import (
+    HIDDEN_BY_DEFAULT,
+    cluster_index,
+    is_hidden_link,
+    link_counts,
+    name_prefix,
+)
 from .services import SchemaImportService
 from .sql_query import generate_select
 from . import __version__
@@ -705,15 +713,43 @@ RELATED_WARN_COUNT = 10
 
 _ROLE_LINKS = Qt.UserRole + 1  # (out, in) link counts
 _ROLE_DRAWN = Qt.UserRole + 2  # True when the table is in the current diagram
+_ROLE_MAPSEL = Qt.UserRole + 3  # True when the table is selected on the map
+_ROLE_GROUP = Qt.UserRole + 4  # header text above the first row of a cluster
 
 
 class _TableRowDelegate(QStyledItemDelegate):
     """Paints a table row with its link counts right-aligned (↗ out ↙ in) and
     a dot when the table is in the diagram. The name is elided to fit."""
 
+    def sizeHint(self, option, index):  # noqa: N802 (Qt naming)
+        size = super().sizeHint(option, index)
+        if index.data(_ROLE_GROUP):
+            size.setHeight(size.height() * 2)
+        return size
+
     def paint(self, painter, option, index):
+        group = index.data(_ROLE_GROUP)
+        if group:
+            # The first row of a cluster is double height: a header line on
+            # top, then the row itself in the bottom half.
+            header = option.rect.adjusted(6, 2, -6, -option.rect.height() // 2)
+            painter.save()
+            font = QFont(option.font)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QColor(_muted_hex(option.widget)))
+            painter.drawText(header, Qt.AlignLeft | Qt.AlignBottom, group)
+            painter.restore()
+            option = QStyleOptionViewItem(option)
+            option.rect = option.rect.adjusted(0, option.rect.height() // 2, 0, 0)
         links = index.data(_ROLE_LINKS)
         drawn = bool(index.data(_ROLE_DRAWN))
+        if index.data(_ROLE_MAPSEL):
+            # Selected on the map: a tint and an accent bar, distinct from ticks.
+            tint = QColor(_ACCENT)
+            tint.setAlphaF(0.16)
+            painter.fillRect(option.rect, tint)
+            painter.fillRect(option.rect.adjusted(0, 0, -(option.rect.width() - 3), 0), QColor(_ACCENT))
         if not links and not drawn:
             super().paint(painter, option, index)
             return
@@ -733,8 +769,12 @@ class _TableRowDelegate(QStyledItemDelegate):
         painter.save()
         right = option.rect.adjusted(0, 0, -6, 0)
         selected = bool(option.state & QStyle.State_Selected)
-        muted = option.palette.color(
-            QPalette.HighlightedText if selected else QPalette.PlaceholderText
+        # The shared muted text colour (≥ 6:1); the palette's placeholder
+        # grey was under 4.5:1 for these counts.
+        muted = (
+            option.palette.color(QPalette.HighlightedText)
+            if selected
+            else QColor(_muted_hex(option.widget))
         )
         painter.setPen(muted)
         if text:
@@ -763,7 +803,8 @@ class TableSelector(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        title = QLabel("Tables in diagram")
+        title = QLabel("Tables")
+        self._title = title
         title.setStyleSheet("font-weight: 600;")
         self._header_row = QHBoxLayout()
         self._header_row.addWidget(title)
@@ -798,7 +839,11 @@ class TableSelector(QWidget):
         layout.addLayout(view_row)
 
         self._list = QListWidget()
-        self._list.setUniformItemSizes(True)
+        # Not uniform: cluster header rows are double height. Long names
+        # elide rather than scroll sideways.
+        self._list.setUniformItemSizes(False)
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._list.setTextElideMode(Qt.ElideRight)
         self._list.setItemDelegate(_TableRowDelegate(self._list))
         self._list.setAccessibleName("Tables in diagram")
         self._list.itemChanged.connect(self._on_item_changed)
@@ -1121,6 +1166,15 @@ class TableSelector(QWidget):
         self._resort()
         self._apply_filters()
 
+    def mark_map_selection(self, names):
+        """Tint the rows of the tables selected on the map."""
+        wanted = set(names)
+        self._list.blockSignals(True)
+        for item in self._items():
+            item.setData(_ROLE_MAPSEL, item.text() in wanted)
+        self._list.blockSignals(False)
+        self._list.viewport().update()
+
     def set_drawn(self, names):
         """Mark the tables currently drawn in the diagram."""
         drawn = {n.lower() for n in names}
@@ -1134,7 +1188,11 @@ class TableSelector(QWidget):
         """Reorder rows in place (ticks, data and the current row survive)."""
         mode = self._sort.currentData()
         current = self._list.currentItem().text() if self._list.currentItem() else ""
+        self._list.blockSignals(True)
         items = [self._list.takeItem(0) for _ in range(self._list.count())]
+        self._list.blockSignals(False)
+        for item in items:  # headers only in "By cluster" order
+            item.setData(_ROLE_GROUP, None)
         if mode == "cluster" and self.cluster_provider is not None:
             if self._clusters is None:
                 self._clusters = self.cluster_provider()
@@ -1153,6 +1211,18 @@ class TableSelector(QWidget):
                 -sum(it.data(_ROLE_LINKS) or (0, 0)),
                 it.text().lower(),
             ))
+            sizes: dict[int, int] = {}
+            for item in items:
+                key = clusters.get(item.text(), (-1, ""))[0]
+                sizes[key] = sizes.get(key, 0) + 1
+            previous = None
+            for item in items:
+                key, hub = clusters.get(item.text(), (-1, ""))
+                if key != previous:
+                    label = f"{hub} · {sizes[key]:,} tables" if key >= 0 else (
+                        f"Unconnected · {sizes[key]:,} tables")
+                    item.setData(_ROLE_GROUP, label)
+                    previous = key
         elif mode == "links":
             items.sort(key=lambda it: (-sum(it.data(_ROLE_LINKS) or (0, 0)), it.text().lower()))
         else:
@@ -1244,7 +1314,8 @@ class TableSelector(QWidget):
             self._count.setText("No tables loaded yet")
             return
         selected = sum(1 for item in self._items() if item.checkState() == Qt.Checked)
-        self._count.setText(f"{selected} of {total} selected")
+        self._count.setText(f"{selected:,} of {total:,} ticked for the diagram")
+        self._title.setText(f"Tables ({total:,})")
 
     # -- path tracing (endpoints + non-destructive apply) ------------------
     def path_endpoints(self) -> tuple[str, str]:
@@ -1402,9 +1473,9 @@ class TableInspector(QWidget):
         self._title.setText(table.full_name)
         in_diagram = "in the diagram" if key in drawn else "not in the diagram"
         self._meta.setText(
-            f"{_plural(len(table.columns), 'column')} · {shown:,} shown · "
-            f"{_plural(len(outgoing), 'reference')} out · "
-            f"{len(incoming):,} in · {in_diagram}"
+            f"{shown:,} of {_plural(len(table.columns), 'column')} shown · "
+            f"references {_plural(len(outgoing), 'table')} · "
+            f"referenced by {len(incoming):,} · {in_diagram}"
         )
 
         self._updating = True
@@ -1968,16 +2039,21 @@ class DiagramOptionsBar(QWidget):
         # so screen readers name the dropdown and Alt+letter jumps to it.
         row1 = QHBoxLayout()
         row1.setSpacing(8)
+        # Everything that only affects the ER diagram; hidden on the map.
+        self._diagram_only: list[QWidget] = []
         for label, widget in [
             ("&Orientation:", self._orientation),
             ("&Theme:", self._theme),
             ("Back&ground:", self._background),
         ]:
-            row1.addWidget(self._buddy(label, widget))
+            buddy = self._buddy(label, widget)
+            row1.addWidget(buddy)
             row1.addWidget(widget)
+            self._diagram_only += [buddy, widget]
         row1.addSpacing(8)
         row1.addWidget(self._show_rel_labels)
         row1.addWidget(self._keys_only)
+        self._diagram_only += [self._show_rel_labels, self._keys_only]
         row1.addStretch(1)
 
         # The rest is fine-tuning, so it sits behind a disclosure, closed by
@@ -1996,6 +2072,7 @@ class DiagramOptionsBar(QWidget):
         )
         self._more.toggled.connect(self._on_more_toggled)
         row1.addWidget(self._more)
+        self._diagram_only.append(self._more)
         self._row1 = row1
         outer.addLayout(row1)
 
@@ -2015,6 +2092,16 @@ class DiagramOptionsBar(QWidget):
         row2.addStretch(1)
         self._more_box.setVisible(False)
         outer.addWidget(self._more_box)
+
+    def add_leading_widget(self, widget):
+        """Add a control at the left end of the first row (the view switch)."""
+        self._row1.insertWidget(0, widget)
+
+    def set_diagram_controls_visible(self, visible: bool):
+        """Show the diagram-only options (hidden while the map is showing)."""
+        for widget in self._diagram_only:
+            widget.setVisible(visible)
+        self._more_box.setVisible(visible and self._more.isChecked())
 
     def add_trailing_widget(self, widget):
         """Add a control at the right end of the first row (e.g. Details)."""
@@ -2058,6 +2145,7 @@ class DiagramOptionsBar(QWidget):
             show_rel_labels=self._show_rel_labels.isChecked(),
             prefix_schema=self._prefix_schema.isChecked(),
             keys_only=self._keys_only.isChecked(),
+            hide_columns=HIDDEN_BY_DEFAULT if self._hide_audit.isChecked() else frozenset(),
         )
 
     def hide_audit_links(self) -> bool:
@@ -2452,6 +2540,9 @@ class MainWindow(QMainWindow):
         self._sql_top.setToolTip("SELECT TOP (n). 0 means no limit.")
         # Size to their longest value so the narrow panel never clips them.
         self._sql_join.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self._sql_join.setMinimumWidth(
+            self._sql_join.fontMetrics().horizontalAdvance("INNER JOIN") + 44
+        )
         self._sql_top.setMinimumWidth(self._sql_top.fontMetrics().horizontalAdvance("1000000") + 48)
         # Two rows so the controls fit the narrow Details panel: the start
         # table gets the width its long names need; the rest share row two.
@@ -2554,19 +2645,55 @@ class MainWindow(QMainWindow):
             f"QToolButton:checked:hover {{ background: {_ACCENT_WASH}; }}"
         )
         self._details_btn.toggled.connect(self.set_details_visible)
+        # One switch for one choice: the canvas shows the diagram or the map.
+        switch = QWidget()
+        switch_row = QHBoxLayout(switch)
+        switch_row.setContentsMargins(0, 0, 8, 0)
+        switch_row.setSpacing(0)
+        self._view_group = QButtonGroup(self)
+        self._view_group.setExclusive(True)
+        segment = (
+            "QToolButton {{ border: 1px solid {line}; padding: 2px 10px; }}"
+            "QToolButton:checked {{ background: {accent}; color: white; border-color: {accent}; }}"
+        )
+        self._diagram_view_btn = QToolButton()
+        self._diagram_view_btn.setText("Diagram")
+        self._diagram_view_btn.setCheckable(True)
+        self._diagram_view_btn.setChecked(True)
+        self._diagram_view_btn.setToolTip("Show the ER diagram of the ticked tables (Ctrl+M switches)")
+        self._diagram_view_btn.setStyleSheet(
+            segment.format(line=_line_hex(self), accent=_ACCENT_FILL)
+            + "QToolButton { border-top-left-radius: 5px; border-bottom-left-radius: 5px; }"
+        )
+        switch_row.addWidget(self._diagram_view_btn)
+        self._view_group.addButton(self._diagram_view_btn)
         self._map_btn = QToolButton()
         self._map_btn.setText("Map")
         self._map_btn.setCheckable(True)
         self._map_btn.setToolTip(
             "Show the whole schema as a map of clusters, to pick tables from (Ctrl+M)"
         )
-        self._map_btn.setStyleSheet(self._details_btn.styleSheet())
+        self._map_btn.setStyleSheet(
+            segment.format(line=_line_hex(self), accent=_ACCENT_FILL)
+            + "QToolButton { border-top-right-radius: 5px; border-bottom-right-radius: 5px;"
+            " border-left: none; }"
+        )
+        switch_row.addWidget(self._map_btn)
+        self._view_group.addButton(self._map_btn)
         self._map_btn.toggled.connect(self.show_map)
-        self._options_bar.add_trailing_widget(self._map_btn)
+        switch.setAccessibleName("Canvas view")
+        self._options_bar.add_leading_widget(switch)
+        # The map no longer needs its own "Diagram" button.
+        self._map_view._diagram_btn.setVisible(False)
         self._options_bar.add_trailing_widget(self._details_btn)
         self._map_view.table_activated.connect(self._on_map_table_activated)
         self._map_view.draw_requested.connect(self._draw_from_map)
+        # The list is built after the canvas, so look it up when the signal fires.
+        self._map_view.selection_changed.connect(lambda names: self._selector.mark_map_selection(names))
         self._map_view.show_diagram_requested.connect(lambda: self.show_map(False))
+        self._map_view._hide.toggled.connect(self._options_bar._hide_audit.setChecked)
+        self._options_bar._hide_audit.toggled.connect(self._sync_map_hide_audit)
+        self._audit_share = 0.0
 
         # Left: table picker to limit what gets rendered. Right: the tabs.
         self._selector = TableSelector()
@@ -3004,7 +3131,7 @@ class MainWindow(QMainWindow):
             self.show_details(self._inspector)
         else:
             self._status.setText(
-                f"{html.escape(name)} selected · double-click it for its columns "
+                f"{html.escape(name)} open · double-click it for its columns "
                 "and connected tables"
             )
 
@@ -3023,10 +3150,12 @@ class MainWindow(QMainWindow):
         """Switch the canvas between the map and the ER diagram."""
         visible = bool(visible) and self._schema is not None
         self._canvas.setCurrentWidget(self._map_view if visible else self._diagram_view)
-        if self._map_btn.isChecked() != visible:
-            self._map_btn.blockSignals(True)
-            self._map_btn.setChecked(visible)
-            self._map_btn.blockSignals(False)
+        for button, on in ((self._map_btn, visible), (self._diagram_view_btn, not visible)):
+            if button.isChecked() != on:
+                button.blockSignals(True)
+                button.setChecked(on)
+                button.blockSignals(False)
+        self._options_bar.set_diagram_controls_visible(not visible)
         if visible:
             self._map_view.set_ticked(self._selector.selected_tables())
             self._map_view.set_filter(self._selector._filter.text())
@@ -3036,12 +3165,50 @@ class MainWindow(QMainWindow):
         if double:
             self.show_details(self._inspector)
 
+    def _sync_map_hide_audit(self, on: bool):
+        """The diagram's audit setting changed: mirror it on the map."""
+        box = self._map_view._hide
+        if box.isChecked() != on:
+            box.blockSignals(True)
+            box.setChecked(on)
+            box.blockSignals(False)
+            if self._map_view.schema_map() is not None:
+                self._map_view._rebuild()
+
+    def _auto_hide_audit(self, schema: Schema):
+        """Hide audit/system links when they dominate (Dynamics exports)."""
+        total = len(schema.relationships)
+        hidden = sum(1 for r in schema.relationships if is_hidden_link(r))
+        self._audit_share = hidden / total if total else 0.0
+        if self._audit_share > 0.30:
+            box = self._options_bar._hide_audit
+            box.blockSignals(True)
+            box.setChecked(True)
+            box.blockSignals(False)
+            self._sync_map_hide_audit(True)
+
     def _draw_from_map(self, names: list[str]):
-        """Tick the map's selection (replacing the ticks, undoably) and draw it."""
-        self._selector.snapshot_for_undo("map")
+        """Tick the map's selection (replacing the ticks, undoably) and draw it.
+
+        Dynamics tables run to hundreds of columns, so a draw of wide tables
+        switches Keys only on (once, with an Undo link) to keep the
+        relationships readable.
+        """
+        self._selector.snapshot_for_undo("draw")
         self._selector.set_selected_tables(names)
         self.show_map(False)
         self._render_selection()
+        schema = self._drawio_schema
+        keys = self._options_bar._keys_only
+        if schema is not None and schema.tables and not keys.isChecked():
+            per_table = sum(len(t.columns) for t in schema.tables) / len(schema.tables)
+            if per_table > 50:
+                keys.setChecked(True)  # re-renders via the options bar
+                self._status.setText(
+                    f"Drew {len(schema.tables)} tables with Keys only on (about "
+                    f"{int(per_table)} columns per table) · "
+                    f'<a href="undo-keys" style="color:{_link_hex(self)}">Show all columns</a>'
+                )
 
     def _focus_table(self, name: str, from_diagram: bool = False, from_map: bool = False):
         """Make ``name`` the selected table everywhere ("" clears)."""
@@ -3310,6 +3477,7 @@ class MainWindow(QMainWindow):
         self._selector.set_tables(names)
         self._selector.set_link_counts(link_counts(schema))
         self._selector.cluster_provider = lambda s=schema: cluster_index(s)
+        self._auto_hide_audit(schema)
         self._map_view.set_schema(schema if names else None)
 
         # The file parsed but yielded no tables — every row was missing a
@@ -3626,6 +3794,11 @@ class MainWindow(QMainWindow):
             f"{tables_phrase} · {_plural(col_count, 'column')} · "
             f"{_plural(rel_count, 'relationship')}"
         )
+        if self._options_bar.hide_audit_links() and self._audit_share > 0:
+            stats += (
+                f" · audit and system links hidden ({self._audit_share:.0%} of all "
+                "links; More ▸ to show)"
+            )
         # Dynamics tables run to hundreds of columns; at that width the
         # relationships are lost in the attribute lists.
         if col_count / max(shown, 1) > 50 and not self._options_bar.diagram_options().keys_only:
@@ -3752,9 +3925,17 @@ class MainWindow(QMainWindow):
             self._loaded_name,
             self._selector.selected_tables(),
         )
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        self._status.setText(f"Saved selected tables to {path}")
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                "Couldn't save the table list",
+                f"{path}\n\n{exc.strerror or exc}. Choose another folder or file name.",
+            )
+            return
+        self._report_saved(path)
 
     def load_table_selection_toml(self):
         if self._schema is None:
@@ -4018,6 +4199,9 @@ class MainWindow(QMainWindow):
         )
 
     def _on_status_link(self, href: str):
+        if href == "undo-keys":
+            self._options_bar._keys_only.setChecked(False)
+            return
         if href == "show-in-folder" and getattr(self, "_last_saved", ""):
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(self._last_saved)))
 

@@ -854,6 +854,9 @@ class DiagramOptions:
     show_rel_labels: bool = True  # the FK column name on a relationship line
     prefix_schema: bool = False  # entity id as schema.Table vs Table
     keys_only: bool = False  # show only PK/FK attributes
+    # FK columns that Keys only leaves out too (e.g. Dynamics audit columns
+    # such as createdby / owninguser, when their links are hidden).
+    hide_columns: frozenset = frozenset()
 
 
 def mermaid_entity_ids(schema: Schema, options: DiagramOptions | None = None) -> dict[str, str]:
@@ -898,8 +901,9 @@ def generate_mermaid(schema: Schema, options: DiagramOptions | None = None) -> s
     for table in schema.tables:
         lines.append(f"    {entity_id(table.name)} {{")
         for column in table.columns:
-            if opts.keys_only and not (
-                column.is_primary_key or column.foreign_key_reference
+            if opts.keys_only and (
+                not (column.is_primary_key or column.foreign_key_reference)
+                or (not column.is_primary_key and column.name.lower() in opts.hide_columns)
             ):
                 continue
 

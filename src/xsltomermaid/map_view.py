@@ -37,13 +37,21 @@ from PySide6.QtWidgets import (
 from .excel_to_mermaid import Schema
 from .schema_map import HIDDEN_BY_DEFAULT, SchemaMap, build_map
 
-# Categorical colours for the largest clusters (Tableau 10, readable on light
-# and dark); smaller clusters share a neutral grey so colour stays meaningful.
-_CLUSTER_COLOURS = [
-    "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
-    "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#86bcb6",
-]
-_OTHER = "#8c95a3"
+# Categorical colours for the largest clusters (Tableau 10); smaller clusters
+# share a neutral grey so colour stays meaningful. Points are non-text marks
+# and need 3:1 against the map: Tableau's originals all pass on the dark map,
+# but half fail on white, so light mode uses darkened shades of the same hues.
+_CLUSTER_COLOURS = {
+    "dark": [
+        "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
+        "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#86bcb6",
+    ],
+    "light": [
+        "#4e79a7", "#dc740e", "#e15759", "#539d97", "#59a14f",
+        "#af8c11", "#b07aa1", "#c9497a", "#9c755f", "#579e96",
+    ],
+}
+_OTHER = {"dark": "#8c95a3", "light": "#8992a1"}
 _ACCENT = "#2f81f7"
 _LABEL_MIN_MEMBERS = 8  # clusters this big get their hub's name drawn
 
@@ -57,6 +65,8 @@ class _MapGraphicsView(QGraphicsView):
 
     double_clicked = Signal(str)
     zoomed = Signal()
+    cluster_clicked = Signal(int)
+    key_pressed = Signal(object)  # the QKeyEvent, handled by SchemaMapView
 
     def __init__(self, scene, parent=None):
         super().__init__(scene, parent)
@@ -64,7 +74,21 @@ class _MapGraphicsView(QGraphicsView):
         self.setDragMode(QGraphicsView.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setViewportUpdateMode(QGraphicsView.BoundingRectViewportUpdate)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.user_zoomed = False
+
+    def mousePressEvent(self, event):  # noqa: N802 (Qt naming)
+        item = self.itemAt(event.position().toPoint())
+        if item is not None and item.data(1) is not None:  # a cluster label
+            self.cluster_clicked.emit(int(item.data(1)))
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):  # noqa: N802 (Qt naming)
+        self.key_pressed.emit(event)
+        if not event.isAccepted():
+            super().keyPressEvent(event)
 
     def wheelEvent(self, event):  # noqa: N802 (Qt naming)
         factor = 1.2 if event.angleDelta().y() > 0 else 1 / 1.2
@@ -149,6 +173,9 @@ class SchemaMapView(QWidget):
         )
         self._view.double_clicked.connect(lambda n: self.table_activated.emit(n, True))
         self._view.zoomed.connect(self._declutter_labels)
+        self._view.cluster_clicked.connect(self.select_cluster)
+        self._view.key_pressed.connect(self._on_key)
+        self._current = ""  # the table keyboard navigation moves from
         # (label, cluster) pairs, biggest cluster first.
         self._labels: list[tuple[QGraphicsSimpleTextItem, object]] = []
         self._edges = None
@@ -195,10 +222,12 @@ class SchemaMapView(QWidget):
         scene.clear()
         self._items = {}
         text = self.palette().color(QPalette.WindowText)
+        surface = "dark" if self.palette().color(QPalette.Base).lightness() < 128 else "light"
+        palette = _CLUSTER_COLOURS[surface]
 
         colours = {}
         for i, comm in enumerate(m.communities):
-            colours[i] = QColor(_CLUSTER_COLOURS[i] if i < len(_CLUSTER_COLOURS) else _OTHER)
+            colours[i] = QColor(palette[i] if i < len(palette) else _OTHER[surface])
             if len(comm.members) >= _LABEL_MIN_MEMBERS:
                 disc = QColor(colours[i])
                 disc.setAlphaF(0.07)
@@ -247,6 +276,9 @@ class SchemaMapView(QWidget):
             # Constant on-screen size at any zoom; placed by _declutter_labels.
             label.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
             label.setZValue(2)
+            label.setData(1, m.communities.index(comm))
+            label.setCursor(Qt.PointingHandCursor)
+            label.setToolTip(f"Click to select all {len(comm.members)} tables in this cluster")
             scene.addItem(label)
             self._labels.append((label, comm))  # communities are biggest first
         scene.blockSignals(False)
@@ -304,6 +336,60 @@ class SchemaMapView(QWidget):
             if item is not None:
                 self._view.centerOn(item)
 
+    def select_cluster(self, index: int):
+        """Select every table in one cluster (click its label, or Ctrl+A)."""
+        if self._map is None or not 0 <= index < len(self._map.communities):
+            return
+        members = self._map.communities[index].members
+        self.select(members)
+        self.selection_changed.emit(self.selected())
+
+    def _nearest(self, key) -> str:
+        """The table nearest the current one in an arrow key's direction."""
+        nodes = self._map.nodes
+        if not self._current or self._current not in nodes:
+            return max(nodes, key=lambda n: (nodes[n].degree, n), default="")
+        here = nodes[self._current]
+        best, best_score = "", float("inf")
+        for name, node in nodes.items():
+            dx, dy = node.x - here.x, node.y - here.y
+            along = {Qt.Key_Right: dx, Qt.Key_Left: -dx, Qt.Key_Down: dy, Qt.Key_Up: -dy}[key]
+            across = abs(dy) if key in (Qt.Key_Left, Qt.Key_Right) else abs(dx)
+            if along <= 0.5:
+                continue
+            score = along + 2 * across
+            if score < best_score:
+                best, best_score = name, score
+        return best
+
+    def _on_key(self, event):
+        """Arrows move between tables, Enter opens, Space selects,
+        Ctrl+A selects the current table's cluster, Esc clears."""
+        if self._map is None or not self._map.nodes:
+            event.ignore()
+            return
+        key = event.key()
+        if key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down):
+            nxt = self._nearest(key)
+            if nxt:
+                self._current = nxt
+                self._view.centerOn(self._items[nxt])
+                self._restyle()
+                self.table_activated.emit(nxt, False)
+        elif key in (Qt.Key_Return, Qt.Key_Enter) and self._current:
+            self.table_activated.emit(self._current, True)
+        elif key == Qt.Key_Space and self._current:
+            item = self._items[self._current]
+            item.setSelected(not item.isSelected())
+        elif key == Qt.Key_A and event.modifiers() & Qt.ControlModifier and self._current:
+            self.select_cluster(self._map.nodes[self._current].community)
+        elif key == Qt.Key_Escape:
+            self._scene.clearSelection()
+        else:
+            event.ignore()
+            return
+        event.accept()
+
     def set_ticked(self, names):
         self._ticked = set(names)
         self._restyle()
@@ -315,7 +401,7 @@ class SchemaMapView(QWidget):
     def _on_selection_changed(self, emit: bool = True):
         names = self.selected()
         self._draw_btn.setEnabled(bool(names))
-        self._draw_btn.setText(f"Draw selection ({len(names):,})" if names else "Draw selection")
+        self._draw_btn.setText(f"Draw these {len(names):,}" if names else "Draw selection")
         self._restyle()
         if emit:
             self.selection_changed.emit(names)
@@ -325,15 +411,27 @@ class SchemaMapView(QWidget):
     def _restyle(self):
         text = self.palette().color(QPalette.WindowText)
         accent = QColor(_ACCENT)
+        # Cosmetic pens keep a constant screen width at any zoom (a scene-unit
+        # pen vanished at the default fit). Selection uses the text colour,
+        # which contrasts with every cluster colour; ticks a dashed accent.
+        selected_pen = QPen(text, 2.5)
+        selected_pen.setCosmetic(True)
+        ticked_pen = QPen(accent, 1.5, Qt.DashLine)
+        ticked_pen.setCosmetic(True)
+        current_pen = QPen(accent, 3.5)
+        current_pen.setCosmetic(True)
         for name, item in self._items.items():
-            if item.isSelected():
-                item.setPen(QPen(accent, 2.5))
+            if name == self._current and self._view.hasFocus():
+                item.setPen(current_pen)
+            elif item.isSelected():
+                item.setPen(selected_pen)
             elif name in self._ticked:
-                item.setPen(QPen(text, 1.5))
+                item.setPen(ticked_pen)
             else:
                 item.setPen(QPen(Qt.NoPen))
             match = not self._filter or self._filter in name.lower()
-            item.setOpacity(1.0 if match else 0.15)
+            # A selected table is never dimmed, even when it isn't a match.
+            item.setOpacity(1.0 if (match or item.isSelected()) else 0.15)
             item.setZValue(1 if (item.isSelected() or (self._filter and match)) else 0)
         if self._edges is not None:
             # Links would drown the matches while filtering.
@@ -342,7 +440,13 @@ class SchemaMapView(QWidget):
     def retheme(self):
         base = self.palette().color(QPalette.Base)
         self._view.setBackgroundBrush(QBrush(base))
-        muted = self.palette().color(QPalette.PlaceholderText).name()
-        self._unconnected.setStyleSheet(f"color: {muted};")
+        pal = self.palette()
+        text, window = pal.color(QPalette.WindowText), pal.color(QPalette.Window)
+        muted = QColor(
+            round(text.red() * 0.7 + window.red() * 0.3),
+            round(text.green() * 0.7 + window.green() * 0.3),
+            round(text.blue() * 0.7 + window.blue() * 0.3),
+        )
+        self._unconnected.setStyleSheet(f"color: {muted.name()};")
         if self._map is not None:
             self._draw()
