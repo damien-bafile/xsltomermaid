@@ -173,6 +173,8 @@ def _shell_html() -> str:
   window._mermaidError = null;
   window._renderSeq = 0;
   window._fit = true;
+  window._actual = false;  // Ctrl+0: true 1:1 until Fit is pressed
+  window._lastScale = 1;   // the scale drawn, read by the zoom readout
   // Size the diagram to the view: up to 150% when it's small, down when it's
   // big. "force" fits once even when the Fit option is off (the Fit button).
   window.fitDiagram = function (force) {
@@ -180,8 +182,9 @@ def _shell_html() -> str:
     if (!svg) return;
     var vb = svg.viewBox && svg.viewBox.baseVal;
     if (!vb || !vb.width || !vb.height) return;
+    if (force) window._actual = false;
     var scale = 1;
-    if (force || window._fit) {
+    if (!window._actual && (force || window._fit)) {
       var w = window.innerWidth - 24, h = window.innerHeight - 24;
       scale = Math.min(w / vb.width, h / vb.height, 1.5);
       // Below about half size the column text is unreadable, so automatic
@@ -192,6 +195,11 @@ def _shell_html() -> str:
     svg.style.maxWidth = 'none';
     svg.style.width = (vb.width * scale) + 'px';
     svg.style.height = (vb.height * scale) + 'px';
+    window._lastScale = scale;
+  };
+  window.actualSize = function () {
+    window._actual = true;
+    window.fitDiagram(false);
   };
   window.addEventListener('resize', function () { window.fitDiagram(false); });
   // Click a table to select it, double-click to open it, click the canvas or
@@ -902,6 +910,7 @@ class DiagramView(QWidget):
         self._workdir: str | None = None
         self._view = None
         self._render_gen = 0  # bumped per render so stale polls are ignored
+        self._fit_scale = 1.0  # the page's own fit scale, for the zoom readout
         # Keep-alive rendering: the shell page (mermaid.js) is loaded once, then
         # each diagram is drawn by a JS call rather than a full page reload.
         self._shell_url: QUrl | None = None
@@ -937,13 +946,13 @@ class DiagramView(QWidget):
             self._zoom_label.setAlignment(Qt.AlignCenter)
             self._zoom_label.setMinimumWidth(44)
             self._zoom_label.setToolTip(
-                "Ctrl+scroll, or Ctrl+= / Ctrl+- / Ctrl+0, to zoom the diagram."
+                "Ctrl+scroll, or Ctrl++ / Ctrl+- / Ctrl+0, to zoom the diagram."
             )
             self._zoom_label.setAccessibleName("Zoom level")
             for text, tip, slot in (
                 ("−", "Zoom out (Ctrl+-)", lambda: self.zoom_by(0.8)),
                 (None, None, None),
-                ("+", "Zoom in (Ctrl+=)", lambda: self.zoom_by(1.25)),
+                ("+", "Zoom in (Ctrl++)", lambda: self.zoom_by(1.25)),
                 ("Fit", "Fit the diagram to the view", self.fit_to_view),
             ):
                 if text is None:
@@ -977,7 +986,25 @@ class DiagramView(QWidget):
             layout.addWidget(label)
 
     def _update_zoom_label(self):
-        self._zoom_label.setText(f"{self._view.zoomFactor():.0%}")
+        """Show the real on-screen scale: browser zoom × the page's fit scale.
+
+        The fit is done in the page (CSS), so zoomFactor alone said "100%"
+        while the diagram was drawn at, say, 55%.
+        """
+        self._zoom_label.setText(f"{self._view.zoomFactor() * self._fit_scale:.0%}")
+        if self._shell_loaded:
+            self._view.page().runJavaScript(
+                "window._lastScale || 1", self._on_fit_scale
+            )
+
+    def _on_fit_scale(self, value):
+        try:
+            scale = float(value) if value else 1.0
+        except (TypeError, ValueError):
+            scale = 1.0
+        if abs(scale - self._fit_scale) > 1e-6:
+            self._fit_scale = scale
+            self._zoom_label.setText(f"{self._view.zoomFactor() * scale:.0%}")
 
     def add_status_widget(self, widget):
         """Put a status widget (render status, Stop) at the strip's left end."""
@@ -1016,11 +1043,12 @@ class DiagramView(QWidget):
         self._update_zoom_label()
 
     def reset_zoom(self):
+        """Ctrl+0: a true 100%, with no fit, until Fit is pressed."""
         if self._view is None:
             return
         self._view.setZoomFactor(1.0)
+        self._view.page().runJavaScript("window.actualSize && window.actualSize()")
         self._update_zoom_label()
-        self._view.page().runJavaScript("window.fitDiagram && window.fitDiagram(false)")
 
     # -- rendering ---------------------------------------------------------
     def set_diagram(self, mermaid_text: str, style: RenderStyle | None = None):

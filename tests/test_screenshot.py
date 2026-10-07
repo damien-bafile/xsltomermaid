@@ -1700,7 +1700,8 @@ def test_map_single_selection_focuses_the_table_and_filter_dims_others():
     assert window._inspector.current_table() == "C7"
     window._selector._filter.setText("C1")
     items = window._map_view._items
-    assert items["C10"].opacity() == 1.0 and items["C7"].opacity() < 0.5
+    assert items["C10"].opacity() == 1.0 and items["C8"].opacity() < 0.5
+    assert items["C7"].opacity() == 1.0  # selected tables are never dimmed
     window._diagram_view.cleanup()
     del app
 
@@ -1860,5 +1861,147 @@ def test_headless_capture_of_a_big_schema_includes_the_map(tmp_path):
     window.capture(str(tmp_path / "w.png"))
     assert window._map_view.schema_map() is not None
     assert len(window._map_view._items) > 50
+    window._diagram_view.cleanup()
+    del app
+
+
+# -- critique run 3 fixes ----------------------------------------------------------
+def _audit_heavy_window(tmp_path):
+    """A schema where audit links dominate, like a Dynamics export."""
+    from xsltomermaid.excel_to_mermaid import Column, Relationship, Schema, Table
+
+    names = ["systemuser"] + [f"t{i}" for i in range(70)]
+    tables = [Table("dbo", n, [Column("dbo", n, 1, f"{n}id", "guid", is_primary_key=True)]
+                    + [Column("dbo", n, j + 2, f"c{j}", "int") for j in range(60)]
+                    + [Column("dbo", n, 70, "createdby", "guid", foreign_key_reference="dbo.systemuser.systemuserid")])
+              for n in names]
+    rels = [Relationship("systemuser", f"t{i}", "createdby", ("createdby",), ("systemuserid",)) for i in range(70)]
+    rels += [Relationship(f"t{i}", f"t{i+1}", "parent", ("parent",), (f"t{i}id",)) for i in range(0, 69, 2)]
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window._apply_loaded(str(tmp_path / "dyn.xlsx"), [], Schema(tables, rels), "")
+    return app, window
+
+
+def test_audit_links_are_hidden_automatically_when_they_dominate(tmp_path):
+    app, window = _audit_heavy_window(tmp_path)
+    assert window._audit_share > 0.3
+    assert window._options_bar.hide_audit_links()
+    assert window._map_view._hide.isChecked()  # one setting, both checkboxes
+    window._options_bar._hide_audit.setChecked(False)
+    assert not window._map_view._hide.isChecked()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_drawing_wide_tables_turns_keys_only_on_with_an_undo(tmp_path):
+    app, window = _audit_heavy_window(tmp_path)
+    window._draw_from_map(["t0", "t1", "t2"])
+    assert window._options_bar._keys_only.isChecked()
+    assert "Show all columns" in window._status.text()
+    assert "createdby" not in window._mermaid_text  # audit FK column dropped too
+    assert window._selector._undo_btn.text() == "&Undo draw"
+    window._on_status_link("undo-keys")
+    assert not window._options_bar._keys_only.isChecked()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_view_switch_and_wording(tmp_path):
+    app, window = _audit_heavy_window(tmp_path)
+    window.show()
+    assert window.map_visible() and window._map_btn.isChecked()
+    assert not window._options_bar._orientation.isVisible()  # diagram-only, hidden on the map
+    window._diagram_view_btn.click()
+    assert not window.map_visible() and window._options_bar._orientation.isVisible()
+    assert window._selector._title.text() == "Tables (71)"
+    assert window._selector._count.text().endswith("ticked for the diagram")
+    window._map_view.select(["t3", "t4"])
+    window._map_view.selection_changed.emit(["t3", "t4"])
+    marked = [i.text() for i in window._selector._items() if i.data(app_module._ROLE_MAPSEL)]
+    assert marked == ["t3", "t4"]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_map_cluster_click_keyboard_and_light_colours(tmp_path):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+
+    app, window = _audit_heavy_window(tmp_path)
+    window.show()
+    mv = window._map_view
+    m = mv.schema_map()
+    biggest = m.communities[0]
+    mv.select_cluster(0)
+    assert mv.selected() == sorted(biggest.members)
+    mv._view.setFocus()
+    mv._on_key(QKeyEvent(QEvent.KeyPress, app_module.Qt.Key_Right, app_module.Qt.NoModifier))
+    assert mv._current in m.nodes
+    opened = []
+    mv.table_activated.connect(lambda n, d: opened.append((n, d)))
+    mv._on_key(QKeyEvent(QEvent.KeyPress, app_module.Qt.Key_Return, app_module.Qt.NoModifier))
+    assert opened == [(mv._current, True)]
+    colour = mv._unconnected.styleSheet()
+    assert "#000000" not in colour  # the muted label kept its tone
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_cluster_sort_adds_a_header_per_cluster():
+    app, window = _list_window()
+    sel = window._selector
+    sel.cluster_provider = lambda: {
+        "msdyn_project": (0, "msdyn_project"), "msdyn_task": (0, "msdyn_project"),
+        "account": (1, "account"), "hsl_booking": (0, "msdyn_project"),
+    }
+    sel._sort.setCurrentIndex(sel._sort.findData("cluster"))
+    headers = [(i.text(), i.data(app_module._ROLE_GROUP)) for i in sel._items() if i.data(app_module._ROLE_GROUP)]
+    assert headers == [("msdyn_project", "msdyn_project · 3 tables"),
+                       ("account", "account · 1 tables"), ("lonely", "Unconnected · 1 tables")]
+    sel._sort.setCurrentIndex(sel._sort.findData("name"))
+    assert not any(i.data(app_module._ROLE_GROUP) for i in sel._items())
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_zoom_readout_includes_the_fit_scale():
+    import xsltomermaid.diagram_view as diagram_view
+
+    if not diagram_view.WEBENGINE_AVAILABLE:
+        pytest.skip("PySide6 WebEngine not available")
+    app = QApplication.instance() or QApplication([])
+    view = diagram_view.DiagramView()
+    view._on_fit_scale(0.55)
+    assert view._zoom_label.text() == "55%"
+    view.cleanup()
+    del app
+
+
+def test_saving_a_table_list_reports_write_errors(tmp_path, monkeypatch):
+    app, window = _list_window()
+    window._loaded_name = "x.xlsx"
+    monkeypatch.setattr(app_module.QFileDialog, "getSaveFileName",
+                        lambda *a, **k: (str(tmp_path / "missing" / "list.toml"), ""))
+    warned = []
+    monkeypatch.setattr(app_module.QMessageBox, "warning", lambda *a, **k: warned.append(a[1]))
+    window.save_table_selection_toml()
+    assert warned == ["Couldn't save the table list"]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_cluster_header_rows_are_double_height_and_sorting_keeps_the_open_table():
+    app, window = _list_window()
+    sel = window._selector
+    sel.cluster_provider = lambda: {"msdyn_project": (0, "msdyn_project"), "msdyn_task": (0, "msdyn_project")}
+    window._focus_table("msdyn_task")
+    assert window._inspector.current_table() == "msdyn_task"
+    sel._sort.setCurrentIndex(sel._sort.findData("cluster"))
+    assert window._inspector.current_table() == "msdyn_task"  # not emptied by the re-sort
+    rows = list(sel._items())
+    header_row = sel._list.row(next(i for i in rows if i.data(app_module._ROLE_GROUP)))
+    plain_row = sel._list.row(next(i for i in rows if not i.data(app_module._ROLE_GROUP)))
+    assert sel._list.sizeHintForRow(header_row) >= 2 * sel._list.sizeHintForRow(plain_row) - 1
     window._diagram_view.cleanup()
     del app
