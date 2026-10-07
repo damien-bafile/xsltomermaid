@@ -368,6 +368,20 @@ def build_schema(
 # is just the id.
 SOLUTION_LAYERING_KEYS = frozenset({"overwritetime", "componentstate"})
 
+# Dynamics 365 / Dataverse audit and ownership foreign keys. Almost every table
+# has them, so they dominate any count of relationships (about 70% of a real
+# export) while saying little about how the data model fits together.
+AUDIT_FK_COLUMNS = frozenset({
+    "createdby", "modifiedby", "createdonbehalfby", "modifiedonbehalfby",
+    "ownerid", "owninguser", "owningteam", "owningbusinessunit",
+})
+
+
+def is_audit_relationship(rel: "Relationship") -> bool:
+    """Whether every column of ``rel`` is an audit/ownership column."""
+    columns = rel.child_columns or tuple(c.strip() for c in rel.label.split(","))
+    return bool(columns) and all(c.lower() in AUDIT_FK_COLUMNS for c in columns)
+
 
 def _drop_solution_layering_keys(table: Table) -> None:
     """Stop marking solution-layering columns as PK, when a real key remains."""
