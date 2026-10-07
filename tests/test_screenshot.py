@@ -1378,8 +1378,9 @@ def test_alt_key_mnemonics_are_unique_on_every_tab(tmp_path):
     window.set_details_visible(True)
     menu_letters = {_mnemonic(a.text()) for a in window.menuBar().actions()}
 
-    for index in range(window._tabs.count()):
-        window._tabs.setCurrentIndex(index)
+    for index in range(window._tabs.count() * 2):
+        window.show_map(index >= window._tabs.count())  # with the diagram, then the map
+        window._tabs.setCurrentIndex(index % window._tabs.count())
         app.processEvents()
         seen: dict[str, str] = {letter: "menu bar" for letter in menu_letters if letter}
         for widget in window.findChildren(QAbstractButton) + window.findChildren(QLabel):
@@ -1390,7 +1391,7 @@ def test_alt_key_mnemonics_are_unique_on_every_tab(tmp_path):
             letter = _mnemonic(widget.text())
             if letter is None:
                 continue
-            tab = window._tabs.tabText(index)
+            tab = window._tabs.tabText(index % window._tabs.count())
             assert letter not in seen, (
                 f"Alt+{letter.upper()} on the {tab!r} tab is used by both "
                 f"{seen[letter]!r} and {widget.text()!r}"
@@ -1657,5 +1658,123 @@ def test_table_view_folds_audit_and_ownership_links():
     assert group.child(0).text(0) == "b  ·  via approver"
     folded = group.child(1)
     assert folded.text(0) == "Audit and ownership links (2)" and not folded.isExpanded()
+    window._diagram_view.cleanup()
+    del app
+
+
+# -- schema map integration -------------------------------------------------------
+def _big_window(n=70):
+    from xsltomermaid.excel_to_mermaid import Relationship
+
+    tables, rels = _hub_schema(children=n)
+    app, window = _window_with_schema(tables, rels)
+    window._map_view.set_schema(window._schema)
+    return app, window
+
+
+def test_map_selection_draws_as_the_diagram_and_is_undoable(monkeypatch):
+    app, window = _big_window()
+    window.show()
+    window.show_map(True)
+    assert window.map_visible() and window._map_view.schema_map() is not None
+    window._selector.check_tables(["C1"])
+    window._map_view.select(["H", "C3", "C4"])
+    assert window._map_view.selected() == ["C3", "C4", "H"]
+    rendered = []
+    monkeypatch.setattr(window, "_render_selection", lambda: rendered.append(1))
+    window._map_view._draw_btn.click()
+    assert set(window._selector.selected_tables()) == {"H", "C3", "C4"}
+    assert rendered and not window.map_visible()
+    window._selector.undo_last_change()
+    assert window._selector.selected_tables() == ["C1"]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_map_single_selection_focuses_the_table_and_filter_dims_others():
+    app, window = _big_window()
+    window.show()
+    window.show_map(True)
+    window._map_view.select(["C7"])
+    window._map_view._on_selection_changed()  # as a user click would
+    assert window._inspector.current_table() == "C7"
+    window._selector._filter.setText("C1")
+    items = window._map_view._items
+    assert items["C10"].opacity() == 1.0 and items["C7"].opacity() < 0.5
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_big_schema_opens_on_the_map(tmp_path):
+    from xsltomermaid.excel_to_mermaid import Schema
+
+    app, window = _big_window()
+    window._apply_loaded(str(tmp_path / "big.xlsx"), [], window._schema, "")
+    assert window.map_visible()
+    window._diagram_view.cleanup()
+    del app
+
+
+# -- smarter table list ---------------------------------------------------------
+def _list_window():
+    from xsltomermaid.excel_to_mermaid import Relationship
+
+    tables = ["account", "msdyn_project", "msdyn_task", "hsl_booking", "lonely"]
+    rels = [
+        Relationship("msdyn_project", "msdyn_task", "project", ("project",), ("id",)),
+        Relationship("account", "msdyn_project", "customer", ("customer",), ("id",)),
+        Relationship("msdyn_project", "hsl_booking", "project", ("project",), ("id",)),
+        Relationship("account", "lonely", "createdby", ("createdby",), ("id",)),  # audit
+    ]
+    app, window = _window_with_schema(tables, rels)
+    window._selector.set_ready(True)
+    from xsltomermaid.schema_map import link_counts
+    window._selector.set_link_counts(link_counts(window._schema))
+    return app, window
+
+
+def _shown(sel):
+    return [i.text() for i in sel._items() if not i.isHidden()]
+
+
+def test_table_list_prefix_filter_and_hide_unconnected():
+    app, window = _list_window()
+    sel = window._selector
+    prefixes = [sel._prefix.itemText(i) for i in range(sel._prefix.count())]
+    assert prefixes == ["All prefixes (5)", "No prefix (2)", "msdyn_ (2)", "hsl_ (1)"]
+    sel._prefix.setCurrentIndex(sel._prefix.findData("msdyn"))
+    assert _shown(sel) == ["msdyn_project", "msdyn_task"]
+    sel._prefix.setCurrentIndex(0)
+    sel._hide_unconnected.setChecked(True)  # "lonely" has only an audit link
+    assert "lonely" not in _shown(sel) and len(_shown(sel)) == 4
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_table_list_sorts_by_links_and_keeps_ticks():
+    app, window = _list_window()
+    sel = window._selector
+    sel.check_tables(["hsl_booking"])
+    sel._sort.setCurrentIndex(sel._sort.findData("links"))
+    assert [i.text() for i in sel._items()][:2] == ["msdyn_project", "account"]
+    assert sel.selected_tables() == ["hsl_booking"]
+    item = next(i for i in sel._items() if i.text() == "msdyn_project")
+    assert item.data(app_module._ROLE_LINKS) == (1, 2)
+    sel.set_drawn(["msdyn_project"])
+    assert item.data(app_module._ROLE_DRAWN) is True
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_setting_list_data_does_not_fire_selection_changes():
+    """Link counts and drawn markers are data, not ticks: with ~1,800 rows,
+    reacting to each one hung the load of a real Dynamics export."""
+    app, window = _list_window()
+    fired = []
+    window._selector.selection_changed.connect(lambda: fired.append(1))
+    from xsltomermaid.schema_map import link_counts
+    window._selector.set_link_counts(link_counts(window._schema))
+    window._selector.set_drawn(["account"])
+    assert fired == []
     window._diagram_view.cleanup()
     del app

@@ -23,6 +23,19 @@ DefaultValue | ComputedDefinition | Collation | Description
    column picker, Mermaid source and SQL sit in a **Details** panel on the right.
    It starts closed and opens from the **Details** button, **Ctrl+I**, or
    **Ctrl+1–5** for a specific view.
+   Big schemas open on the **schema map** (**Map** button or **View → Schema map**,
+   Ctrl+M). Every table is a point, sized by its links and grouped into
+   clusters of closely linked tables, each named after its most-connected
+   table. Dynamics' audit, ownership and system links are hidden by default,
+   so the real modules separate. Drag to select a region (Ctrl+click adds or
+   removes a table), then **Draw selection** to draw it as the ER diagram;
+   this replaces the ticks and can be undone. The table filter highlights
+   matches on the map, ticked tables show as rings, and tables with no links
+   are listed underneath.
+   The **table list** shows each table's links (↗ out, ↙ in; audit and system
+   links not counted) and a dot for tables in the diagram. Sort it by name or
+   **Most connected**, filter it to one publisher **prefix** (`msdyn_`, `hsl_`,
+   …), or **Hide unconnected** tables.
    **Click a table in the diagram** to select it: it's highlighted, the table
    list scrolls to it, and the Columns view shows just its columns.
    **Double-click** opens the Details panel on the **Table** view: the table's
@@ -168,6 +181,8 @@ erDiagram
 | `src/xsltomermaid/main.py` | PySide6 GUI with drag-and-drop and the `--screenshot*` CLI modes. |
 | `src/xsltomermaid/diagram_view.py` | Renders the Mermaid diagram in a `QWebEngineView` and exports it as SVG/PNG. |
 | `src/xsltomermaid/services.py` | Application services for coordinating schema import workflows. |
+| `src/xsltomermaid/schema_map.py` | Clusters and lays out the whole schema for the map. No Qt required. |
+| `src/xsltomermaid/map_view.py` | The schema map view (QGraphicsView). |
 | `src/xsltomermaid/sql_query.py` | Writes the T-SQL `SELECT … JOIN` for the SQL query tab. No Qt required. |
 | `src/xsltomermaid/updates.py` | Checks the GitHub API for a newer release (Help → Check for updates). |
 | `src/xsltomermaid/__init__.py` | Holds `__version__`, the single source of the app version. |
