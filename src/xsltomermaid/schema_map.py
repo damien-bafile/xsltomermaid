@@ -53,6 +53,23 @@ class SchemaMap:
     shown_links: int = 0  # relationships the map draws
 
 
+def is_hidden_link(rel: Relationship, hidden: frozenset[str] = HIDDEN_BY_DEFAULT) -> bool:
+    """Whether every column of ``rel`` is in ``hidden`` (an audit/system link)."""
+    return _is_hidden(rel, hidden)
+
+
+def cluster_index(schema: Schema) -> dict[str, tuple[int, str]]:
+    """``{table: (cluster number, hub)}`` with the map's default settings.
+
+    Unconnected tables are left out. Used to sort the table list by cluster.
+    """
+    m = build_map(schema)
+    return {
+        name: (node.community, m.communities[node.community].hub)
+        for name, node in m.nodes.items()
+    }
+
+
 def _is_hidden(rel: Relationship, hidden: frozenset[str]) -> bool:
     columns = rel.child_columns or tuple(c.strip() for c in rel.label.split(","))
     return bool(columns) and all(c.lower() in hidden for c in columns)

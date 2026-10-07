@@ -219,8 +219,42 @@ def _shell_html() -> str:
   }
   document.addEventListener('click', function (e) { report('click', e); });
   document.addEventListener('dblclick', function (e) { report('dblclick', e); });
+  // Keyboard twin of clicking: arrows move to the nearest table in that
+  // direction, Enter opens the selected one, Esc clears.
+  function centre(g) {
+    var r = g.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+  function neighbour(from, key) {
+    var groups = Array.prototype.slice.call(
+      document.querySelectorAll('#container g[id^="entity-"]'));
+    if (!groups.length) return null;
+    if (!from) return groups[0];
+    var a = centre(from), best = null, bestScore = Infinity;
+    groups.forEach(function (g) {
+      if (g === from) return;
+      var b = centre(g), dx = b.x - a.x, dy = b.y - a.y;
+      var along = { ArrowRight: dx, ArrowLeft: -dx, ArrowDown: dy, ArrowUp: -dy }[key];
+      var across = (key === 'ArrowRight' || key === 'ArrowLeft') ? Math.abs(dy) : Math.abs(dx);
+      if (along <= 1) return;  // not in that direction
+      var score = along + 2 * across;  // prefer straight ahead
+      if (score < bestScore) { bestScore = score; best = g; }
+    });
+    return best;
+  }
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { window.selectEntity(''); console.log('xsltomermaid:click:'); }
+    var current = document.querySelector('#container g.xsel');
+    if (e.key === 'Escape') { window.selectEntity(''); console.log('xsltomermaid:click:'); return; }
+    if (e.key === 'Enter' && current) {
+      console.log('xsltomermaid:dblclick:' + current.id); e.preventDefault(); return;
+    }
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].indexOf(e.key) < 0) return;
+    var next = neighbour(current, e.key);
+    if (next) {
+      window.selectEntity(next.id);
+      console.log('xsltomermaid:click:' + next.id);
+      e.preventDefault();
+    }
   });
   window.renderDiagram = function (text, config, background, canvas, fit) {
     var seq = ++window._renderSeq;

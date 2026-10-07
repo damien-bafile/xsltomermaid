@@ -1778,3 +1778,76 @@ def test_setting_list_data_does_not_fire_selection_changes():
     assert fired == []
     window._diagram_view.cleanup()
     del app
+
+
+# -- finishing touches: hide audit links, arrow keys, sort by cluster -----------
+def test_hide_audit_links_option_drops_them_from_diagram_and_sql(monkeypatch):
+    from xsltomermaid.excel_to_mermaid import Column, Relationship, Table
+
+    app, window = _window_with_schema(["systemuser", "task"], [
+        Relationship("systemuser", "task", "createdby", ("createdby",), ("systemuserid",)),
+        Relationship("systemuser", "task", "assignee", ("assignee",), ("systemuserid",)),
+    ])
+    for t, cols in (("systemuser", ["systemuserid"]), ("task", ["taskid", "createdby", "assignee"])):
+        table = next(x for x in window._schema.tables if x.name == t)
+        table.columns = [Column("", t, i, c, "guid") for i, c in enumerate(cols, 1)]
+    window._selector.set_ready(True)
+    window._selector.check_tables(["systemuser", "task"])
+    window._render_selection()
+    assert {r.label for r in window._drawio_schema.relationships} == {"createdby", "assignee"}
+    window._options_bar._hide_audit.setChecked(True)  # re-renders via `changed`
+    assert [r.label for r in window._drawio_schema.relationships] == ["assignee"]
+    assert '"createdby"' not in window._mermaid_text
+    assert "createdby]" not in window._sql_view.toPlainText().split(";")[0].split("FROM")[1]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_arrow_keys_move_between_tables_and_enter_opens_one(tmp_path):
+    import xsltomermaid.diagram_view as diagram_view
+
+    if not diagram_view.WEBENGINE_AVAILABLE:
+        pytest.skip("PySide6 WebEngine not available")
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window.show()
+    sample = tmp_path / "s.xlsx"
+    _ensure_sample(str(sample))
+    window.load_file(str(sample))
+    view = window._diagram_view
+    assert _wait_for(lambda: view._shell_loaded, 20000)
+    view.current_svg()
+
+    def key(name):
+        view._view.page().runJavaScript(
+            f"document.dispatchEvent(new KeyboardEvent('keydown', {{key: '{name}'}}));"
+        )
+
+    current = lambda: (window._selector._list.currentItem().text()  # noqa: E731
+                       if window._selector._list.currentItem() else "")
+    key("ArrowRight")  # nothing selected: the first table
+    assert _wait_for(lambda: current() != "", 5000)
+    first = current()
+    key("ArrowRight")  # Left → Right layout: the next table along
+    assert _wait_for(lambda: current() not in ("", first), 5000)
+    key("Enter")
+    assert _wait_for(lambda: window._tabs.isVisible(), 5000)
+    assert window._tabs.currentWidget() is window._inspector
+    assert window._inspector.current_table() == current()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_table_list_sorts_by_cluster():
+    app, window = _list_window()
+    sel = window._selector
+    sel.cluster_provider = lambda: {
+        "msdyn_project": (0, "msdyn_project"), "msdyn_task": (0, "msdyn_project"),
+        "account": (1, "account"), "hsl_booking": (0, "msdyn_project"),
+    }
+    sel._sort.setCurrentIndex(sel._sort.findData("cluster"))
+    order = [i.text() for i in sel._items()]
+    assert order == ["msdyn_project", "hsl_booking", "msdyn_task", "account", "lonely"]
+    assert "cluster: msdyn_project" in next(i for i in sel._items() if i.text() == "msdyn_task").toolTip()
+    window._diagram_view.cleanup()
+    del app
