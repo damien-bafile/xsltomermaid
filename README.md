@@ -20,18 +20,26 @@ DefaultValue | ComputedDefinition | Collation | Description
 4. **Generates** a Mermaid `erDiagram` with each table, its columns, `PK`/`FK`
    markers, and one relationship line per foreign key.
 5. **Renders** the diagram live in-app (a "Rendered diagram" tab powered by a
-   locally vendored `mermaid.js` — no internet needed).
-6. Lets you **copy** the Mermaid text, **save** it as `.mmd` / `.md`, **export the
-   diagram** from one export selector as `.drawio` / `.excalidraw` / `.pdf` /
-   `.png` / `.svg`,
-   **save/load selected tables** as `.toml` presets (including source filename),
-   or **preview** it in your browser.
-7. Uses **Left → Right** as the default rendered layout direction.
+   locally vendored `mermaid.js`, so no internet is needed). The diagram
+   **follows your ticks**: changing tables or columns redraws it a moment later.
+   Selections over 60 tables wait for **Render selected** (F5) and show an
+   *Out of date* marker until then. Exports always use the current selection.
+   If Mermaid can't draw a diagram, its error message is shown in the tab.
+6. **Exports** from one **Export** button (its arrow picks Draw.io, Excalidraw,
+   PDF, PNG or SVG, and the last format is remembered). **Preview in browser**
+   works offline too. The **Mermaid** menu copies the source or saves it as
+   `.mmd` / `.md`. The **Table list** menu (beside "Tables in diagram") saves
+   or loads the ticked tables as `.toml` presets, including the source filename.
+7. Uses **Left → Right** as the default rendered layout direction. Orientation,
+   theme, background, relationship labels and *Keys only* sit in the options
+   bar. Spacing, font size, fit width, notes and schema prefix are under
+   **More options**.
 8. Shows **PK/FK markers** in the column selector, with column sorting by name or
    data type and a **PK, FK first** checkbox (primary keys, then foreign keys).
-   These choices apply to each diagram table after **Render selected**.
+   **Clear** (tables) and **All / None / Keys only** (columns) can be undone.
    Click extracted-data column headers to sort ascending or descending.
-9. Shows the diagram's **zoom percentage**; use **Ctrl+scroll** to zoom.
+9. Shows the diagram's **zoom percentage**. Zoom with **Ctrl+scroll** or
+   **Ctrl+= / Ctrl+- / Ctrl+0** (View menu).
 10. Includes a right-docked, copyable **SQL Server schema query** that produces the
     expected columns. It is **hidden by default**; open it via **View → T-SQL statement**.
 11. **Help → Check for updates…** asks GitHub for the latest release and, if it's

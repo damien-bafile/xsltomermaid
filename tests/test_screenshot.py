@@ -13,6 +13,11 @@ import subprocess
 import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Keep remembered settings (export format, …) out of the user's real profile.
+os.environ.setdefault(
+    "XSLTOMERMAID_SETTINGS",
+    os.path.join(__import__("tempfile").mkdtemp(prefix="xsltomermaid_test_"), "settings.ini"),
+)
 # Needed for the WebEngine (Chromium) diagram render to run headless / as root.
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 os.environ.setdefault(
@@ -188,6 +193,17 @@ def test_extracted_data_header_sorting_is_numeric_and_non_destructive():
     del app
 
 
+def _wait_for(condition, timeout_ms: int = 3000) -> bool:
+    """Pump events until ``condition()`` is true (PySide6 lacks QTest.qWaitFor)."""
+    import time
+    from PySide6.QtTest import QTest
+
+    deadline = time.monotonic() + timeout_ms / 1000
+    while not condition() and time.monotonic() < deadline:
+        QTest.qWait(20)
+    return condition()
+
+
 def test_diagram_zoom_label_tracks_webengine_zoom():
     import xsltomermaid.diagram_view as diagram_view
     from PySide6.QtTest import QTest
@@ -199,7 +215,9 @@ def test_diagram_zoom_label_tracks_webengine_zoom():
     assert view._zoom_label.text() == "Zoom: 100%"
     for zoom, text in [(1.25, "125%"), (0.5, "50%"), (1.0, "100%")]:
         view._view.setZoomFactor(zoom)
-        QTest.qWait(250)
+        # The label polls every 200 ms; under a loaded test run a fixed wait
+        # can miss the tick, so wait for the condition (up to 3 s) instead.
+        _wait_for(lambda: view._zoom_label.text() == f"Zoom: {text}", 3000)
         assert view._zoom_label.text() == f"Zoom: {text}"
     view.cleanup()
     assert not view._zoom_timer.isActive()
@@ -502,11 +520,7 @@ def test_window_screenshot(tmp_path):
     window.resize(1100, 760)
     assert window._options_bar.render_style().layout_direction == "LR"
     assert not window._export_btn.isHidden()
-    kinds = [
-        window._export_format.itemData(i)
-        for i in range(window._export_format.count())
-    ]
-    assert kinds == ["drawio", "excalidraw", "pdf", "png", "svg"]
+    assert window.export_formats() == ["drawio", "excalidraw", "pdf", "png", "svg"]
 
     out = tmp_path / "window.png"
     window.capture(str(out))
@@ -537,7 +551,7 @@ def test_export_drawio_checks_schema_before_prompt(monkeypatch):
 
     monkeypatch.setattr(app_module.QMessageBox, "information", _info)
     monkeypatch.setattr(app_module.QFileDialog, "getSaveFileName", _unexpected_dialog)
-    window._export_format.setCurrentIndex(0)  # drawio
+    window.set_export_format("drawio")
     window.export_diagram()
     assert info_calls, "Expected an informational prompt for empty schema."
 
@@ -604,7 +618,7 @@ def test_export_rendered_format_requires_webengine(monkeypatch, tmp_path):
 
     monkeypatch.setattr(app_module.QMessageBox, "information", _info)
     monkeypatch.setattr(app_module.QFileDialog, "getSaveFileName", _unexpected_dialog)
-    window._export_format.setCurrentIndex(2)  # pdf
+    window.set_export_format("pdf")
     window.export_diagram()
     assert info_calls, "Expected an informational prompt when WebEngine is unavailable."
 
@@ -735,11 +749,11 @@ def test_trace_path_undo_restores_prior_selection(tmp_path):
     window._selector.check_tables(["Customer"])
 
     _trace_path(window, "Order", "OrderLine", replace=False)
-    assert window._selector._undo_btn.isEnabled()
+    assert window._selector._undo_btn.isVisibleTo(window._selector)
 
     window._selector.undo_last_change()
     assert set(window._selector.selected_tables()) == {"Customer"}
-    assert not window._selector._undo_btn.isEnabled()
+    assert not window._selector._undo_btn.isVisibleTo(window._selector)
 
     window._diagram_view.cleanup()
     del app
@@ -759,7 +773,7 @@ def test_trace_path_disconnected_keeps_selection_and_offers_no_undo(tmp_path):
     # Same table both ends is rejected before any mutation or snapshot.
     _trace_path(window, "Customer", "Customer", replace=True)
     assert set(window._selector.selected_tables()) == {"Customer"}
-    assert not window._selector._undo_btn.isEnabled()
+    assert not window._selector._undo_btn.isVisibleTo(window._selector)
 
     window._diagram_view.cleanup()
     del app
@@ -938,7 +952,7 @@ def test_trace_path_no_path_reports_and_keeps_selection(monkeypatch):
 
     assert told["count"] == 1
     assert set(window._selector.selected_tables()) == {"A"}  # untouched
-    assert not window._selector._undo_btn.isEnabled()  # no snapshot taken
+    assert not window._selector._undo_btn.isVisibleTo(window._selector)  # no snapshot taken
 
     window._diagram_view.cleanup()
     del app
@@ -998,7 +1012,7 @@ def test_add_related_previews_and_can_be_declined(monkeypatch):
 
     assert asked["count"] == 1  # a big batch prompted
     assert set(window._selector.selected_tables()) == {"H"}  # declined → unchanged
-    assert not window._selector._undo_btn.isEnabled()
+    assert not window._selector._undo_btn.isVisibleTo(window._selector)
 
     window._diagram_view.cleanup()
     del app
@@ -1019,12 +1033,12 @@ def test_add_related_accepts_and_is_undoable(monkeypatch):
     window._add_related_tables()
 
     assert len(window._selector.selected_tables()) == n_kids + 1  # H + all children
-    assert window._selector._undo_btn.isEnabled()
+    assert window._selector._undo_btn.isVisibleTo(window._selector)
     assert window._selector._undo_btn.text() == "&Undo add"
 
     window._selector.undo_last_change()
     assert set(window._selector.selected_tables()) == {"H"}
-    assert not window._selector._undo_btn.isEnabled()
+    assert not window._selector._undo_btn.isVisibleTo(window._selector)
 
     window._diagram_view.cleanup()
     del app
@@ -1105,4 +1119,120 @@ def test_help_menu_update_check_reports_both_outcomes(monkeypatch):
     assert shown == ["No updates available", "Update available", "Couldn't check for updates"]
     assert opened == []  # nothing opens unless the user clicks the button
     assert window._status.text() == "Couldn't check for updates."
+    del app
+
+
+# -- auto-render, stale state, undo for bulk clears --------------------------
+def test_ticking_tables_auto_renders_once_after_a_pause(monkeypatch):
+    from PySide6.QtTest import QTest
+
+    app, window = _window_with_schema(*_diamond())
+    calls = []
+    monkeypatch.setattr(window, "_render_selection", lambda: calls.append(1))
+    items = [window._selector._list.item(i) for i in range(3)]
+    for item in items:  # three quick ticks…
+        item.setCheckState(app_module.Qt.Checked)
+    assert window._stale and calls == []
+    _wait_for(lambda: bool(calls), 2000)  # …draw once, after the pause
+    QTest.qWait(app_module.AUTO_RENDER_DELAY_MS + 100)
+    assert calls == [1]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_large_selection_goes_stale_instead_of_auto_rendering(monkeypatch):
+    from PySide6.QtTest import QTest
+
+    n = app_module.RENDER_WARN_LIMIT + 1
+    tables, rels = _hub_schema(children=n)
+    app, window = _window_with_schema(tables, rels)
+    calls = []
+    monkeypatch.setattr(window, "_render_selection", lambda: calls.append(1))
+    window._selector._on_select_shown()  # ticks n + 1 tables
+    QTest.qWait(app_module.AUTO_RENDER_DELAY_MS + 200)
+    assert calls == []
+    assert window._stale
+    assert "Out of date" in window._render_status._text.text()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_export_and_copy_refuse_a_stale_diagram_the_user_declined(monkeypatch):
+    app, window = _window_with_schema(*_diamond())
+    window._stale = True
+    monkeypatch.setattr(window, "_render_selection", lambda: None)  # "declined"
+    copied = []
+    monkeypatch.setattr(
+        app_module.QGuiApplication.clipboard(), "setText", lambda t: copied.append(t)
+    )
+    window.copy_mermaid()
+    assert copied == []
+    assert "doesn't match your selection" in window._status.text()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_clear_tables_is_undoable():
+    app, window = _window_with_schema(*_diamond())
+    window._selector.check_tables(["A", "B"])
+    window._selector._on_clear()
+    assert window._selector.selected_tables() == []
+    assert window._selector._undo_btn.text() == "&Undo clear"
+    assert window._selector._undo_btn.isVisibleTo(window._selector)
+    window._selector.undo_last_change()
+    assert set(window._selector.selected_tables()) == {"A", "B"}
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_column_bulk_none_is_undoable():
+    from xsltomermaid.excel_to_mermaid import Column, Table
+
+    app = QApplication.instance() or QApplication([])
+    selector = app_module.ColumnSelector()
+    selector.set_tables([Table("dbo", "T", [
+        Column("dbo", "T", 1, "Id", "int", is_primary_key=True),
+        Column("dbo", "T", 2, "Name", "varchar"),
+    ])])
+    changes = []
+    selector.changed.connect(lambda: changes.append(1))
+    selector._bulk("none")
+    assert selector.excluded_pairs() == {("t", "id"), ("t", "name")}
+    assert selector._undo_btn.text() == "Undo none"
+    selector._undo_bulk()
+    assert selector.excluded_pairs() == set()
+    assert not selector._undo_btn.isVisibleTo(selector)
+    assert len(changes) == 2
+    del app
+
+
+def test_export_format_is_remembered(tmp_path, monkeypatch):
+    monkeypatch.setenv("XSLTOMERMAID_SETTINGS", str(tmp_path / "s.ini"))
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    assert window._export_kind == "png"  # default
+    window.set_export_format("svg")
+    assert window._export_btn.text() == "&Export .svg…"
+    window._diagram_view.cleanup()
+    again = app_module.MainWindow()
+    assert again._export_kind == "svg"
+    again._diagram_view.cleanup()
+    del app
+
+
+def test_preview_in_browser_works_offline(tmp_path, monkeypatch):
+    app, window = _window_with_schema(*_diamond())
+    window._mermaid_text = "erDiagram\n    A ||--o{ B : \"ab\"\n"
+    opened = []
+    monkeypatch.setattr(app_module.webbrowser, "open", opened.append)
+    window.preview_browser()
+    from pathlib import Path
+    from urllib.parse import unquote, urlparse
+
+    page = Path(unquote(urlparse(opened[0]).path.lstrip("/")))
+    html_text = page.read_text(encoding="utf-8")
+    assert '<script src="mermaid.min.js">' in html_text
+    assert "cdn.jsdelivr" not in html_text
+    assert (page.parent / "mermaid.min.js").stat().st_size > 100_000
+    window._diagram_view.cleanup()
     del app

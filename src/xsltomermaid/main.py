@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import html
 import os
+import shutil
 import sys
 import tempfile
 import webbrowser
+from pathlib import Path
 
 
 def _normalize_cli_args(argv: list[str] | None) -> list[str]:
@@ -51,6 +53,9 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QEvent,
     QModelIndex,
+    QPointF,
+    QRectF,
+    QSettings,
     QSortFilterProxyModel,
     Qt,
     QThread,
@@ -58,6 +63,10 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
+    QPainter,
+    QPen,
+    QPixmap,
+    QTextDocumentFragment,
     QAction,
     QColor,
     QFont,
@@ -69,6 +78,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QMenu,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -99,6 +109,7 @@ from PySide6.QtWidgets import (
 )
 
 from .diagram_view import (
+    VENDOR_MERMAID,
     DiagramView,
     RenderStyle,
     resource_path,
@@ -116,6 +127,7 @@ from .excel_to_mermaid import (
     related_tables,
     route_paths,
     unresolved_foreign_keys,
+    MERMAID_CDN,
     wrap_mermaid_html,
 )
 from .make_sample import write_sample
@@ -134,6 +146,9 @@ from .updates import (
 AUTO_RENDER_LIMIT = 25
 # Rendering more than this many tables at once prompts a confirmation first.
 RENDER_WARN_LIMIT = 60
+# After the last tick, wait this long before re-rendering, so ticking several
+# tables in a row draws once rather than once per click.
+AUTO_RENDER_DELAY_MS = 400
 # Exporting more than this many tables to an interchange format (drawio /
 # excalidraw) warns that the file may be slow to open — but never blocks it.
 EXPORT_WARN_TABLES = 500
@@ -226,13 +241,14 @@ _DISABLED_FG = "rgba(128,128,128,0.75)"  # filled button text, disabled
 
 
 def _apply_primary_button_style(button) -> None:
-    """Filled-accent styling for the one lead action in a button group.
+    """Filled-accent styling for the window's one lead action (Export).
 
-    Used for the two primary calls to action — "Copy Mermaid" in the export bar
-    and "Render selected" in the table picker — so both read as the loud button
-    among quiet neighbours.
+    Works for a QPushButton or a QToolButton (the Export split button, whose
+    menu arrow keeps the same fill).
     """
+    kind = button.metaObject().className()
     button.setStyleSheet(
+        (
         "QPushButton {"
         f"  background: {_ACCENT};"
         "  color: white;"
@@ -250,11 +266,47 @@ def _apply_primary_button_style(button) -> None:
         f"  background: {_DISABLED_BG};"
         f"  color: {_DISABLED_FG};"
         "}"
+        + (
+            # The split button's arrow segment: same fill, a hairline divider.
+            "QToolButton::menu-button {"
+            "  border: none; border-left: 1px solid rgba(255,255,255,0.35);"
+            "  border-top-right-radius: 6px; border-bottom-right-radius: 6px;"
+            "  width: 18px;"
+            "}"
+            "QToolButton { padding-right: 24px; }"
+            if kind == "QToolButton"
+            else ""
+        )
+        ).replace("QPushButton", kind)
     )
 # Semantic status colours for the render indicator. Both clear the 3:1 non-text
 # (icon) contrast threshold on the light and dark surfaces the icon sits on.
 _OK_GREEN = "#2e9e57"  # render succeeded
 _ERR_ORANGE = "#d9822b"  # render failed
+
+
+# (key, menu label, file-dialog title, default filename, filter)
+EXPORT_FORMATS = [
+    ("drawio", "Draw.io (.drawio)", "Save Draw.io diagram", "diagram.drawio",
+     "Draw.io file (*.drawio)"),
+    ("excalidraw", "Excalidraw (.excalidraw)", "Save Excalidraw scene",
+     "diagram.excalidraw", "Excalidraw file (*.excalidraw)"),
+    ("pdf", "PDF (.pdf)", "Save diagram PDF", "diagram.pdf", "PDF document (*.pdf)"),
+    ("png", "PNG image (.png)", "Save diagram PNG", "diagram.png", "PNG image (*.png)"),
+    ("svg", "SVG image (.svg)", "Save diagram SVG", "diagram.svg", "SVG image (*.svg)"),
+]
+
+
+def app_settings() -> QSettings:
+    """Per-user settings (remembered export format, …).
+
+    ``XSLTOMERMAID_SETTINGS`` points at an .ini file instead, so tests and
+    portable setups don't touch the user's real settings.
+    """
+    override = os.environ.get("XSLTOMERMAID_SETTINGS")
+    if override:
+        return QSettings(override, QSettings.IniFormat)
+    return QSettings(QSettings.IniFormat, QSettings.UserScope, "xsltomermaid", "xsltomermaid")
 
 
 def app_icon() -> QIcon:
@@ -342,7 +394,15 @@ def system_is_dark(app) -> bool:
 def apply_system_palette(app) -> bool:
     """Apply a light or dark palette to match the OS. Returns True if dark."""
     dark = system_is_dark(app)
-    app.setPalette(_dark_palette() if dark else app.style().standardPalette())
+    palette = _dark_palette() if dark else app.style().standardPalette()
+    # One accent everywhere: without this, Windows 11 tints checkboxes with the
+    # system accent (often lilac) while the app's buttons are blue.
+    accent = QColor(_ACCENT)
+    palette.setColor(QPalette.Highlight, accent)
+    palette.setColor(QPalette.HighlightedText, QColor(0xFF, 0xFF, 0xFF))
+    if hasattr(QPalette, "Accent"):  # Qt 6.6+
+        palette.setColor(QPalette.Accent, accent)
+    app.setPalette(palette)
     return dark
 
 
@@ -350,7 +410,7 @@ class DropArea(QLabel):
     """A large label that accepts a dragged spreadsheet file."""
 
     _IDLE_TEXT = (
-        "\n\n⬇  Drag an Excel schema file here\n\n"
+        "\n\nDrag an Excel schema file here\n\n"
         "(.xlsx / .xlsm)  —  or click to browse\n\n"
     )
 
@@ -389,7 +449,7 @@ class DropArea(QLabel):
         drop or a click away.
         """
         self._compact = True
-        self.setText(f"📄  {name}     ·     drop or click to load another file")
+        self.setText(f"{name}     ·     drop or click to load another file")
         self.setMinimumHeight(0)
         self.setMaximumHeight(46)
         self._reset_style()
@@ -475,6 +535,32 @@ class DropArea(QLabel):
         self._reset_style()
 
 
+def announce(widget, message: str) -> None:
+    """Tell a screen reader about ``message`` (best-effort, never fatal)."""
+    try:
+        from PySide6.QtGui import QAccessible, QAccessibleAnnouncementEvent
+
+        if QAccessible.isActive():
+            QAccessible.updateAccessibility(
+                QAccessibleAnnouncementEvent(widget, message)
+            )
+    except Exception:  # noqa: BLE001 - a11y announcement must never be fatal
+        pass
+
+
+class StatusLabel(QLabel):
+    """The window's status line; every change is also read out to screen readers.
+
+    Messages such as "copied" or "saved" are otherwise visual only.
+    """
+
+    def setText(self, text: str):  # noqa: N802 - Qt override
+        super().setText(text)
+        if text:
+            plain = QTextDocumentFragment.fromHtml(text).toPlainText() if "<" in text else text
+            announce(self, plain)
+
+
 class LoadWorker(QThread):
     """Read + parse a spreadsheet off the UI thread, reporting progress.
 
@@ -554,6 +640,7 @@ class TableSelector(QWidget):
     """A filterable, checkable list of tables to include in the diagram."""
 
     applied = Signal()  # user asked to (re)render the current selection
+    selection_changed = Signal()  # the user ticked/unticked tables (auto-render)
     related_requested = Signal()  # user asked to also tick the related tables
     path_requested = Signal()  # user asked for the shortest path between two tables
 
@@ -565,17 +652,22 @@ class TableSelector(QWidget):
 
         title = QLabel("Tables in diagram")
         title.setStyleSheet("font-weight: 600;")
-        layout.addWidget(title)
+        self._header_row = QHBoxLayout()
+        self._header_row.addWidget(title)
+        self._header_row.addStretch(1)
+        layout.addLayout(self._header_row)
 
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("Filter tables…")
+        self._filter.setAccessibleName("Filter tables")
         self._filter.setClearButtonEnabled(True)
         self._filter.textChanged.connect(self._apply_filter_text)
         layout.addWidget(self._filter)
 
         self._list = QListWidget()
         self._list.setUniformItemSizes(True)
-        self._list.itemChanged.connect(lambda _item: self._update_count())
+        self._list.setAccessibleName("Tables in diagram")
+        self._list.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self._list, 1)
 
         self._count = QLabel("No tables loaded yet")
@@ -586,8 +678,9 @@ class TableSelector(QWidget):
         self._select_shown_btn = QPushButton("&Select shown")
         self._clear_btn = QPushButton("&Clear")
         self._select_shown_btn.setToolTip("Tick every table currently visible in the list.")
-        self._select_shown_btn.clicked.connect(self.check_shown)
-        self._clear_btn.clicked.connect(self.clear_selection)
+        self._clear_btn.setToolTip("Untick every table. Can be undone.")
+        self._select_shown_btn.clicked.connect(self._on_select_shown)
+        self._clear_btn.clicked.connect(self._on_clear)
         button_row.addWidget(self._select_shown_btn)
         button_row.addWidget(self._clear_btn)
         layout.addLayout(button_row)
@@ -696,20 +789,23 @@ class TableSelector(QWidget):
         self._path_box.setVisible(False)
         layout.addWidget(self._path_box)
 
-        # Primary action row. Render is the one thing users most want to press,
-        # so it leads as the filled accent button; Undo sits quietly beside it,
-        # reverting the last add or traced path.
+        # The diagram follows the ticks on its own (see MainWindow's auto-render),
+        # so Render is a quiet manual refresh, needed for big selections that
+        # don't auto-render. Undo only appears when there's something to undo.
         layout.addSpacing(4)
         action_row = QHBoxLayout()
         self._render_btn = QPushButton("&Render selected")
+        self._render_btn.setToolTip(
+            "Redraw the diagram now (F5). Small selections update automatically; "
+            f"more than {RENDER_WARN_LIMIT} tables wait for this."
+        )
         self._render_btn.clicked.connect(lambda: self.applied.emit())
-        _apply_primary_button_style(self._render_btn)
         self._undo_btn = QPushButton("&Undo")
         self._undo_btn.setToolTip(
-            "Restore the selection from before the last add or traced path."
+            "Restore the selection from before the last clear, add or traced path."
         )
         self._undo_btn.clicked.connect(self.undo_last_change)
-        self._undo_btn.setEnabled(False)
+        self._undo_btn.setVisible(False)
         action_row.addWidget(self._render_btn, 1)
         action_row.addWidget(self._undo_btn)
         layout.addLayout(action_row)
@@ -724,6 +820,10 @@ class TableSelector(QWidget):
 
         # Nothing to act on until a schema is loaded.
         self.set_ready(False)
+
+    def add_header_widget(self, widget):
+        """Put a small control (the table-list menu) beside the panel title."""
+        self._header_row.addWidget(widget)
 
     def _focus_filter(self):
         if self._filter.isEnabled():
@@ -763,7 +863,7 @@ class TableSelector(QWidget):
         if not ready:
             self._undo_snapshot = None
             self._undo_btn.setText("&Undo")
-        self._undo_btn.setEnabled(ready and self._undo_snapshot is not None)
+        self._undo_btn.setVisible(ready and self._undo_snapshot is not None)
 
     # -- population --------------------------------------------------------
     def set_tables(self, names: list[str]):
@@ -794,7 +894,7 @@ class TableSelector(QWidget):
         self._path_via.blockSignals(False)
         self._undo_snapshot = None
         self._undo_btn.setText("&Undo")
-        self._undo_btn.setEnabled(False)
+        self._undo_btn.setVisible(False)
         self._update_path_enabled()
         self._update_count()
 
@@ -806,6 +906,21 @@ class TableSelector(QWidget):
         needle = text.strip().lower()
         for item in self._items():
             item.setHidden(needle not in item.text().lower())
+
+    def _on_item_changed(self, _item):
+        self._update_count()
+        self.selection_changed.emit()
+
+    def _on_select_shown(self):
+        self.check_shown()
+        self.selection_changed.emit()
+
+    def _on_clear(self):
+        if not self.selected_tables():
+            return
+        self.snapshot_for_undo("clear")
+        self.clear_selection()
+        self.selection_changed.emit()
 
     def check_shown(self):
         self._set_state((item for item in self._items() if not item.isHidden()), Qt.Checked)
@@ -899,7 +1014,7 @@ class TableSelector(QWidget):
         """
         self._undo_snapshot = self.selected_tables()
         self._undo_btn.setText(f"&Undo {label}")
-        self._undo_btn.setEnabled(True)
+        self._undo_btn.setVisible(True)
 
     def undo_last_change(self):
         """Restore the selection captured before the last add / traced path."""
@@ -908,7 +1023,7 @@ class TableSelector(QWidget):
         self.set_selected_tables(self._undo_snapshot)
         self._undo_snapshot = None
         self._undo_btn.setText("&Undo")
-        self._undo_btn.setEnabled(False)
+        self._undo_btn.setVisible(False)
         self.applied.emit()
 
     def retheme(self):
@@ -925,7 +1040,7 @@ class ColumnSelector(QWidget):
     tables are shown.
     """
 
-    applied = Signal()  # user asked to re-render with the current column choice
+    changed = Signal()  # the user changed which columns show, or their order
 
     # Item data roles.
     _ROLE_KIND = Qt.UserRole  # "table" | "column"
@@ -952,8 +1067,11 @@ class ColumnSelector(QWidget):
 
         # A dropdown to focus on one table's columns (fast for huge schemas).
         scope_row = QHBoxLayout()
-        scope_row.addWidget(QLabel("Show:"))
         self._scope = QComboBox()
+        scope_label = QLabel("Sho&w:")
+        scope_label.setBuddy(self._scope)
+        self._scope.setAccessibleName("Show columns for")
+        scope_row.addWidget(scope_label)
         self._scope.currentIndexChanged.connect(lambda _i: self._rebuild_view())
         scope_row.addWidget(self._scope, 1)
         layout.addLayout(scope_row)
@@ -968,14 +1086,18 @@ class ColumnSelector(QWidget):
 
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("Filter columns…")
+        self._filter.setAccessibleName("Filter columns")
         self._filter.setClearButtonEnabled(True)
         self._filter.textChanged.connect(self._apply_filter_text)
         layout.addWidget(self._filter)
 
         self._tree = QTreeWidget()
         sort_row = QHBoxLayout()
-        sort_row.addWidget(QLabel("Sort columns:"))
         self._sort = QComboBox()
+        sort_label = QLabel("S&ort columns:")
+        sort_label.setBuddy(self._sort)
+        self._sort.setAccessibleName("Sort columns")
+        sort_row.addWidget(sort_label)
         for label, value in (
             ("Original order", "order"),
             ("Name A–Z", "name"),
@@ -983,18 +1105,19 @@ class ColumnSelector(QWidget):
             ("Data type", "type"),
         ):
             self._sort.addItem(label, value)
-        self._sort.currentIndexChanged.connect(self._rebuild_view)
+        self._sort.currentIndexChanged.connect(self._on_order_changed)
         sort_row.addWidget(self._sort)
         self._keys_first = QCheckBox("PK, FK first")
         self._keys_first.setToolTip(
             "Place primary-key columns, then foreign-key columns, above other "
-            "columns in each table. Applies to the diagram after Render selected."
+            "columns in each table."
         )
-        self._keys_first.toggled.connect(self._rebuild_view)
+        self._keys_first.toggled.connect(self._on_order_changed)
         sort_row.addWidget(self._keys_first)
         sort_row.addStretch(1)
         layout.addLayout(sort_row)
         self._tree.setHeaderHidden(True)
+        self._tree.setAccessibleName("Columns to include")
         self._tree.setUniformRowHeights(True)
         self._tree.itemChanged.connect(self._on_item_changed)
         layout.addWidget(self._tree, 1)
@@ -1019,16 +1142,17 @@ class ColumnSelector(QWidget):
         button_row.addWidget(all_btn)
         button_row.addWidget(none_btn)
         button_row.addWidget(keys_btn)
-        layout.addLayout(button_row)
-
-        # Same verb as the left panel: one "Render selected" commits the whole
-        # table + column selection, from whichever surface you're on.
-        render_btn = QPushButton("Render selected")
-        render_btn.setToolTip(
-            "Render the diagram with the current table and column selection."
+        # All / None / Keys only rewrite every table's columns at once, so the
+        # previous choice is kept for one undo.
+        self._undo_btn = QPushButton("Undo")
+        self._undo_btn.setToolTip(
+            "Restore the columns from before the last All / None / Keys only."
         )
-        render_btn.clicked.connect(lambda: self.applied.emit())
-        layout.addWidget(render_btn)
+        self._undo_btn.clicked.connect(self._undo_bulk)
+        self._undo_btn.setVisible(False)
+        self._undo_excluded: set[tuple[str, str]] | None = None
+        button_row.addWidget(self._undo_btn)
+        layout.addLayout(button_row)
 
     # -- population --------------------------------------------------------
     def set_tables(self, tables: list[Table]):
@@ -1109,7 +1233,7 @@ class ColumnSelector(QWidget):
         n = len(self._tables)
         self._header.setText(
             f"Columns for the {n} table{'' if n == 1 else 's'} selected at left. "
-            "Untick a column to leave it out, then Render selected."
+            "Untick a column to leave it out; the diagram updates as you go."
         )
         self._header.setVisible(True)
 
@@ -1184,8 +1308,28 @@ class ColumnSelector(QWidget):
         else:
             self._excluded.add(pair)
         self._update_count()
+        self.changed.emit()
+
+    def _on_order_changed(self, *_args):
+        self._rebuild_view()
+        self.changed.emit()
+
+    def _undo_bulk(self):
+        if self._undo_excluded is None:
+            return
+        self._excluded = self._undo_excluded
+        self._undo_excluded = None
+        self._undo_btn.setVisible(False)
+        self._sync_tree_checks()
+        self._update_count()
+        self.changed.emit()
 
     def _bulk(self, mode: str):
+        self._undo_excluded = set(self._excluded)
+        self._undo_btn.setText(
+            {"all": "Undo all", "none": "Undo none", "keys": "Undo keys only"}[mode]
+        )
+        self._undo_btn.setVisible(True)
         # Operate on the whole selection (not just the visible scope) so "Keys
         # only" etc. apply everywhere, even for tables not currently listed.
         for table in self._tables:
@@ -1200,6 +1344,7 @@ class ColumnSelector(QWidget):
                     self._excluded.add((table_key, col_key))
         self._sync_tree_checks()
         self._update_count()
+        self.changed.emit()
 
     def _sync_tree_checks(self):
         """Update the visible tree's checkboxes to match the excluded set."""
@@ -1293,9 +1438,6 @@ class DiagramOptionsBar(QWidget):
         outer.setContentsMargins(4, 4, 4, 4)
         outer.setSpacing(4)
 
-        # Row 1 — appearance / layout (all applied via Mermaid config).
-        row1 = QHBoxLayout()
-        row1.setSpacing(8)
         self._orientation = self._combo(self._ORIENTATIONS)
         self._spacing = self._combo(self._SPACINGS)
         self._theme = self._combo(self._THEMES)
@@ -1305,42 +1447,91 @@ class DiagramOptionsBar(QWidget):
         self._font.setValue(12)
         self._font.setSuffix(" px")
         self._font.valueChanged.connect(lambda _v: self.changed.emit())
-        self._fit_width = QCheckBox("Fit width")
+        self._fit_width = QCheckBox("Fit &width")
         self._fit_width.setChecked(True)
-        self._fit_width.toggled.connect(lambda _v: self.changed.emit())
-
-        for label, widget in [
-            ("Orientation", self._orientation),
-            ("Spacing", self._spacing),
-            ("Theme", self._theme),
-            ("Background", self._background),
-            ("Font", self._font),
-        ]:
-            row1.addWidget(QLabel(label + ":"))
-            row1.addWidget(widget)
-        row1.addWidget(self._fit_width)
-        row1.addStretch(1)
-        outer.addLayout(row1)
-
-        # Row 2 — content toggles (applied by regenerating the Mermaid source).
-        row2 = QHBoxLayout()
-        row2.setSpacing(8)
-        self._show_comments = QCheckBox("Descriptions/notes")
+        self._fit_width.setToolTip("Scale the diagram down to fit the view's width.")
+        self._show_comments = QCheckBox("Descriptions/&notes")
         self._show_comments.setChecked(True)
-        self._show_rel_labels = QCheckBox("Relationship labels")
+        self._show_comments.setToolTip(
+            "Show each column's description, identity, computed and not-null notes."
+        )
+        self._show_rel_labels = QCheckBox("Relationship &labels")
         self._show_rel_labels.setChecked(True)
-        self._prefix_schema = QCheckBox("Prefix schema name")
-        self._keys_only = QCheckBox("Keys only")
+        self._show_rel_labels.setToolTip("Name the foreign-key column on each line.")
+        self._prefix_schema = QCheckBox("Prefix &schema name")
+        self._prefix_schema.setToolTip("Title tables as schema.Table instead of Table.")
+        self._keys_only = QCheckBox("&Keys only")
+        self._keys_only.setToolTip("Show only primary-key and foreign-key columns.")
         for chk in (
+            self._fit_width,
             self._show_comments,
             self._show_rel_labels,
             self._prefix_schema,
             self._keys_only,
         ):
             chk.toggled.connect(lambda _v: self.changed.emit())
+
+        # Row 1: the everyday choices. Each label is the buddy of its control,
+        # so screen readers name the dropdown and Alt+letter jumps to it.
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+        for label, widget in [
+            ("&Orientation:", self._orientation),
+            ("&Theme:", self._theme),
+            ("&Background:", self._background),
+        ]:
+            row1.addWidget(self._buddy(label, widget))
+            row1.addWidget(widget)
+        row1.addSpacing(8)
+        row1.addWidget(self._show_rel_labels)
+        row1.addWidget(self._keys_only)
+        row1.addStretch(1)
+
+        # The rest is fine-tuning, so it sits behind a disclosure, closed by
+        # default, that keeps the bar to one line.
+        self._more = QToolButton()
+        self._more.setText("More options")
+        self._more.setCheckable(True)
+        self._more.setArrowType(Qt.RightArrow)
+        self._more.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._more.setToolTip("Spacing, font size, width, notes and schema prefix.")
+        self._more.setStyleSheet(
+            "QToolButton { border: none; padding: 2px 6px; border-radius: 4px; }"
+            f"QToolButton:hover, QToolButton:focus {{ background: {_ACCENT_WASH}; }}"
+            "QToolButton:checked { background: transparent; }"
+            f"QToolButton:checked:hover {{ background: {_ACCENT_WASH}; }}"
+        )
+        self._more.toggled.connect(self._on_more_toggled)
+        row1.addWidget(self._more)
+        outer.addLayout(row1)
+
+        self._more_box = QWidget()
+        row2 = QHBoxLayout(self._more_box)
+        row2.setContentsMargins(0, 0, 0, 0)
+        row2.setSpacing(8)
+        for label, widget in [
+            ("S&pacing:", self._spacing),
+            ("&Font:", self._font),
+        ]:
+            row2.addWidget(self._buddy(label, widget))
+            row2.addWidget(widget)
+        row2.addSpacing(8)
+        for chk in (self._fit_width, self._show_comments, self._prefix_schema):
             row2.addWidget(chk)
         row2.addStretch(1)
-        outer.addLayout(row2)
+        self._more_box.setVisible(False)
+        outer.addWidget(self._more_box)
+
+    @staticmethod
+    def _buddy(text: str, widget) -> QLabel:
+        label = QLabel(text)
+        label.setBuddy(widget)
+        widget.setAccessibleName(text.replace("&", "").rstrip(":"))
+        return label
+
+    def _on_more_toggled(self, open_: bool):
+        self._more.setArrowType(Qt.DownArrow if open_ else Qt.RightArrow)
+        self._more_box.setVisible(open_)
 
     def _combo(self, pairs) -> QComboBox:
         combo = QComboBox()
@@ -1391,10 +1582,48 @@ class DiagramOptionsBar(QWidget):
             widget.blockSignals(False)
 
 
+def status_icon(kind: str, color: str, size: int = 16, angle: int = 0) -> QPixmap:
+    """A small drawn status icon: "spin" (an arc at ``angle``), "ok", "warn", "stale".
+
+    Painted rather than typed so it looks the same on every OS and font.
+    """
+    ratio = 2  # draw at 2x so it stays crisp on high-DPI screens
+    pix = QPixmap(size * ratio, size * ratio)
+    pix.fill(Qt.transparent)
+    pix.setDevicePixelRatio(ratio)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    c = QColor(color)
+    r = QRectF(1.5, 1.5, size - 3, size - 3)
+    if kind == "spin":
+        track = QColor(c)
+        track.setAlphaF(0.25)
+        p.setPen(QPen(track, 2))
+        p.drawEllipse(r)
+        p.setPen(QPen(c, 2, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(r, -angle * 16, 100 * 16)
+    elif kind == "ok":
+        p.setPen(Qt.NoPen)
+        p.setBrush(c)
+        p.drawEllipse(r)
+        p.setPen(QPen(QColor("white"), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawPolyline([QPointF(4.6, 8.2), QPointF(7.0, 10.6), QPointF(11.4, 5.6)])
+    elif kind == "warn":
+        p.setPen(Qt.NoPen)
+        p.setBrush(c)
+        p.drawPolygon([QPointF(8, 1.5), QPointF(15, 14.5), QPointF(1, 14.5)])
+        p.setPen(QPen(QColor("white"), 1.8, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(8, 6), QPointF(8, 9.6))
+        p.drawPoint(QPointF(8, 12.2))
+    else:  # "stale": a hollow ring, "something to do"
+        p.setPen(QPen(c, 2))
+        p.drawEllipse(QRectF(3.5, 3.5, size - 7, size - 7))
+    p.end()
+    return pix
+
+
 class RenderStatus(QWidget):
     """A small spinner while the diagram renders, then a tick when it's done."""
-
-    _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # braille spinner
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1411,18 +1640,19 @@ class RenderStatus(QWidget):
         row.addWidget(self._text)
 
         self._timer = QTimer(self)
-        self._timer.setInterval(90)
+        self._timer.setInterval(70)
         self._timer.timeout.connect(self._spin)
         self._frame = 0
         self.setVisible(False)
 
     def _spin(self):
-        self._frame = (self._frame + 1) % len(self._FRAMES)
-        self._icon.setText(self._FRAMES[self._frame])
+        self._frame = (self._frame + 1) % 12
+        self._icon.setPixmap(status_icon("spin", _ACCENT, angle=self._frame * 30))
 
     def start(self):
-        self._icon.setStyleSheet(f"color: {_ACCENT}; font-weight: 600;")
-        self._icon.setText(self._FRAMES[0])
+        self.setToolTip("")  # a previous failure's reason no longer applies
+        self._frame = 0
+        self._icon.setPixmap(status_icon("spin", _ACCENT))
         self._text.setText("Rendering…")
         self.setVisible(True)
         self._timer.start()
@@ -1430,13 +1660,18 @@ class RenderStatus(QWidget):
     def finish(self, ok: bool = True):
         self._timer.stop()
         if ok:
-            self._icon.setStyleSheet(f"color: {_OK_GREEN}; font-weight: 700;")
-            self._icon.setText("✓")
+            self._icon.setPixmap(status_icon("ok", _OK_GREEN))
             self._text.setText("Rendered")
         else:
-            self._icon.setStyleSheet(f"color: {_ERR_ORANGE}; font-weight: 700;")
-            self._icon.setText("⚠")
+            self._icon.setPixmap(status_icon("warn", _ERR_ORANGE))
             self._text.setText("Render failed")
+        self.setVisible(True)
+
+    def stale(self, text: str):
+        """The drawn diagram no longer matches the selection."""
+        self._timer.stop()
+        self._icon.setPixmap(status_icon("stale", _ERR_ORANGE))
+        self._text.setText(text)
         self.setVisible(True)
 
     def clear(self):
@@ -1517,6 +1752,13 @@ class MainWindow(QMainWindow):
         self._pending_path: str = ""
         self._loaded_name: str = ""
         self._rendering: bool = False
+        # True when the ticked tables/columns differ from the drawn diagram.
+        self._stale: bool = False
+        self._auto_render_timer = QTimer(self)
+        self._auto_render_timer.setSingleShot(True)
+        self._auto_render_timer.setInterval(AUTO_RENDER_DELAY_MS)
+        # Looked up at fire time (not bound now) so it always calls the current method.
+        self._auto_render_timer.timeout.connect(lambda: self._render_selection())
         self._diagram_rendered: bool = False
         self._drawio_schema: Schema | None = None
         self._importer = SchemaImportService()
@@ -1529,7 +1771,8 @@ class MainWindow(QMainWindow):
         self._drop = DropArea(self.load_file_async)
         outer.addWidget(self._drop)
 
-        self._status = QLabel("No file loaded.")
+        self._status = StatusLabel("No file loaded.")
+        self._status.setAccessibleName("Status")
         self._status.setStyleSheet(f"color: {_muted_hex(self)};")
         # AutoText (the default) renders the <span> success summary as rich text
         # while keeping plain status messages plain — so a filename with & or <
@@ -1603,10 +1846,11 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._table, "Extracted data")
 
         self._columns = ColumnSelector()
-        self._columns.applied.connect(self._render_selection)
+        self._columns.changed.connect(self._on_selection_edited)
         tabs.addTab(self._columns, "Columns")
 
         self._mermaid_view = QPlainTextEdit()
+        self._mermaid_view.setAccessibleName("Mermaid source")
         self._mermaid_view.setReadOnly(True)
         self._mermaid_view.setFont(QFont("Menlo, Consolas, monospace"))
         self._mermaid_view.setLineWrapMode(QPlainTextEdit.NoWrap)
@@ -1630,6 +1874,7 @@ class MainWindow(QMainWindow):
         self._diagram_view.render_started.connect(lambda: self._set_rendering(True))
         self._diagram_view.render_finished.connect(self._render_status.finish)
         self._diagram_view.render_finished.connect(self._announce_render)
+        self._diagram_view.render_error.connect(self._on_render_error)
         self._diagram_view.render_finished.connect(lambda _ok: self._set_rendering(False))
         diagram_tab = QWidget()
         diagram_layout = QVBoxLayout(diagram_tab)
@@ -1656,6 +1901,7 @@ class MainWindow(QMainWindow):
         # Left: table picker to limit what gets rendered. Right: the tabs.
         self._selector = TableSelector()
         self._selector.applied.connect(self._render_selection)
+        self._selector.selection_changed.connect(self._on_selection_edited)
         self._selector.related_requested.connect(self._add_related_tables)
         self._selector.path_requested.connect(self._find_shortest_path)
 
@@ -1667,87 +1913,78 @@ class MainWindow(QMainWindow):
         body.setSizes([280, 820])
         outer.addWidget(body, 1)
 
-        # Action buttons. Labels follow one convention: a trailing "…" marks the
-        # actions that open a file dialog; immediate actions (copy, preview) omit
-        # it. Tooltips disambiguate the near-identical .mmd / .md pair.
+        # The bottom bar holds one job, getting the diagram out: Export is the
+        # lead (a split button; its arrow picks another format and exports in
+        # it), Preview sits beside it, and the Mermaid text outputs share one
+        # menu. Labels ending in "…" open a file dialog.
         buttons = QHBoxLayout()
-        self._copy_btn = QPushButton("Copy Mermaid")
-        self._copy_btn.setToolTip("Copy the Mermaid diagram source to the clipboard.")
-        self._save_mmd_btn = QPushButton("Save .mmd…")
-        self._save_mmd_btn.setToolTip("Save the raw Mermaid diagram source (.mmd).")
-        self._save_md_btn = QPushButton("Save .md…")
-        self._save_md_btn.setToolTip(
-            "Save as Markdown with the diagram in a ```mermaid code block (.md)."
+        self._export_kind = self._remembered_export_kind()
+        self._export_btn = QToolButton()
+        self._export_btn.setPopupMode(QToolButton.MenuButtonPopup)
+        self._export_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._export_btn.setToolTip(
+            "Export the diagram. Use the arrow to export in another format."
         )
-        self._save_selection_btn = QPushButton("Save table list…")
-        self._save_selection_btn.setToolTip(
-            "Save the current table selection as a .toml preset."
+        self._export_btn.setAccessibleName("Export diagram")
+        self._export_btn.clicked.connect(self.export_diagram)
+        export_menu = QMenu(self._export_btn)
+        self._export_actions: dict[str, QAction] = {}
+        for key, label, *_rest in EXPORT_FORMATS:
+            action = export_menu.addAction(f"Export as {label}…")
+            action.triggered.connect(
+                lambda _checked=False, k=key: self._export_as(k)
+            )
+            self._export_actions[key] = action
+        self._export_btn.setMenu(export_menu)
+        _apply_primary_button_style(self._export_btn)
+
+        self._preview_btn = QPushButton("&Preview in browser")
+        self._preview_btn.setToolTip(
+            "Open the diagram in your web browser (works offline)."
         )
-        self._load_selection_btn = QPushButton("Load table list…")
-        self._load_selection_btn.setToolTip(
-            "Restore a table selection from a .toml preset."
-        )
-        self._export_format = QComboBox()
-        self._export_format.setAccessibleName("Diagram export format")
-        self._export_format.addItem("Draw.io (.drawio)", "drawio")
-        self._export_format.addItem("Excalidraw (.excalidraw)", "excalidraw")
-        self._export_format.addItem("PDF (.pdf)", "pdf")
-        self._export_format.addItem("PNG (.png)", "png")
-        self._export_format.addItem("SVG (.svg)", "svg")
-        self._export_format.setToolTip("Choose the diagram export format.")
-        # The button names the format the combo has selected, so the pair reads
-        # as one pick-then-export control rather than two rival export widgets.
-        self._export_btn = QPushButton("Export…")
-        self._export_format.currentIndexChanged.connect(self._sync_export_label)
-        self._preview_btn = QPushButton("Preview in browser")
-        self._preview_btn.setToolTip("Open the rendered diagram in your web browser.")
+
+        self._mermaid_btn = QPushButton("&Mermaid")
+        self._mermaid_btn.setToolTip("Copy or save the diagram's Mermaid source.")
+        mermaid_menu = QMenu(self._mermaid_btn)
+        mermaid_menu.addAction("&Copy Mermaid source", self.copy_mermaid)
+        mermaid_menu.addAction("Save as .&mmd…", self.save_mmd)
+        mermaid_menu.addAction("Save as Mark&down (.md)…", self.save_md)
+        self._mermaid_btn.setMenu(mermaid_menu)
+
+        # Table-list presets are about the selection, so they live with it.
+        self._presets_btn = QPushButton("Table &list")
+        self._presets_btn.setFlat(True)
+        self._presets_btn.setToolTip("Save or load the ticked tables as a .toml preset.")
+        presets_menu = QMenu(self._presets_btn)
+        presets_menu.addAction("&Save table list…", self.save_table_selection_toml)
+        presets_menu.addAction("&Load table list…", self.load_table_selection_toml)
+        self._presets_btn.setMenu(presets_menu)
+        self._selector.add_header_widget(self._presets_btn)
+
         self._sync_export_label()
         self._action_buttons = [
-            self._copy_btn,
-            self._save_mmd_btn,
-            self._save_md_btn,
-            self._save_selection_btn,
-            self._load_selection_btn,
-            self._export_format,
             self._export_btn,
             self._preview_btn,
+            self._mermaid_btn,
+            self._presets_btn,
         ]
         for btn in self._action_buttons:
             btn.setEnabled(False)
 
-        # "Copy Mermaid" is the most-reached-for action, so it leads as the one
-        # filled/accent button; the rest stay quiet.
-        _apply_primary_button_style(self._copy_btn)
-
-        # The row reads as three jobs, not eight equal buttons: get the Mermaid
-        # text · save/load the table selection · export or preview the diagram.
         self._button_seps: list[QFrame] = []
-        groups = [
-            [self._copy_btn, self._save_mmd_btn, self._save_md_btn],
-            [self._save_selection_btn, self._load_selection_btn],
-            [self._export_format, self._export_btn, self._preview_btn],
-        ]
-        for i, group in enumerate(groups):
-            if i > 0:
-                sep = QFrame()
-                sep.setFrameShape(QFrame.VLine)
-                sep.setFixedHeight(24)
-                self._button_seps.append(sep)
-                buttons.addSpacing(4)
-                buttons.addWidget(sep)
-                buttons.addSpacing(4)
-            for widget in group:
-                buttons.addWidget(widget)
-
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setFixedHeight(24)
+        self._button_seps.append(sep)
+        buttons.addWidget(self._export_btn)
+        buttons.addWidget(self._preview_btn)
+        buttons.addSpacing(4)
+        buttons.addWidget(sep)
+        buttons.addSpacing(4)
+        buttons.addWidget(self._mermaid_btn)
         buttons.addStretch(1)
         outer.addLayout(buttons)
 
-        self._copy_btn.clicked.connect(self.copy_mermaid)
-        self._save_mmd_btn.clicked.connect(self.save_mmd)
-        self._save_md_btn.clicked.connect(self.save_md)
-        self._save_selection_btn.clicked.connect(self.save_table_selection_toml)
-        self._load_selection_btn.clicked.connect(self.load_table_selection_toml)
-        self._export_btn.clicked.connect(self.export_diagram)
         self._preview_btn.clicked.connect(self.preview_browser)
 
         self.setCentralWidget(central)
@@ -1805,6 +2042,19 @@ class MainWindow(QMainWindow):
         file_menu.addAction(act("E&xit", self.close, QKeySequence.StandardKey.Quit))
 
         view_menu = bar.addMenu("&View")
+        view_menu.addAction(
+            act("Zoom &in", lambda: self._diagram_view.zoom_by(1.25),
+                QKeySequence.StandardKey.ZoomIn, schema_only=True)
+        )
+        view_menu.addAction(
+            act("Zoom &out", lambda: self._diagram_view.zoom_by(0.8),
+                QKeySequence.StandardKey.ZoomOut, schema_only=True)
+        )
+        view_menu.addAction(
+            act("&Actual size", self._diagram_view.reset_zoom,
+                QKeySequence("Ctrl+0"), schema_only=True)
+        )
+        view_menu.addSeparator()
         view_menu.addAction(self._sql_dock.toggleViewAction())
 
         diagram_menu = bar.addMenu("&Diagram")
@@ -1884,23 +2134,52 @@ class MainWindow(QMainWindow):
         if path:
             self.load_file_async(path)
 
+    def _on_render_error(self, reason: str):
+        first_line = reason.strip().splitlines()[0] if reason.strip() else ""
+        self._render_status.setToolTip(reason)
+        first_line = first_line.rstrip(":. ")
+        self._status.setText(
+            "The diagram couldn't be drawn"
+            + (f": {first_line}." if first_line else ".")
+            + " Details are in the Rendered diagram tab."
+        )
+
     def _announce_render(self, ok: bool):
-        """Tell a screen reader when a render finishes.
+        """Tell a screen reader when a render finishes (the tick is visual only)."""
+        announce(self, "Diagram rendered" if ok else "Diagram render failed")
 
-        The spinner→tick status is visual only; without this a screen-reader
-        user gets no signal that the diagram finished (or failed). Best-effort:
-        it degrades silently where the announcement API isn't available.
+    def _on_selection_edited(self):
+        """Tables or columns changed: redraw shortly, or flag the diagram stale.
+
+        Small selections follow the ticks automatically (debounced). Past
+        RENDER_WARN_LIMIT each new selection would re-ask the large-diagram
+        question, so those wait for an explicit Render (F5) instead.
         """
-        message = "Diagram rendered" if ok else "Diagram render failed"
-        try:
-            from PySide6.QtGui import QAccessible, QAccessibleAnnouncementEvent
+        if self._schema is None:
+            return
+        self._stale = True
+        count = len(self._selector.selected_tables())
+        if count > RENDER_WARN_LIMIT:
+            self._auto_render_timer.stop()
+            self._render_status.stale(
+                f"Out of date ({count} tables) · press F5 to render"
+            )
+        else:
+            self._auto_render_timer.start()
 
-            if QAccessible.isActive():
-                QAccessible.updateAccessibility(
-                    QAccessibleAnnouncementEvent(self, message)
-                )
-        except Exception:  # noqa: BLE001 - a11y announcement must never be fatal
-            pass
+    def _ensure_current(self) -> bool:
+        """Bring the diagram up to date before it's exported or copied.
+
+        Returns False if it is still stale (the user declined the
+        large-diagram render), in which case the caller should stop.
+        """
+        if self._stale:
+            self._render_selection()
+        if self._stale:
+            self._status.setText(
+                "The diagram doesn't match your selection yet. Render it first (F5)."
+            )
+        return not self._stale
 
     def _set_rendering(self, active: bool):
         """Show/hide the Stop control for the duration of a render."""
@@ -1995,7 +2274,22 @@ class MainWindow(QMainWindow):
         self._progress.setValue(100)
 
     def _on_load_failed(self, message: str):
-        QMessageBox.critical(self, "Could not read file", message)
+        name = os.path.basename(self._pending_path) or "the file"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Couldn't read the file")
+        box.setTextFormat(Qt.PlainText)
+        box.setText(f"{name} couldn't be read as a schema spreadsheet.")
+        box.setInformativeText(
+            f"{message}\n\nThe sheet needs one row per column, with at least a "
+            "TableName and a ColumnName header. Show Details lists every header "
+            "the app understands; View → T-SQL statement produces a matching export."
+        )
+        box.setDetailedText(
+            "Recognised headers (any order, case and spacing):\n\n"
+            + "\n".join(EXPECTED_HEADERS)
+        )
+        box.exec()
         self._status.setText("No file loaded.")
 
     def _on_worker_finished(self):
@@ -2023,7 +2317,6 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(True)
         self._status.setText(message)
         self._export_btn.setEnabled(False)
-        self._export_format.setEnabled(False)
         app = QApplication.instance()
         if app is not None:
             app.processEvents()  # paint the bar before we block
@@ -2032,7 +2325,6 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._export_btn.setEnabled(True)
-        self._export_format.setEnabled(True)
         self._rendering = False
 
     def _apply_loaded(self, path: str, rows: list[dict], schema: Schema, mermaid_text: str):
@@ -2263,6 +2555,10 @@ class MainWindow(QMainWindow):
             # Back under the limit — clear so growing past it re-asks.
             self._render_confirmed_sig = None
 
+        # Committed: whatever is drawn next matches the current selection.
+        self._auto_render_timer.stop()
+        self._stale = False
+
         # Related tables are ticked explicitly via "Add related tables", so the
         # checked list is the whole selection — no implicit expansion here.
         filtered = filter_schema(self._schema, names)
@@ -2380,10 +2676,14 @@ class MainWindow(QMainWindow):
 
     # -- actions -----------------------------------------------------------
     def copy_mermaid(self):
+        if not self._ensure_current():
+            return
         QGuiApplication.clipboard().setText(self._mermaid_text)
         self._status.setText("Mermaid diagram copied to clipboard.")
 
     def save_mmd(self):
+        if not self._ensure_current():
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Mermaid file", "schema.mmd", "Mermaid (*.mmd);;All files (*)"
         )
@@ -2393,6 +2693,8 @@ class MainWindow(QMainWindow):
             self._status.setText(f"Saved {path}")
 
     def save_md(self):
+        if not self._ensure_current():
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Markdown file", "schema.md", "Markdown (*.md);;All files (*)"
         )
@@ -2495,16 +2797,24 @@ class MainWindow(QMainWindow):
             self._status.setText(f"Loaded table list from {path}")
 
     def preview_browser(self):
-        html = wrap_mermaid_html(self._mermaid_text)
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".html", delete=False, encoding="utf-8"
+        if not self._ensure_current():
+            return
+        # Ship the bundled mermaid.js beside the page so the preview works
+        # offline, like the in-app render; fall back to the CDN only if the
+        # vendored copy is somehow missing.
+        folder = Path(tempfile.mkdtemp(prefix="xsltomermaid_preview_"))
+        script_src = MERMAID_CDN
+        try:
+            shutil.copy(VENDOR_MERMAID, folder / "mermaid.min.js")
+            script_src = "mermaid.min.js"
+        except OSError:
+            pass
+        page = folder / "diagram.html"
+        page.write_text(
+            wrap_mermaid_html(self._mermaid_text, script_src), encoding="utf-8"
         )
-        tmp.write(html)
-        tmp.close()
-        webbrowser.open(f"file://{tmp.name}")
-        self._status.setText(
-            "Opened diagram preview in your browser (needs internet for Mermaid CDN)."
-        )
+        webbrowser.open(page.as_uri())
+        self._status.setText("Opened the diagram preview in your browser.")
 
     # -- updates -----------------------------------------------------------
     def check_for_updates(self):
@@ -2630,56 +2940,48 @@ class MainWindow(QMainWindow):
         )
         if not ok:
             return None
-        transparent = (
-            QMessageBox.question(
-                self,
-                "PNG background",
-                "Use transparent background?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            == QMessageBox.Yes
-        )
-        if transparent:
-            return float(scale), "transparent"
-        background = self._options_bar.background_value()
-        if background == "transparent":
-            background = "white"
-        return float(scale), background
+        # The Background option (White / Transparent / Dark) already says what
+        # the user wants behind the diagram, so PNG uses it as-is.
+        return float(scale), self._options_bar.background_value()
+
+    @staticmethod
+    def _remembered_export_kind() -> str:
+        kind = str(app_settings().value("export/format", "png"))
+        return kind if kind in {k for k, *_ in EXPORT_FORMATS} else "png"
+
+    def export_formats(self) -> list[str]:
+        return [key for key, *_ in EXPORT_FORMATS]
+
+    def set_export_format(self, kind: str):
+        """Make ``kind`` the default export (remembered for next launch)."""
+        if kind not in self.export_formats():
+            return
+        self._export_kind = kind
+        app_settings().setValue("export/format", kind)
+        self._sync_export_label()
+
+    def _export_as(self, kind: str):
+        self.set_export_format(kind)
+        self.export_diagram()
 
     def _sync_export_label(self):
-        """Name the export button after the format the combo has selected.
-
-        Keeps the format picker and the trigger reading as a single
-        pick-then-export control (e.g. "Export .drawio…").
-        """
-        exts = {
-            "drawio": ".drawio",
-            "excalidraw": ".excalidraw",
-            "pdf": ".pdf",
-            "png": ".png",
-            "svg": ".svg",
-        }
-        ext = exts.get(str(self._export_format.currentData() or ""))
-        self._export_btn.setText(f"Export {ext}…" if ext else "Export…")
+        """Name the export button after the format it will produce."""
+        ext = {k: f".{k}" for k in self.export_formats()}.get(self._export_kind)
+        self._export_btn.setText(f"&Export {ext}…" if ext else "&Export…")
+        for key, action in self._export_actions.items():
+            action.setEnabled(True)
+            font = action.font()
+            font.setBold(key == self._export_kind)
+            action.setFont(font)
 
     def export_diagram(self):
-        if self._rendering:
+        if self._rendering or not self._ensure_current():
             return
 
         render_started = False
         schema = None
-        export_kind = str(self._export_format.currentData() or "")
-        file_specs = {
-            "drawio": ("Save Draw.io diagram", "diagram.drawio", "Draw.io file (*.drawio)"),
-            "excalidraw": (
-                "Save Excalidraw scene", "diagram.excalidraw",
-                "Excalidraw file (*.excalidraw)",
-            ),
-            "pdf": ("Save diagram PDF", "diagram.pdf", "PDF document (*.pdf)"),
-            "png": ("Save diagram PNG", "diagram.png", "PNG image (*.png)"),
-            "svg": ("Save diagram SVG", "diagram.svg", "SVG image (*.svg)"),
-        }
+        export_kind = self._export_kind
+        file_specs = {key: rest for key, _label, *rest in EXPORT_FORMATS}
         if export_kind not in file_specs:
             return
 
