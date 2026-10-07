@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QSpinBox,
     QToolButton,
@@ -22,7 +23,11 @@ from PySide6.QtWidgets import (
 from .diagram_view import RenderStyle
 from .excel_to_mermaid import DiagramOptions
 from .schema_map import HIDDEN_BY_DEFAULT
-from .theme import _ACCENT_WASH
+from .theme import (
+    _ACCENT_WASH,
+    _line_hex,
+    _muted_hex,
+)
 
 
 class DiagramOptionsBar(QWidget):
@@ -129,6 +134,23 @@ class DiagramOptionsBar(QWidget):
         row1.addWidget(self._show_rel_labels)
         row1.addWidget(self._keys_only)
         self._diagram_only += [self._show_rel_labels, self._keys_only]
+
+        # Chips for states the app chose and that last: one click undoes each.
+        # (The status line is for one-off messages and gets overwritten.)
+        self._audit_share = 0.0
+        self._keys_auto = False
+        self._diagram_visible = True
+        self._audit_chip = self._chip(lambda: self._hide_audit.setChecked(False))
+        self._keys_chip = self._chip(lambda: self._keys_only.setChecked(False))
+        self._keys_chip.setText("Keys only: on for wide tables  ✕")
+        self._keys_chip.setToolTip(
+            "Keys only was switched on because these tables are wide. Click to "
+            "show all columns."
+        )
+        self._keys_chip.setAccessibleName("Turn off automatic Keys only")
+        self._keys_only.toggled.connect(self._on_keys_toggled)
+        self._hide_audit.toggled.connect(lambda _on: self._sync_chips())
+        self._sync_chips()
         row1.addStretch(1)
 
         # The rest is fine-tuning, so it sits behind a disclosure, closed by
@@ -174,9 +196,58 @@ class DiagramOptionsBar(QWidget):
 
     def set_diagram_controls_visible(self, visible: bool):
         """Show the diagram-only options (hidden while the map is showing)."""
+        self._diagram_visible = visible
         for widget in self._diagram_only:
             widget.setVisible(visible)
         self._more_box.setVisible(visible and self._more.isChecked())
+        self._sync_chips()
+
+    # -- state chips --------------------------------------------------------
+    def _chip(self, on_click) -> QPushButton:
+        chip = QPushButton()
+        chip.setFlat(True)
+        chip.setCursor(Qt.PointingHandCursor)
+        chip.clicked.connect(on_click)
+        chip.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)  # never elide
+        return chip
+
+    def state_chips(self) -> list[QPushButton]:
+        """The chips, for the window to place (the bar itself is full)."""
+        return [self._keys_chip, self._audit_chip]
+
+    def set_audit_share(self, share: float):
+        """How much of the schema's links are audit/system ones (0–1)."""
+        self._audit_share = share
+        self._sync_chips()
+
+    def set_keys_only_auto(self):
+        """Switch Keys only on for the user, marked as the app's choice."""
+        self._keys_only.setChecked(True)  # re-renders via changed
+        self._keys_auto = True
+        self._sync_chips()
+
+    def keys_only_auto(self) -> bool:
+        return self._keys_auto and self._keys_only.isChecked()
+
+    def _on_keys_toggled(self, _on: bool):
+        self._keys_auto = False  # any change after the app's makes it the user's
+        self._sync_chips()
+
+    def _sync_chips(self):
+        audit = self._hide_audit.isChecked() and self._audit_share > 0
+        if audit:
+            share = f"{self._audit_share:.0%}"
+            self._audit_chip.setText(f"Audit links hidden ({share})  ✕")
+            self._audit_chip.setToolTip(
+                f"createdby, modifiedby, owning… and similar links are {share} of "
+                "all links, so the map, diagram, SQL and exports leave them out. "
+                "Click to show them."
+            )
+            self._audit_chip.setAccessibleName(
+                f"Show audit and system links ({share} of all links, hidden)"
+            )
+        self._audit_chip.setVisible(audit)
+        self._keys_chip.setVisible(self._diagram_visible and self.keys_only_auto())
 
     def add_trailing_widget(self, widget):
         """Add a control at the right end of the first row (e.g. Details)."""
@@ -230,9 +301,13 @@ class DiagramOptionsBar(QWidget):
         return self._background.currentData()
 
     def retheme(self):
-        # All labels here use the default palette text colour, which already
-        # follows the light/dark scheme — nothing hand-coloured to update.
-        pass
+        style = (
+            f"QPushButton {{ border: 1px solid {_line_hex(self)}; border-radius: 10px;"
+            f" padding: 2px 10px; color: {_muted_hex(self)}; background: transparent; }}"
+            f"QPushButton:hover, QPushButton:focus {{ background: {_ACCENT_WASH}; }}"
+        )
+        for chip in (self._audit_chip, self._keys_chip):
+            chip.setStyleSheet(style)
 
     # Theme and background are left out on purpose: they follow the OS's light
     # or dark mode at every launch (see apply_system_defaults).

@@ -88,9 +88,11 @@ Schemas over 60 tables open on the **map**, and the **Diagram | Map** switch
   than 30% of all links (about 70% in a typical Dynamics export). These are
   `createdby`, `modifiedby`, the `owning…` columns, `organizationid` and
   `transactioncurrencyid`. It's one setting for the map, diagram, SQL and
-  exports, and *Keys only* then leaves those columns out too.
+  exports, and *Keys only* then leaves those columns out too. A chip under
+  the diagram says so; click it to show them.
 - **Wide tables:** drawing tables that average more than 50 columns switches
-  *Keys only* on, with a link to show all columns again.
+  *Keys only* on, with a chip under the diagram to turn it off. **Undo draw**
+  turns it off too.
 - **Keys only says what it left out:** each table ends with a
   "+N hidden by Keys only" row, and the Table view counts the columns actually
   drawn. A table with more than 12 key columns keeps its primary key and the
