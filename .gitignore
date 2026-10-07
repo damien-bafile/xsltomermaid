@@ -227,3 +227,6 @@ window.png
 # Generated diagram exports
 diagram.png
 diagram.svg
+
+# Impeccable design-critique snapshots (local tool output)
+.impeccable/
