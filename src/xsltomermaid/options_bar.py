@@ -74,6 +74,12 @@ class DiagramOptionsBar(QWidget):
         self._spacing = self._combo(self._SPACINGS)
         self._theme = self._combo(self._THEMES)
         self._background = self._combo(self._BACKGROUNDS)
+        self._orientation.setToolTip("Orientation: which way the diagram flows.")
+        self._theme.setToolTip("Theme: the diagram's colours.")
+        self._background.setToolTip(
+            "Background on screen. Exports use their own background, set from "
+            "the Export button's arrow."
+        )
         self._font = QSpinBox()
         self._font.setRange(8, 28)
         self._font.setValue(12)
@@ -92,7 +98,8 @@ class DiagramOptionsBar(QWidget):
         )
         self._show_rel_labels = QCheckBox("Relationship la&bels")
         self._show_rel_labels.setChecked(True)
-        self._show_rel_labels.setToolTip("Name the foreign-key column on each line.")
+        self._show_rel_labels.setToolTip("Relationship labels: name the foreign-key column on each line.")
+        self._show_rel_labels.setAccessibleName("Relationship labels")
         self._prefix_schema = QCheckBox("Prefi&x schema name")
         self._prefix_schema.setToolTip("Title tables as schema.Table instead of Table.")
         self._keys_only = QCheckBox("&Keys only")
@@ -121,12 +128,15 @@ class DiagramOptionsBar(QWidget):
         row1.setSpacing(8)
         # Everything that only affects the ER diagram; hidden on the map.
         self._diagram_only: list[QWidget] = []
+        self._row1_labels: list[QLabel] = []
+        self._full_width = 0
         for label, widget in [
             ("&Orientation:", self._orientation),
             ("&Theme:", self._theme),
             ("Back&ground:", self._background),
         ]:
             buddy = self._buddy(label, widget)
+            self._row1_labels.append(buddy)
             row1.addWidget(buddy)
             row1.addWidget(widget)
             self._diagram_only += [buddy, widget]
@@ -201,6 +211,25 @@ class DiagramOptionsBar(QWidget):
             widget.setVisible(visible)
         self._more_box.setVisible(visible and self._more.isChecked())
         self._sync_chips()
+        self._fit_labels()
+
+    def resizeEvent(self, event):  # noqa: N802 (Qt naming)
+        super().resizeEvent(event)
+        self._fit_labels()
+
+    def _fit_labels(self):
+        """Drop the Orientation/Theme/Background labels and shorten
+        "Relationship labels" when the row is short of room, so no control is
+        squeezed. Each keeps its accessible name and tooltip."""
+        if not self._diagram_visible:
+            return
+        if self._row1_labels[0].isVisible():
+            margins = self.layout().contentsMargins()
+            self._full_width = self._row1.sizeHint().width() + margins.left() + margins.right()
+        compact = self.width() < self._full_width
+        for label in self._row1_labels:
+            label.setVisible(not compact)
+        self._show_rel_labels.setText("La&bels" if compact else "Relationship la&bels")
 
     # -- state chips --------------------------------------------------------
     def _chip(self, on_click) -> QPushButton:

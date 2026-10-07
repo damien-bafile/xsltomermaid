@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 
 from .excel_to_mermaid import Schema
 from .schema_map import HIDDEN_BY_DEFAULT, SchemaMap, build_map
+from .theme import _ACCENT
 
 # Categorical colours for the largest clusters (Tableau 10); smaller clusters
 # share a neutral grey so colour stays meaningful. Points are non-text marks
@@ -52,7 +53,6 @@ _CLUSTER_COLOURS = {
     ],
 }
 _OTHER = {"dark": "#8c95a3", "light": "#8992a1"}
-_ACCENT = "#2f81f7"
 _LABEL_MIN_MEMBERS = 8  # clusters this big get their hub's name drawn
 
 

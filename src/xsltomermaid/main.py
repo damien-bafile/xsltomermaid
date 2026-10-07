@@ -74,6 +74,7 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -137,6 +138,7 @@ from .config import (
 )
 from .theme import (
     _ACCENT_FILL,
+    _control_border_hex,
     _ACCENT_WASH,
     _apply_primary_button_style,
     _line_hex,
@@ -317,6 +319,7 @@ class MainWindow(QMainWindow):
         self._sample_btn.setCursor(Qt.PointingHandCursor)
         self._style_sample_btn()
         self._sample_btn.clicked.connect(self.load_sample)
+        self._sample_btn.setToolTip("Load a small built-in schema to try the app.")
         onboard_row.addWidget(self._onboard_hint)
         onboard_row.addWidget(self._sample_btn)
         onboard_row.addStretch(1)
@@ -343,6 +346,7 @@ class MainWindow(QMainWindow):
         self._table.sortByColumn(-1, Qt.AscendingOrder)
         self._table.setToolTip("Click a column header to sort; click again to reverse.")
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._table.setAccessibleName("Extracted data")
         self._table.setAlternatingRowColors(True)
         # Keep rows single-line and let long free-text cells elide rather than
         # wrap into tall rows; the model serves the full value as the tooltip.
@@ -406,8 +410,6 @@ class MainWindow(QMainWindow):
         sql_layout = QVBoxLayout(sql_tab)
         sql_layout.setContentsMargins(8, 8, 8, 8)
         sql_layout.setSpacing(6)
-        sql_row = QHBoxLayout()
-        sql_row.setSpacing(8)
         self._sql_root = QComboBox()
         self._sql_root.setToolTip("The table in FROM; joins branch out from it.")
         self._sql_join = QComboBox()
@@ -428,27 +430,27 @@ class MainWindow(QMainWindow):
             self._sql_join.fontMetrics().horizontalAdvance("INNER JOIN") + 44
         )
         self._sql_top.setMinimumWidth(self._sql_top.fontMetrics().horizontalAdvance("1000000") + 48)
-        # Two rows so the controls fit the narrow Details panel: the start
-        # table gets the width its long names need; the rest share row two.
-        sql_row2 = QHBoxLayout()
-        sql_row2.setSpacing(8)
-        for row, text, widget in (
-            (sql_row, "Start table:", self._sql_root),
-            (sql_row2, "&Join:", self._sql_join),
-            (sql_row2, "Row limit:", self._sql_top),
-        ):
+        # A grid, one control per row, so the labels line up and nothing
+        # collides or clips in the narrow Details panel.
+        sql_grid = QGridLayout()
+        sql_grid.setHorizontalSpacing(8)
+        sql_grid.setVerticalSpacing(6)
+        for r, (text, widget) in enumerate((
+            ("Start table:", self._sql_root),
+            ("&Join:", self._sql_join),
+            ("Row limit:", self._sql_top),
+        )):
             label = QLabel(text)
             label.setBuddy(widget)
             widget.setAccessibleName(text.replace("&", "").rstrip(":"))
-            row.addWidget(label)
-            row.addWidget(widget, 1 if widget is self._sql_root else 0)
-        sql_row2.addStretch(1)
+            sql_grid.addWidget(label, r, 0)
+            sql_grid.addWidget(widget, r, 1, 1, 2 if widget is self._sql_root else 1)
         self._copy_sql_btn = QPushButton("Copy S&QL")
         self._copy_sql_btn.setToolTip("Copy the query to the clipboard (Ctrl+Shift+Q).")
         self._copy_sql_btn.clicked.connect(self.copy_sql)
-        sql_row2.addWidget(self._copy_sql_btn)
-        sql_layout.addLayout(sql_row)
-        sql_layout.addLayout(sql_row2)
+        sql_grid.addWidget(self._copy_sql_btn, 2, 2, Qt.AlignRight)
+        sql_grid.setColumnStretch(2, 1)
+        sql_layout.addLayout(sql_grid)
         self._sql_view = QPlainTextEdit()
         self._sql_view.setReadOnly(True)
         self._sql_view.setFont(QFont("Menlo, Consolas, monospace"))
@@ -533,6 +535,7 @@ class MainWindow(QMainWindow):
             f"QToolButton:checked:hover {{ background: {_ACCENT_WASH}; }}"
         )
         self._details_btn.toggled.connect(self.set_details_visible)
+        self._details_btn.setMinimumWidth(self._details_btn.sizeHint().width())
         # One switch for one choice: the canvas shows the diagram or the map.
         switch = QWidget()
         switch_row = QHBoxLayout(switch)
@@ -540,19 +543,11 @@ class MainWindow(QMainWindow):
         switch_row.setSpacing(0)
         self._view_group = QButtonGroup(self)
         self._view_group.setExclusive(True)
-        segment = (
-            "QToolButton {{ border: 1px solid {line}; padding: 2px 10px; }}"
-            "QToolButton:checked {{ background: {accent}; color: white; border-color: {accent}; }}"
-        )
         self._diagram_view_btn = QToolButton()
         self._diagram_view_btn.setText("Diagram")
         self._diagram_view_btn.setCheckable(True)
         self._diagram_view_btn.setChecked(True)
         self._diagram_view_btn.setToolTip("Show the ER diagram of the ticked tables (Ctrl+M switches)")
-        self._diagram_view_btn.setStyleSheet(
-            segment.format(line=_line_hex(self), accent=_ACCENT_FILL)
-            + "QToolButton { border-top-left-radius: 5px; border-bottom-left-radius: 5px; }"
-        )
         switch_row.addWidget(self._diagram_view_btn)
         self._view_group.addButton(self._diagram_view_btn)
         self._map_btn = QToolButton()
@@ -561,15 +556,20 @@ class MainWindow(QMainWindow):
         self._map_btn.setToolTip(
             "Show the whole schema as a map of clusters, to pick tables from (Ctrl+M)"
         )
-        self._map_btn.setStyleSheet(
-            segment.format(line=_line_hex(self), accent=_ACCENT_FILL)
-            + "QToolButton { border-top-right-radius: 5px; border-bottom-right-radius: 5px;"
-            " border-left: none; }"
-        )
         switch_row.addWidget(self._map_btn)
         self._view_group.addButton(self._map_btn)
         self._map_btn.toggled.connect(self.show_map)
         switch.setAccessibleName("Canvas view")
+        self._diagram_view_btn.setAccessibleDescription("Canvas view, 1 of 2")
+        self._map_btn.setAccessibleDescription("Canvas view, 2 of 2")
+        self._style_view_switch()
+        # Equal, fixed segments: never squeezed to "…", text centred in each.
+        for button in (self._diagram_view_btn, self._map_btn):
+            button.ensurePolished()
+        width = max(b.sizeHint().width() for b in (self._diagram_view_btn, self._map_btn))
+        for button in (self._diagram_view_btn, self._map_btn):
+            button.setFixedWidth(width)
+        switch.setFixedWidth(2 * width)
         self._options_bar.add_leading_widget(switch)
         # The map no longer needs its own "Diagram" button.
         self._map_view._diagram_btn.setVisible(False)
@@ -747,7 +747,9 @@ class MainWindow(QMainWindow):
 
         def act(text, slot, shortcut=None, schema_only=False):
             action = QAction(text, self)
-            if shortcut is not None:
+            if isinstance(shortcut, list):
+                action.setShortcuts(shortcut)
+            elif shortcut is not None:
                 action.setShortcut(shortcut)
             action.triggered.connect(slot)
             if schema_only:
@@ -782,8 +784,10 @@ class MainWindow(QMainWindow):
 
         view_menu = bar.addMenu("&View")
         view_menu.addAction(
+            # Ctrl+= too: on most layouts Ctrl++ needs Shift.
             act("Zoom &in", lambda: self._diagram_view.zoom_by(1.25),
-                QKeySequence.StandardKey.ZoomIn, schema_only=True)
+                QKeySequence.keyBindings(QKeySequence.StandardKey.ZoomIn)
+                + [QKeySequence("Ctrl+=")], schema_only=True)
         )
         view_menu.addAction(
             act("Zoom &out", lambda: self._diagram_view.zoom_by(0.8),
@@ -875,7 +879,8 @@ class MainWindow(QMainWindow):
         self._sql_query_view.setPlainText(SQL_SERVER_SCHEMA_QUERY)
         layout.addWidget(self._sql_query_view, 1)
 
-        copy_button = QPushButton("Copy T-SQL")
+        copy_button = QPushButton("&Copy T-SQL")
+        copy_button.setToolTip("Copy this query, to run against your database.")
         copy_button.clicked.connect(self.copy_sql_query)
         layout.addWidget(copy_button)
 
@@ -992,6 +997,25 @@ class MainWindow(QMainWindow):
         self._columns.retheme()
         self._options_bar.retheme()
         self._render_status.retheme()
+        self._style_view_switch()
+
+    def _style_view_switch(self):
+        """The Diagram | Map segments, in the current palette's colours."""
+        if not hasattr(self, "_map_btn"):
+            return
+        segment = (
+            f"QToolButton {{ border: 1px solid {_control_border_hex(self)}; padding: 2px 10px; }}"
+            f"QToolButton:checked {{ background: {_ACCENT_FILL}; color: white;"
+            f" border-color: {_ACCENT_FILL}; }}"
+        )
+        self._diagram_view_btn.setStyleSheet(
+            segment + "QToolButton { border-top-left-radius: 5px; border-bottom-left-radius: 5px; }"
+        )
+        self._map_btn.setStyleSheet(
+            segment
+            + "QToolButton { border-top-right-radius: 5px; border-bottom-right-radius: 5px;"
+            " border-left: none; }"
+        )
 
     def changeEvent(self, event):  # noqa: N802 (Qt naming)
         # The palette swap (light↔dark) arrives as a PaletteChange; restyle the
@@ -2121,8 +2145,12 @@ class MainWindow(QMainWindow):
 
     def _sync_export_label(self):
         """Name the export button after the format it will produce."""
-        ext = {k: f".{k}" for k in self.export_formats()}.get(self._export_kind)
-        self._export_btn.setText(f"&Export {ext}…" if ext else "&Export…")
+        names = {k: label.split(" (")[0].replace(" image", "") for k, label, *_ in EXPORT_FORMATS}
+        name = names.get(self._export_kind)
+        text = f"&Export {name}…" if name else "&Export…"
+        self._export_btn.setText(text)
+        # The accessible name starts with the visible label (WCAG 2.5.3).
+        self._export_btn.setAccessibleName(text.replace("&", ""))
         for key, action in self._export_actions.items():
             action.setEnabled(True)
             font = action.font()
