@@ -106,17 +106,23 @@ def _mermaid_config(style: RenderStyle) -> dict:
 def _shell_html() -> str:
     """A page loaded once that keeps mermaid.js resident and re-renders on demand.
 
-    ``window.renderDiagram(text, config, background)`` re-initialises Mermaid with
-    the given config and draws ``text`` into ``#container`` — which keeps the
-    ``mermaid`` class so the SVG-export selector (``.mermaid svg``) still finds
-    it — without reloading the ~3 MB library. It sets ``window._mermaidDone`` /
-    ``window._mermaidError`` for the poller, and a sequence number so a stale
-    async result from a superseded render is ignored.
+    ``window.renderDiagram(text, config, background, canvas)`` re-initialises
+    Mermaid with the given config and draws ``text`` into ``#container`` — which
+    keeps the ``mermaid`` class so the SVG-export selector (``.mermaid svg``)
+    still finds it — without reloading the ~3 MB library. It sets
+    ``window._mermaidDone`` / ``window._mermaidError`` for the poller, and a
+    sequence number so a stale async result from a superseded render is ignored.
+
+    ``background`` goes on ``body`` (exports read it back from there); the page
+    behind it (``html``) takes the same colour so the diagram fills the whole
+    view, or ``canvas`` (the app's palette) when the background is transparent.
     """
     return """<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
-  html, body { margin: 0; padding: 12px; background: #ffffff; }
+  html { height: 100%; background: #ffffff; }
+  body { margin: 0; padding: 12px; min-height: 100%; box-sizing: border-box;
+         background: #ffffff; }
   #container { font-family: "Trebuchet MS", Verdana, Arial, sans-serif; }
 </style>
 <script src="mermaid.min.js"></script>
@@ -127,12 +133,14 @@ def _shell_html() -> str:
   window._mermaidDone = false;
   window._mermaidError = null;
   window._renderSeq = 0;
-  window.renderDiagram = function (text, config, background) {
+  window.renderDiagram = function (text, config, background, canvas) {
     var seq = ++window._renderSeq;
     window._mermaidDone = false;
     window._mermaidError = null;
     try {
       document.body.style.background = background;
+      document.documentElement.style.background =
+        background === 'transparent' ? (canvas || '#ffffff') : background;
       mermaid.initialize(config);
       mermaid.render('erGraph' + seq, text).then(function (res) {
         if (seq !== window._renderSeq) return;   // a newer render superseded us
@@ -758,6 +766,7 @@ class DiagramView(QWidget):
     # fails) rendering it — so the UI can show a spinner then a tick.
     render_started = Signal()
     render_finished = Signal(bool)  # True on success, False on error/timeout
+    render_error = Signal(str)  # why a render failed (before render_finished)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -789,7 +798,13 @@ class DiagramView(QWidget):
             layout.addWidget(self._view, 1)
             self._zoom_label = QLabel("Zoom: 100%")
             self._zoom_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self._zoom_label.setToolTip("Ctrl+scroll to zoom the diagram.")
+            self._zoom_label.setToolTip(
+                "Ctrl+scroll, or Ctrl+= / Ctrl+- / Ctrl+0, to zoom the diagram."
+            )
+            self._view.setAccessibleName("Rendered diagram")
+            self._view.setAccessibleDescription(
+                "A picture of the diagram. Its text form is in the Mermaid source tab."
+            )
             # Keep the label to a single text line; the view takes the rest.
             self._zoom_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             layout.addWidget(self._zoom_label)
@@ -810,6 +825,20 @@ class DiagramView(QWidget):
 
     def _update_zoom_label(self):
         self._zoom_label.setText(f"Zoom: {self._view.zoomFactor():.0%}")
+
+    def zoom_by(self, factor: float):
+        """Zoom the diagram in (>1) or out (<1); the keyboard twin of Ctrl+scroll."""
+        if self._view is None:
+            return
+        # QWebEngineView accepts 25%–500%.
+        self._view.setZoomFactor(min(5.0, max(0.25, self._view.zoomFactor() * factor)))
+        self._update_zoom_label()
+
+    def reset_zoom(self):
+        if self._view is None:
+            return
+        self._view.setZoomFactor(1.0)
+        self._update_zoom_label()
 
     # -- rendering ---------------------------------------------------------
     def set_diagram(self, mermaid_text: str, style: RenderStyle | None = None):
@@ -835,10 +864,11 @@ class DiagramView(QWidget):
                 self._view.load(self._shell_url)
 
     def _invoke_render(self, mermaid_text: str, style: RenderStyle, gen: int):
-        script = "renderDiagram({}, {}, {})".format(
+        script = "renderDiagram({}, {}, {}, {})".format(
             json.dumps(mermaid_text),
             json.dumps(_mermaid_config(style)),
             json.dumps(style.background),
+            json.dumps(self.palette().color(QPalette.Base).name()),
         )
         self._view.page().runJavaScript(script)
         self._poll_mermaid(gen, 0)
@@ -867,7 +897,7 @@ class DiagramView(QWidget):
         if not ok:
             self._shell_loaded = False
             if pending is not None:
-                self.render_finished.emit(False)
+                self._fail("The diagram page (mermaid.js) failed to load.")
             return
         self._shell_loaded = True
         if pending is not None:
@@ -875,20 +905,38 @@ class DiagramView(QWidget):
             if gen == self._render_gen:  # not already superseded
                 self._invoke_render(text, style, gen)
 
+    def _fail(self, reason: str):
+        """End a render as failed, keeping the reason visible and copyable."""
+        self.render_error.emit(reason)
+        self.render_finished.emit(False)
+        self.show_message(
+            "Mermaid couldn't draw this diagram.\n\n"
+            "Try fewer tables or columns, or open the “Mermaid source” tab to "
+            "find the line the error points to.",
+            detail=reason,
+        )
+
     def _poll_mermaid(self, gen: int, elapsed: int):
         if gen != self._render_gen or self._view is None:
             return  # superseded by a newer render
         if elapsed >= 60000:  # give up after 60s
-            self.render_finished.emit(False)
+            self._fail("The layout didn't finish within 60 seconds.")
             return
+
+        def on_error(err):
+            if gen != self._render_gen:
+                return
+            if err:
+                self._fail(str(err))
+            else:
+                self.render_finished.emit(True)
 
         def on_done(done):
             if gen != self._render_gen:
                 return
             if done:
                 self._view.page().runJavaScript(
-                    "window._mermaidError || ''",
-                    lambda err: self.render_finished.emit(not err),
+                    "window._mermaidError || ''", on_error
                 )
             else:
                 # Poll fast at first so quick diagrams return promptly, then back
@@ -900,8 +948,12 @@ class DiagramView(QWidget):
 
         self._view.page().runJavaScript("window._mermaidDone === true", on_done)
 
-    def show_message(self, message: str):
-        """Show a plain text message in place of a diagram (e.g. a hint)."""
+    def show_message(self, message: str, detail: str = ""):
+        """Show a plain text message in place of a diagram (e.g. a hint).
+
+        Blank lines in ``message`` separate paragraphs. ``detail`` (an error
+        message, say) is shown below in a selectable monospace block.
+        """
         if not self.available or self._view is None or self._workdir is None:
             return
         # Invalidate any in-flight render poll; this isn't a diagram. Navigating
@@ -921,13 +973,30 @@ class DiagramView(QWidget):
             round(text.green() * 0.6 + window.green() * 0.4),
             round(text.blue() * 0.6 + window.blue() * 0.4),
         )
+        # The app's own UI font, so the tab doesn't switch type voice.
+        family = self.font().family().replace("'", "")
+        paragraphs = "".join(
+            f"<p>{html.escape(p.strip())}</p>"
+            for p in message.split("\n\n")
+            if p.strip()
+        )
+        detail_html = (
+            f"<pre>{html.escape(detail.strip())}</pre>" if detail.strip() else ""
+        )
+        line = f"rgba({muted.red()},{muted.green()},{muted.blue()},.35)"
         page = (
             "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
-            f"html,body{{margin:0;padding:32px;background:{base.name()};"
-            f"color:{muted.name()};"
-            "font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;"
-            "font-size:15px;line-height:1.5}</style></head><body>"
-            f"{html.escape(message)}</body></html>"
+            f"html{{height:100%;background:{base.name()}}}"
+            f"body{{margin:0;padding:32px;color:{muted.name()};"
+            f"font-family:'{family}',system-ui,sans-serif;"
+            "font-size:15px;line-height:1.5;max-width:72ch}"
+            "p{margin:0 0 .9em}p:first-child{color:"
+            f"{text.name()};font-weight:600}}"
+            "pre{margin:1.2em 0 0;padding:12px 14px;white-space:pre-wrap;"
+            f"border:1px solid {line};border-radius:6px;"
+            "font:13px/1.45 Consolas,Menlo,monospace;user-select:text}"
+            "</style></head><body>"
+            f"{paragraphs}{detail_html}</body></html>"
         )
         html_path = Path(self._workdir) / "message.html"
         html_path.write_text(page, encoding="utf-8")

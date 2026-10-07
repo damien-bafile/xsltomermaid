@@ -15,6 +15,7 @@ imported inside :func:`read_rows` so the rest of the module works without it.
 from __future__ import annotations
 
 import re
+from html import escape as html_escape
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -873,7 +874,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   h1 {{ font-size: 18px; font-weight: 600; }}
   .diagram {{ overflow: auto; }}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="{script_src}"></script>
 <script>
   mermaid.initialize({{ startOnLoad: true, securityLevel: 'loose', theme: 'default',
     maxTextSize: 2000000, maxEdges: 10000 }});
@@ -889,9 +890,21 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 
-def wrap_mermaid_html(mermaid_text: str) -> str:
-    """Wrap Mermaid source in a standalone HTML page that renders it via CDN."""
-    return _HTML_TEMPLATE.format(diagram=mermaid_text.strip())
+MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"
+
+
+def wrap_mermaid_html(mermaid_text: str, script_src: str = MERMAID_CDN) -> str:
+    """Wrap Mermaid source in a standalone HTML page that renders it.
+
+    ``script_src`` is where the page loads mermaid.js from: the CDN by default,
+    or a local path (e.g. ``"mermaid.min.js"`` beside the page) to work offline.
+    The source is HTML-escaped; Mermaid reads the element's text, so names
+    containing ``<`` or ``&`` survive intact.
+    """
+    return _HTML_TEMPLATE.format(
+        diagram=html_escape(mermaid_text.strip()),
+        script_src=html_escape(script_src, quote=True),
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

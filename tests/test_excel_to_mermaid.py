@@ -418,3 +418,13 @@ def _run():
 
 if __name__ == "__main__":
     raise SystemExit(1 if _run() else 0)
+
+
+def test_wrap_mermaid_html_escapes_source_and_takes_a_local_script():
+    from xsltomermaid.excel_to_mermaid import MERMAID_CDN, wrap_mermaid_html
+
+    page = wrap_mermaid_html('erDiagram\n    A_B { int x "a<b & c" }')
+    assert MERMAID_CDN in page
+    assert "a&lt;b &amp; c" in page  # Mermaid reads the decoded text
+    local = wrap_mermaid_html("erDiagram", script_src="mermaid.min.js")
+    assert '<script src="mermaid.min.js">' in local and MERMAID_CDN not in local
