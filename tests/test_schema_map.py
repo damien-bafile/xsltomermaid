@@ -69,3 +69,14 @@ def test_link_counts_skip_audit_links_and_name_prefix():
     assert name_prefix("msdyn_project") == "msdyn"
     assert name_prefix("hsl_projectactivity") == "hsl"
     assert name_prefix("account") == ""
+
+
+def test_cluster_index_and_hidden_links():
+    from xsltomermaid.excel_to_mermaid import Relationship
+    from xsltomermaid.schema_map import cluster_index, is_hidden_link
+
+    index = cluster_index(_two_modules())
+    assert index["a3"][1] == "a0" and index["b3"][1] == "b0"
+    assert "lonely" not in index
+    assert is_hidden_link(Relationship("systemuser", "a", "createdby", ("createdby",), ("id",)))
+    assert not is_hidden_link(Relationship("x", "a", "x_ref", ("x_ref",), ("id",)))

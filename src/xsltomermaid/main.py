@@ -144,7 +144,7 @@ from .excel_to_mermaid import (
 from .make_sample import write_sample
 from .selection_preset import dump_selection_toml, load_selection_toml
 from .map_view import SchemaMapView
-from .schema_map import link_counts, name_prefix
+from .schema_map import cluster_index, is_hidden_link, link_counts, name_prefix
 from .services import SchemaImportService
 from .sql_query import generate_select
 from . import __version__
@@ -782,6 +782,10 @@ class TableSelector(QWidget):
         self._sort = QComboBox()
         self._sort.addItem("Name A–Z", "name")
         self._sort.addItem("Most connected", "links")
+        self._sort.addItem("By cluster", "cluster")
+        # Set by the window: returns {table: (cluster, hub)}, computed once.
+        self.cluster_provider = None
+        self._clusters: dict[str, tuple[int, str]] | None = None
         self._sort.setAccessibleName("Sort tables")
         self._sort.setToolTip("Order the list by name, or by links (audit and system links not counted)")
         self._sort.currentIndexChanged.connect(lambda _i: self._resort())
@@ -1034,6 +1038,7 @@ class TableSelector(QWidget):
             item.setCheckState(Qt.Unchecked)
             self._list.addItem(item)
         self._list.blockSignals(False)
+        self._clusters = None  # a new file: recompute on demand
         self._ticked_only.setChecked(False)
         self._hide_unconnected.setChecked(False)
         self._sort.blockSignals(True)
@@ -1130,7 +1135,25 @@ class TableSelector(QWidget):
         mode = self._sort.currentData()
         current = self._list.currentItem().text() if self._list.currentItem() else ""
         items = [self._list.takeItem(0) for _ in range(self._list.count())]
-        if mode == "links":
+        if mode == "cluster" and self.cluster_provider is not None:
+            if self._clusters is None:
+                self._clusters = self.cluster_provider()
+            clusters = self._clusters
+            for item in items:
+                hub = clusters.get(item.text(), (None, ""))[1]
+                links = item.data(_ROLE_LINKS) or (0, 0)
+                item.setToolTip(
+                    f"{item.text()}: {links[0]} out, {links[1]} in · "
+                    + (f"cluster: {hub}" if hub else "not connected")
+                )
+            # Cluster by cluster (biggest first), hub-like tables first within
+            # each; unconnected tables last.
+            items.sort(key=lambda it: (
+                clusters.get(it.text(), (10**9, ""))[0],
+                -sum(it.data(_ROLE_LINKS) or (0, 0)),
+                it.text().lower(),
+            ))
+        elif mode == "links":
             items.sort(key=lambda it: (-sum(it.data(_ROLE_LINKS) or (0, 0)), it.text().lower()))
         else:
             items.sort(key=lambda it: it.text().lower())
@@ -1923,12 +1946,19 @@ class DiagramOptionsBar(QWidget):
         self._prefix_schema.setToolTip("Title tables as schema.Table instead of Table.")
         self._keys_only = QCheckBox("&Keys only")
         self._keys_only.setToolTip("Show only primary-key and foreign-key columns.")
+        self._hide_audit = QCheckBox("Hide audit and system links")
+        self._hide_audit.setToolTip(
+            "Leave out createdby, modifiedby, owning…, organizationid and "
+            "transactioncurrencyid links from the diagram, SQL and exports. They "
+            "only appear when systemuser, team, businessunit and similar are ticked."
+        )
         for chk in (
             self._fit_width,
             self._show_comments,
             self._show_rel_labels,
             self._prefix_schema,
             self._keys_only,
+            self._hide_audit,
         ):
             chk.toggled.connect(lambda _v: self.changed.emit())
             # Never clip a checkbox label when the canvas narrows.
@@ -1980,7 +2010,7 @@ class DiagramOptionsBar(QWidget):
             row2.addWidget(self._buddy(label, widget))
             row2.addWidget(widget)
         row2.addSpacing(8)
-        for chk in (self._fit_width, self._show_comments, self._prefix_schema):
+        for chk in (self._fit_width, self._show_comments, self._prefix_schema, self._hide_audit):
             row2.addWidget(chk)
         row2.addStretch(1)
         self._more_box.setVisible(False)
@@ -2030,6 +2060,9 @@ class DiagramOptionsBar(QWidget):
             keys_only=self._keys_only.isChecked(),
         )
 
+    def hide_audit_links(self) -> bool:
+        return self._hide_audit.isChecked()
+
     def background_value(self) -> str:
         return self._background.currentData()
 
@@ -2050,6 +2083,7 @@ class DiagramOptionsBar(QWidget):
             ("rel_labels", self._show_rel_labels),
             ("prefix_schema", self._prefix_schema),
             ("keys_only", self._keys_only),
+            ("hide_audit", self._hide_audit),
             ("more_open", self._more),
         ]
 
@@ -3275,6 +3309,7 @@ class MainWindow(QMainWindow):
         names = [t.name for t in schema.tables]
         self._selector.set_tables(names)
         self._selector.set_link_counts(link_counts(schema))
+        self._selector.cluster_provider = lambda s=schema: cluster_index(s)
         self._map_view.set_schema(schema if names else None)
 
         # The file parsed but yielded no tables — every row was missing a
@@ -3503,6 +3538,11 @@ class MainWindow(QMainWindow):
         final = self._columns.sorted_schema(
             filter_columns(filtered, self._columns.excluded_pairs())
         )
+        if self._options_bar.hide_audit_links():
+            final = Schema(
+                tables=final.tables,
+                relationships=[r for r in final.relationships if not is_hidden_link(r)],
+            )
         self._drawio_schema = final
         self._set_sql_schema(final)
         self._refresh_inspector()
