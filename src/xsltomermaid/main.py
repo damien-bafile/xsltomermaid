@@ -4118,6 +4118,10 @@ class MainWindow(QMainWindow):
         Works headless (with ``QT_QPA_PLATFORM=offscreen``) so it can be used in
         automated tests / CI to verify the UI actually paints.
         """
+        # The map builds itself when first shown; a headless capture never
+        # shows the window, so build it here or a big schema grabs a blank map.
+        if self.map_visible() and self._map_view.schema_map() is None:
+            self._map_view._rebuild()
         app = QApplication.instance()
         if app is not None:
             # Let layout, resizing and painting settle before grabbing.
