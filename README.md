@@ -189,7 +189,14 @@ erDiagram
 | File | Purpose |
 |------|---------|
 | `src/xsltomermaid/excel_to_mermaid.py` | Pure-Python core: read the sheet, build the schema model, emit Mermaid. No Qt required. |
-| `src/xsltomermaid/main.py` | PySide6 GUI with drag-and-drop and the `--screenshot*` CLI modes. |
+| `src/xsltomermaid/main.py` | The main window (`MainWindow`), which wires everything together, and the `--screenshot*` CLI modes. |
+| `src/xsltomermaid/table_list.py` | The left-hand table list: filters, sorting, link counts, cluster headers. |
+| `src/xsltomermaid/inspector.py` | The Details panel's Table view: one table's columns and connected tables. |
+| `src/xsltomermaid/column_selector.py` | The Details panel's Columns view. |
+| `src/xsltomermaid/options_bar.py` | The diagram options bar (orientation, theme, More, …). |
+| `src/xsltomermaid/widgets.py` | Small pieces: the drop area, status line, render status, data model, workers. |
+| `src/xsltomermaid/theme.py` | Colours, light/dark palettes, button styles and drawn status icons. |
+| `src/xsltomermaid/config.py` | Limits, export formats and per-user settings (`QSettings`). |
 | `src/xsltomermaid/diagram_view.py` | Renders the Mermaid diagram in a `QWebEngineView` and exports it as SVG/PNG. |
 | `src/xsltomermaid/services.py` | Application services for coordinating schema import workflows. |
 | `src/xsltomermaid/schema_map.py` | Clusters and lays out the whole schema for the map. No Qt required. |

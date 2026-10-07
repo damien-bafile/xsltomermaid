@@ -61,7 +61,6 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPageSize, QPalette, QPdfWri
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
