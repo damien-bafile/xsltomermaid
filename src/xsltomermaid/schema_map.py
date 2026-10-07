@@ -58,6 +58,31 @@ def _is_hidden(rel: Relationship, hidden: frozenset[str]) -> bool:
     return bool(columns) and all(c.lower() in hidden for c in columns)
 
 
+def link_counts(
+    schema: Schema, hidden_columns: frozenset[str] = HIDDEN_BY_DEFAULT
+) -> dict[str, tuple[int, int]]:
+    """``{table: (references out, references in)}``, leaving out hidden links.
+
+    Self-references count once, as "out". Used by the table list so its
+    numbers match what the map shows.
+    """
+    counts = {t.name: [0, 0] for t in schema.tables}
+    for rel in schema.relationships:
+        if _is_hidden(rel, hidden_columns):
+            continue
+        if rel.child_table in counts:
+            counts[rel.child_table][0] += 1
+        if rel.parent_table in counts and rel.parent_table != rel.child_table:
+            counts[rel.parent_table][1] += 1
+    return {name: (out, in_) for name, (out, in_) in counts.items()}
+
+
+def name_prefix(name: str) -> str:
+    """A Dynamics-style publisher prefix: ``msdyn_project`` → ``msdyn``; "" if none."""
+    head, sep, _rest = name.partition("_")
+    return head.lower() if sep and head else ""
+
+
 # ---------------------------------------------------------------------------
 # Communities: Louvain modularity optimisation (two levels is plenty here)
 # ---------------------------------------------------------------------------

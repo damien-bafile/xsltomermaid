@@ -32,6 +32,10 @@ DefaultValue | ComputedDefinition | Collation | Description
    this replaces the ticks and can be undone. The table filter highlights
    matches on the map, ticked tables show as rings, and tables with no links
    are listed underneath.
+   The **table list** shows each table's links (↗ out, ↙ in; audit and system
+   links not counted) and a dot for tables in the diagram. Sort it by name or
+   **Most connected**, filter it to one publisher **prefix** (`msdyn_`, `hsl_`,
+   …), or **Hide unconnected** tables.
    **Click a table in the diagram** to select it: it's highlighted, the table
    list scrolls to it, and the Columns view shows just its columns.
    **Double-click** opens the Details panel on the **Table** view: the table's

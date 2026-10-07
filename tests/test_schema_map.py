@@ -57,3 +57,15 @@ def test_map_is_deterministic():
 
 def test_default_hidden_set_covers_audit_and_system_columns():
     assert {"createdby", "owninguser", "organizationid", "transactioncurrencyid"} <= HIDDEN_BY_DEFAULT
+
+
+def test_link_counts_skip_audit_links_and_name_prefix():
+    from xsltomermaid.schema_map import link_counts, name_prefix
+
+    counts = link_counts(_two_modules())
+    assert counts["a0"] == (0, 5)  # five a* tables reference it
+    assert counts["a1"] == (3, 0)  # a1 references a0, a2 (peer) and b1 (bridge)
+    assert counts["systemuser"] == (0, 0)  # only audit links touch it
+    assert name_prefix("msdyn_project") == "msdyn"
+    assert name_prefix("hsl_projectactivity") == "hsl"
+    assert name_prefix("account") == ""

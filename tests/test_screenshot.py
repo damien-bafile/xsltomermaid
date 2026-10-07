@@ -1713,3 +1713,68 @@ def test_big_schema_opens_on_the_map(tmp_path):
     assert window.map_visible()
     window._diagram_view.cleanup()
     del app
+
+
+# -- smarter table list ---------------------------------------------------------
+def _list_window():
+    from xsltomermaid.excel_to_mermaid import Relationship
+
+    tables = ["account", "msdyn_project", "msdyn_task", "hsl_booking", "lonely"]
+    rels = [
+        Relationship("msdyn_project", "msdyn_task", "project", ("project",), ("id",)),
+        Relationship("account", "msdyn_project", "customer", ("customer",), ("id",)),
+        Relationship("msdyn_project", "hsl_booking", "project", ("project",), ("id",)),
+        Relationship("account", "lonely", "createdby", ("createdby",), ("id",)),  # audit
+    ]
+    app, window = _window_with_schema(tables, rels)
+    window._selector.set_ready(True)
+    from xsltomermaid.schema_map import link_counts
+    window._selector.set_link_counts(link_counts(window._schema))
+    return app, window
+
+
+def _shown(sel):
+    return [i.text() for i in sel._items() if not i.isHidden()]
+
+
+def test_table_list_prefix_filter_and_hide_unconnected():
+    app, window = _list_window()
+    sel = window._selector
+    prefixes = [sel._prefix.itemText(i) for i in range(sel._prefix.count())]
+    assert prefixes == ["All prefixes (5)", "No prefix (2)", "msdyn_ (2)", "hsl_ (1)"]
+    sel._prefix.setCurrentIndex(sel._prefix.findData("msdyn"))
+    assert _shown(sel) == ["msdyn_project", "msdyn_task"]
+    sel._prefix.setCurrentIndex(0)
+    sel._hide_unconnected.setChecked(True)  # "lonely" has only an audit link
+    assert "lonely" not in _shown(sel) and len(_shown(sel)) == 4
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_table_list_sorts_by_links_and_keeps_ticks():
+    app, window = _list_window()
+    sel = window._selector
+    sel.check_tables(["hsl_booking"])
+    sel._sort.setCurrentIndex(sel._sort.findData("links"))
+    assert [i.text() for i in sel._items()][:2] == ["msdyn_project", "account"]
+    assert sel.selected_tables() == ["hsl_booking"]
+    item = next(i for i in sel._items() if i.text() == "msdyn_project")
+    assert item.data(app_module._ROLE_LINKS) == (1, 2)
+    sel.set_drawn(["msdyn_project"])
+    assert item.data(app_module._ROLE_DRAWN) is True
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_setting_list_data_does_not_fire_selection_changes():
+    """Link counts and drawn markers are data, not ticks: with ~1,800 rows,
+    reacting to each one hung the load of a real Dynamics export."""
+    app, window = _list_window()
+    fired = []
+    window._selector.selection_changed.connect(lambda: fired.append(1))
+    from xsltomermaid.schema_map import link_counts
+    window._selector.set_link_counts(link_counts(window._schema))
+    window._selector.set_drawn(["account"])
+    assert fired == []
+    window._diagram_view.cleanup()
+    del app
