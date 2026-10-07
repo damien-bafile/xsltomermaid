@@ -440,3 +440,23 @@ def test_mermaid_entity_ids_match_the_generated_ids():
     assert all(f"    {eid} {{" in mermaid for eid in ids)
     prefixed = mermaid_entity_ids(schema, DiagramOptions(prefix_schema=True))
     assert prefixed == {"dbo_Customer": "Customer", "dbo_Order": "Order"}
+
+
+def test_dynamics_solution_layering_columns_are_not_primary_keys():
+    rows = [
+        _row("bookableresource", 1, "bookableresourceid", pk=True),
+        _row("bookableresource", 2, "overwritetime", pk=True),
+        _row("bookableresource", 3, "componentstate", pk=True),
+        _row("booking", 1, "bookingid", pk=True),
+        _row("booking", 2, "resource", fk="dbo.bookableresource.bookableresourceid"),
+        # A table whose only key is a layering column keeps it.
+        _row("odd", 1, "componentstate", pk=True),
+    ]
+    schema = build_schema(rows)
+    br = next(t for t in schema.tables if t.name == "bookableresource")
+    assert [c.name for c in br.columns if c.is_primary_key] == ["bookableresourceid"]
+    odd = next(t for t in schema.tables if t.name == "odd")
+    assert odd.columns[0].is_primary_key
+    (rel,) = schema.relationships
+    assert rel.parent_columns == ("bookableresourceid",)
+    assert "int overwritetime PK" not in generate_mermaid(schema)

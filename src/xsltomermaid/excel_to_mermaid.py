@@ -356,12 +356,29 @@ def build_schema(
     ordered_tables = sorted(tables.values(), key=lambda t: (t.schema.lower(), t.name.lower()))
     for table in ordered_tables:
         table.columns.sort(key=lambda c: c.order)
+        _drop_solution_layering_keys(table)
 
     relationships = _derive_relationships(ordered_tables, order_by_full)
     return Schema(tables=ordered_tables, relationships=relationships)
 
 
-_REF_COLUMNS_RE = re.compile(r"^(?P<table>[^(]*)\((?P<columns>[^)]*)\)\s*$")
+# Dynamics 365 / Dataverse solution-layering columns. Their physical primary key
+# is (id, overwritetime, componentstate) so each solution layer of a component
+# can be stored; to a reader of the diagram (and to every foreign key) the key
+# is just the id.
+SOLUTION_LAYERING_KEYS = frozenset({"overwritetime", "componentstate"})
+
+
+def _drop_solution_layering_keys(table: Table) -> None:
+    """Stop marking solution-layering columns as PK, when a real key remains."""
+    keys = [c for c in table.columns if c.is_primary_key]
+    layering = [c for c in keys if c.name.lower() in SOLUTION_LAYERING_KEYS]
+    if layering and len(layering) < len(keys):
+        for column in layering:
+            column.is_primary_key = False
+
+
+_REF_COLUMNS_RE =re.compile(r"^(?P<table>[^(]*)\((?P<columns>[^)]*)\)\s*$")
 
 
 def _parse_reference(reference: str) -> tuple[str | None, list[str]]:
