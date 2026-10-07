@@ -219,13 +219,13 @@ def test_diagram_zoom_label_tracks_webengine_zoom():
         pytest.skip("PySide6 WebEngine not available")
     app = QApplication.instance() or QApplication([])
     view = diagram_view.DiagramView()
-    assert view._zoom_label.text() == "Zoom: 100%"
+    assert view._zoom_label.text() == "100%"
     for zoom, text in [(1.25, "125%"), (0.5, "50%"), (1.0, "100%")]:
         view._view.setZoomFactor(zoom)
         # The label polls every 200 ms; under a loaded test run a fixed wait
         # can miss the tick, so wait for the condition (up to 3 s) instead.
-        _wait_for(lambda: view._zoom_label.text() == f"Zoom: {text}", 3000)
-        assert view._zoom_label.text() == f"Zoom: {text}"
+        _wait_for(lambda: view._zoom_label.text() == text, 3000)
+        assert view._zoom_label.text() == text
     view.cleanup()
     assert not view._zoom_timer.isActive()
     del app
@@ -1345,5 +1345,146 @@ def test_sql_tab_follows_the_diagram_and_its_options(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module.QGuiApplication.clipboard(), "setText", copied.append)
     window.copy_sql()
     assert copied == [sql]
+    window._diagram_view.cleanup()
+    del app
+
+
+def _mnemonic(text: str) -> str | None:
+    """The Alt+letter in a Qt label ("Ticked onl&y" → "y"); "&&" is a literal &."""
+    i = 0
+    while True:
+        i = text.find("&", i)
+        if i < 0 or i + 1 >= len(text):
+            return None
+        if text[i + 1] == "&":
+            i += 2
+            continue
+        return text[i + 1].lower()
+
+
+def test_alt_key_mnemonics_are_unique_on_every_tab(tmp_path):
+    """Two controls on screen with the same Alt+letter make Qt cycle focus
+    instead of activating either, so every visible letter must be unique."""
+    from PySide6.QtWidgets import QAbstractButton, QLabel
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    sample = tmp_path / "s.xlsx"
+    _ensure_sample(str(sample))
+    window.load_file(str(sample))
+    window.show()
+    window._options_bar._more.setChecked(True)
+    window._selector._path_toggle.setChecked(True)
+    menu_letters = {_mnemonic(a.text()) for a in window.menuBar().actions()}
+
+    for index in range(window._tabs.count()):
+        window._tabs.setCurrentIndex(index)
+        app.processEvents()
+        seen: dict[str, str] = {letter: "menu bar" for letter in menu_letters if letter}
+        for widget in window.findChildren(QAbstractButton) + window.findChildren(QLabel):
+            if not widget.isVisible():
+                continue
+            if isinstance(widget, QLabel) and widget.buddy() is None:
+                continue  # a plain label's & is just text
+            letter = _mnemonic(widget.text())
+            if letter is None:
+                continue
+            tab = window._tabs.tabText(index)
+            assert letter not in seen, (
+                f"Alt+{letter.upper()} on the {tab!r} tab is used by both "
+                f"{seen[letter]!r} and {widget.text()!r}"
+            )
+            seen[letter] = widget.text()
+
+    for menu_action in window.menuBar().actions():
+        letters = [_mnemonic(a.text()) for a in menu_action.menu().actions() if a.text()]
+        letters = [x for x in letters if x]
+        assert len(letters) == len(set(letters)), f"duplicate mnemonic in {menu_action.text()}"
+    window._diagram_view.cleanup()
+    del app
+
+
+# -- export: own background, names, enablement --------------------------------
+def test_export_style_relights_a_dark_view_for_paper():
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    bar = window._options_bar
+    bar._theme.setCurrentIndex(bar._theme.findData("dark"))
+    bar._background.setCurrentIndex(bar._background.findData("#16181d"))
+
+    def pick(key):
+        next(a for a in window._export_bg_group.actions() if a.data() == key).trigger()
+
+    assert window.export_background() == "white"  # the default
+    style = window._export_style()
+    assert (style.theme, style.background) == ("default", "#ffffff")
+    pick("transparent")
+    assert window._export_style().background == "transparent"
+    pick("match")
+    assert window._export_style() == bar.render_style()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_export_is_disabled_until_tables_are_ticked(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    sample = tmp_path / "s.xlsx"
+    _ensure_sample(str(sample))
+    window.load_file(str(sample))
+    assert window._export_btn.isEnabled()
+    window._selector._on_clear()
+    window._render_selection()
+    assert not window._export_btn.isEnabled()
+    assert not window._preview_btn.isEnabled()
+    assert "Tick some tables" in window._export_btn.toolTip()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_save_dialog_defaults_to_the_spreadsheet_name_and_last_folder(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window._loaded_name = "orders_schema.xlsx"
+    asked = []
+    out_dir = tmp_path / "exports"
+    out_dir.mkdir()
+
+    def fake_dialog(_parent, _title, default, _filter):
+        asked.append(default)
+        return str(out_dir / "picked.png"), ""
+
+    monkeypatch.setattr(app_module.QFileDialog, "getSaveFileName", fake_dialog)
+    window._save_path("t", ".png", "PNG (*.png)")
+    window._save_path("t", ".svg", "SVG (*.svg)")
+    assert asked[0] == "orders_schema.png"
+    assert asked[1] == os.path.join(str(out_dir), "orders_schema.svg")
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_white_export_of_a_dark_diagram_uses_light_colours(tmp_path, monkeypatch):
+    import xsltomermaid.diagram_view as diagram_view
+
+    if not diagram_view.WEBENGINE_AVAILABLE:
+        pytest.skip("PySide6 WebEngine not available")
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    bar = window._options_bar
+    bar._theme.setCurrentIndex(bar._theme.findData("dark"))
+    bar._background.setCurrentIndex(bar._background.findData("#16181d"))
+    sample = tmp_path / "s.xlsx"
+    _ensure_sample(str(sample))
+    window.load_file(str(sample))
+    out = tmp_path / "out.svg"
+    monkeypatch.setattr(
+        app_module.QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), "")
+    )
+    window.set_export_format("svg")
+    window.export_diagram()
+    svg = out.read_text(encoding="utf-8").lower()
+    assert "#ececff" in svg or "rgb(236, 236, 255)" in svg  # default theme's box fill
+    assert "Show in folder" in window._status.text()
+    assert bar.render_style().theme == "dark"  # the view itself is untouched
     window._diagram_view.cleanup()
     del app
