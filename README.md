@@ -19,7 +19,11 @@ DefaultValue | ComputedDefinition | Collation | Description
 3. **Groups** rows into tables and derives relationships from `ForeignKeyReference`.
 4. **Generates** a Mermaid `erDiagram` with each table, its columns, `PK`/`FK`
    markers, and one relationship line per foreign key.
-5. **Renders** the diagram live in-app (a "Rendered diagram" tab powered by a
+5. Puts the **diagram at the centre of the window**. The extracted rows,
+   column picker, Mermaid source and SQL sit in a **Details** panel on the right.
+   It starts closed and opens from the **Details** button, **Ctrl+I**, or
+   **Ctrl+1–4** for a specific view.
+   **Renders** the diagram live in-app (a "Rendered diagram" tab powered by a
    locally vendored `mermaid.js`, so no internet is needed). The diagram
    **follows your ticks**: changing tables or columns redraws it a moment later.
    Selections over 60 tables wait for **Render selected** (F5) and show an
@@ -38,7 +42,7 @@ DefaultValue | ComputedDefinition | Collation | Description
 7. Uses **Left → Right** as the default rendered layout direction. Orientation,
    theme, background, relationship labels and *Keys only* sit in the options
    bar. Spacing, font size, fit width, notes and schema prefix are under
-   **More options**.
+   **More**.
 8. Shows **PK/FK markers** in the column selector, with column sorting by name or
    data type and a **PK, FK first** checkbox (primary keys, then foreign keys).
    **Clear** (tables) and **All / None / Keys only** (columns) can be undone.
@@ -48,7 +52,7 @@ DefaultValue | ComputedDefinition | Collation | Description
    next launch. Theme and background still follow the OS's light/dark mode.
    **Ticked only** under the table list shows just the selection, which helps
    on schemas with thousands of tables.
-10. Writes a **T-SQL query** in the **SQL query** tab: a `SELECT` over the
+10. Writes a **T-SQL query** in the **SQL** view: a `SELECT` over the
     diagram's tables, joined on their foreign keys (composite keys included),
     listing the columns chosen in the Columns tab. You choose the starting table,
     `INNER` or `LEFT` joins, and a `TOP (n)` row limit. Anything that can't be a

@@ -1331,7 +1331,7 @@ def test_sql_tab_follows_the_diagram_and_its_options(tmp_path, monkeypatch):
     window.load_file(str(sample))
     sql = window._sql_view.toPlainText()
     assert sql.startswith("SELECT TOP (100)") and "JOIN" in sql
-    assert window._tabs.tabText(window._tabs.count() - 1) == "SQL query"
+    assert window._tabs.tabText(window._tabs.count() - 1) == "SQL"
 
     window._sql_root.setCurrentText("OrderLine")
     window._sql_join.setCurrentIndex(window._sql_join.findData("LEFT"))
@@ -1373,6 +1373,7 @@ def test_alt_key_mnemonics_are_unique_on_every_tab(tmp_path):
     window.show()
     window._options_bar._more.setChecked(True)
     window._selector._path_toggle.setChecked(True)
+    window.set_details_visible(True)
     menu_letters = {_mnemonic(a.text()) for a in window.menuBar().actions()}
 
     for index in range(window._tabs.count()):
@@ -1485,4 +1486,33 @@ def test_white_export_of_a_dark_diagram_uses_light_colours(tmp_path, monkeypatch
     assert "Show in folder" in window._status.text()
     assert bar.render_style().theme == "dark"  # the view itself is untouched
     window._diagram_view.cleanup()
+    del app
+
+
+
+def test_details_panel_starts_closed_and_opens_on_a_view():
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window.show()
+    assert not window._tabs.isVisible()  # closed by default: the canvas gets the width
+    assert window._diagram_tab.isVisible()
+    window.show_details(window._sql_tab)
+    assert window._tabs.isVisible() and window._tabs.currentWidget() is window._sql_tab
+    assert window._details_btn.isChecked() and window._details_action.isChecked()
+    window._details_action.trigger()  # Ctrl+I closes it again
+    assert not window._tabs.isVisible() and not window._details_btn.isChecked()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_details_panel_state_is_remembered():
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window.show_details(window._columns)
+    window.close()
+    window._diagram_view.cleanup()
+    again = app_module.MainWindow()
+    again.show()
+    assert again._tabs.isVisible() and again._tabs.currentWidget() is again._columns
+    again._diagram_view.cleanup()
     del app
