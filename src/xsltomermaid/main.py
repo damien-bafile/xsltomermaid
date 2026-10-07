@@ -123,6 +123,7 @@ from .diagram_view import (
     schema_to_excalidraw,
 )
 from .excel_to_mermaid import (
+    mermaid_entity_ids,
     EXPECTED_HEADERS,
     DiagramOptions,
     Schema,
@@ -701,6 +702,7 @@ class TableSelector(QWidget):
 
     applied = Signal()  # user asked to (re)render the current selection
     selection_changed = Signal()  # the user ticked/unticked tables (auto-render)
+    current_table_changed = Signal(str)  # the highlighted row ("" for none)
     related_requested = Signal()  # user asked to also tick the related tables
     path_requested = Signal()  # user asked for the shortest path between two tables
 
@@ -728,6 +730,9 @@ class TableSelector(QWidget):
         self._list.setUniformItemSizes(True)
         self._list.setAccessibleName("Tables in diagram")
         self._list.itemChanged.connect(self._on_item_changed)
+        self._list.currentItemChanged.connect(
+            lambda item, _prev: self.current_table_changed.emit(item.text() if item else "")
+        )
         layout.addWidget(self._list, 1)
 
         count_row = QHBoxLayout()
@@ -985,6 +990,17 @@ class TableSelector(QWidget):
                 needle not in item.text().lower()
                 or (ticked_only and item.checkState() != Qt.Checked)
             )
+
+    def focus_table(self, name: str):
+        """Highlight and scroll to a table's row (no tick change); "" clears."""
+        match = next((i for i in self._items() if i.text() == name), None) if name else None
+        self._list.blockSignals(True)
+        self._list.setCurrentItem(match)
+        if match is None:
+            self._list.clearSelection()
+        self._list.blockSignals(False)
+        if match is not None:
+            self._list.scrollToItem(match)
 
     def _on_item_changed(self, _item):
         self._update_count()
@@ -1263,6 +1279,15 @@ class ColumnSelector(QWidget):
         self._scope.setVisible(bool(tables))
 
         self._rebuild_view()
+
+    def focus_table(self, name: str):
+        """Show one table's columns ("" goes back to all tables)."""
+        index = next(
+            (i for i, t in enumerate(self._tables) if t.name == name), -1
+        ) if name else -1
+        combo_index = self._scope.findData(index)
+        if combo_index >= 0 and combo_index != self._scope.currentIndex():
+            self._scope.setCurrentIndex(combo_index)
 
     def _scope_tables(self) -> list[Table]:
         """The tables the current dropdown choice covers ('All' or just one)."""
@@ -2091,6 +2116,8 @@ class MainWindow(QMainWindow):
         self._diagram_view.render_finished.connect(self._render_status.finish)
         self._diagram_view.render_finished.connect(self._announce_render)
         self._diagram_view.render_error.connect(self._on_render_error)
+        self._diagram_view.entity_clicked.connect(self._on_entity_clicked)
+        self._entity_to_table: dict[str, str] = {}
         self._diagram_view.render_finished.connect(lambda _ok: self._set_rendering(False))
         diagram_tab = QWidget()
         diagram_layout = QVBoxLayout(diagram_tab)
@@ -2138,6 +2165,7 @@ class MainWindow(QMainWindow):
         self._selector = TableSelector()
         self._selector.applied.connect(self._render_selection)
         self._selector.selection_changed.connect(self._on_selection_edited)
+        self._selector.current_table_changed.connect(self._on_list_table_changed)
         self._selector.related_requested.connect(self._add_related_tables)
         self._selector.path_requested.connect(self._find_shortest_path)
 
@@ -2543,6 +2571,31 @@ class MainWindow(QMainWindow):
         ):
             self.retheme()
         super().changeEvent(event)
+
+    # -- diagram ↔ list selection ------------------------------------------
+    def _on_entity_clicked(self, entity_id: str, double: bool):
+        """A table was clicked in the diagram: select it everywhere.
+
+        Single click highlights it in the list and scopes the Columns view to
+        it; double-click also opens the Details panel there. Clicking the
+        empty canvas (or Esc) clears the selection.
+        """
+        name = self._entity_to_table.get(entity_id, "")
+        self._selector.focus_table(name)
+        self._columns.focus_table(name)
+        if not name:
+            return
+        if double:
+            self.show_details(self._columns)
+        else:
+            self._status.setText(
+                f"{html.escape(name)} selected · double-click it to open its columns"
+            )
+
+    def _on_list_table_changed(self, name: str):
+        """A row was highlighted in the list: highlight that table if drawn."""
+        entity = next((e for e, t in self._entity_to_table.items() if t == name), "")
+        self._diagram_view.highlight_entity(entity)
 
     # -- details panel ----------------------------------------------------
     def set_details_visible(self, visible: bool):
@@ -2998,6 +3051,7 @@ class MainWindow(QMainWindow):
         self._set_sql_schema(final)
 
         mermaid_text = generate_mermaid(final, self._options_bar.diagram_options())
+        self._entity_to_table = mermaid_entity_ids(final, self._options_bar.diagram_options())
         self._mermaid_text = mermaid_text
         self._mermaid_view.setPlainText(mermaid_text)
 

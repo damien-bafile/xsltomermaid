@@ -428,3 +428,15 @@ def test_wrap_mermaid_html_escapes_source_and_takes_a_local_script():
     assert "a&lt;b &amp; c" in page  # Mermaid reads the decoded text
     local = wrap_mermaid_html("erDiagram", script_src="mermaid.min.js")
     assert '<script src="mermaid.min.js">' in local and MERMAID_CDN not in local
+
+
+def test_mermaid_entity_ids_match_the_generated_ids():
+    from xsltomermaid.excel_to_mermaid import mermaid_entity_ids
+
+    schema = build_schema(SAMPLE_ROWS)
+    ids = mermaid_entity_ids(schema)
+    assert ids == {"Customer": "Customer", "Order": "Order"}
+    mermaid = generate_mermaid(schema)
+    assert all(f"    {eid} {{" in mermaid for eid in ids)
+    prefixed = mermaid_entity_ids(schema, DiagramOptions(prefix_schema=True))
+    assert prefixed == {"dbo_Customer": "Customer", "dbo_Order": "Order"}
