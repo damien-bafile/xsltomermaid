@@ -121,6 +121,13 @@ from .excel_to_mermaid import (
 from .make_sample import write_sample
 from .selection_preset import dump_selection_toml, load_selection_toml
 from .services import SchemaImportService
+from . import __version__
+from .updates import (
+    RELEASES_PAGE,
+    UpdateCheckError,
+    fetch_latest_release,
+    is_newer,
+)
 
 # Above this many tables we don't auto-render the whole diagram (it's slow and
 # Mermaid chokes); the user picks a subset instead.
@@ -504,6 +511,21 @@ class LoadWorker(QThread):
             self.loaded.emit(rows, schema, mermaid_text)
         except Exception as exc:  # noqa: BLE001 - surface any parse error to the UI
             self.failed.emit(str(exc))
+
+
+class UpdateCheckWorker(QThread):
+    """Ask GitHub for the latest release off the UI thread (network I/O)."""
+
+    found = Signal(object)  # updates.Release
+    failed = Signal(str)  # user-presentable error message
+
+    def run(self):  # noqa: D401 - QThread entry point
+        try:
+            self.found.emit(fetch_latest_release())
+        except UpdateCheckError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - never crash the app on a check
+            self.failed.emit(f"Unexpected error: {exc}")
 
 
 # One shared vocabulary for foreign-key direction, used by BOTH the path tracer
@@ -1491,6 +1513,7 @@ class MainWindow(QMainWindow):
         # doesn't re-ask. None means nothing confirmed yet.
         self._render_confirmed_sig: frozenset[str] | None = None
         self._worker: LoadWorker | None = None
+        self._update_worker: UpdateCheckWorker | None = None
         self._pending_path: str = ""
         self._loaded_name: str = ""
         self._rendering: bool = False
@@ -1805,6 +1828,11 @@ class MainWindow(QMainWindow):
         diagram_menu.addAction(
             act("&Preview in browser", self.preview_browser, schema_only=True)
         )
+
+        help_menu = bar.addMenu("&Help")
+        self._update_action = act("Check for &updates…", self.check_for_updates)
+        help_menu.addAction(self._update_action)
+        help_menu.addAction(act("&About", self.show_about))
 
     def _build_sql_dock(self):
         """Create the fixed right-side panel with the SQL Server export query."""
@@ -2476,6 +2504,75 @@ class MainWindow(QMainWindow):
         webbrowser.open(f"file://{tmp.name}")
         self._status.setText(
             "Opened diagram preview in your browser (needs internet for Mermaid CDN)."
+        )
+
+    # -- updates -----------------------------------------------------------
+    def check_for_updates(self):
+        """Look up the latest GitHub release in the background, then report."""
+        if self._update_worker is not None and self._update_worker.isRunning():
+            return
+        self._update_action.setEnabled(False)
+        self._status.setText("Checking GitHub for a newer version…")
+        worker = UpdateCheckWorker(self)
+        worker.found.connect(self._on_update_found)
+        worker.failed.connect(self._on_update_failed)
+        worker.finished.connect(self._on_update_worker_finished)
+        self._update_worker = worker
+        worker.start()
+
+    def _on_update_found(self, release):
+        if not is_newer(release.tag, __version__):
+            self._status.setText(f"You're up to date (version {__version__}).")
+            QMessageBox.information(
+                self,
+                "No updates available",
+                f"You're running the latest version, {__version__}.",
+            )
+            return
+
+        self._status.setText(f"Version {release.tag} is available.")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("Update available")
+        box.setTextFormat(Qt.PlainText)  # the tag comes from the network
+        box.setText(
+            f"A newer version, {release.tag}, is available.\n"
+            f"You're running {__version__}."
+        )
+        box.setInformativeText("Open the release page to download it?")
+        if release.notes:
+            box.setDetailedText(release.notes)
+        open_btn = box.addButton("Open download page", QMessageBox.AcceptRole)
+        box.addButton("Later", QMessageBox.RejectRole)
+        box.setDefaultButton(open_btn)
+        box.exec()
+        if box.clickedButton() is open_btn:
+            webbrowser.open(release.url)
+
+    def _on_update_failed(self, message: str):
+        self._status.setText("Couldn't check for updates.")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Couldn't check for updates")
+        box.setText(message)
+        box.setInformativeText("You can check the releases page yourself instead.")
+        open_btn = box.addButton("Open releases page", QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Close)
+        box.exec()
+        if box.clickedButton() is open_btn:
+            webbrowser.open(RELEASES_PAGE)
+
+    def _on_update_worker_finished(self):
+        self._update_action.setEnabled(True)
+        self._update_worker = None
+
+    def show_about(self):
+        QMessageBox.about(
+            self,
+            "About xsltomermaid",
+            f"<b>xsltomermaid</b> {__version__}<br>"
+            "Turns a database-schema spreadsheet into a Mermaid ER diagram.<br><br>"
+            f'<a href="{RELEASES_PAGE}">Releases on GitHub</a> · MIT licensed',
         )
 
     def _nothing_to_export(self) -> bool:
