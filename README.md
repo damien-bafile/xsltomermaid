@@ -26,7 +26,12 @@ DefaultValue | ComputedDefinition | Collation | Description
    *Out of date* marker until then. Exports always use the current selection.
    If Mermaid can't draw a diagram, its error message is shown in the tab.
 6. **Exports** from one **Export** button (its arrow picks Draw.io, Excalidraw,
-   PDF, PNG or SVG, and the last format is remembered). **Preview in browser**
+   PDF, PNG or SVG, and the last format is remembered). Exports have their own
+   **Background** (White by default, Transparent, or Match the view), so a dark
+   on-screen diagram still exports ready for a white page. **PNG scale** is set
+   in the same menu. Save dialogs suggest the spreadsheet's name and remember
+   the folder, and the status line offers **Show in folder** afterwards.
+   Export is disabled until some tables are ticked. **Preview in browser**
    works offline too. The **Mermaid** menu copies the source or saves it as
    `.mmd` / `.md`. The **Table list** menu (beside "Tables in diagram") saves
    or loads the ticked tables as `.toml` presets, including the source filename.
@@ -50,8 +55,10 @@ DefaultValue | ComputedDefinition | Collation | Description
     clean join is written as a `--` comment: a second foreign key between the
     same tables, a self-reference, unknown join columns, or tables with no
     foreign-key path. **Copy SQL** or **Ctrl+Shift+Q** copies it.
-11. Shows the diagram's **zoom percentage**. Zoom with **Ctrl+scroll** or
-   **Ctrl+= / Ctrl+- / Ctrl+0** (View menu).
+11. **Fits the diagram to the view** (enlarged up to 150% when small, shrunk
+    when large) and centres it. The strip under the diagram has **− / + / Fit**
+    zoom buttons beside the render status. You can also zoom with
+    **Ctrl+scroll** or **Ctrl+= / Ctrl+- / Ctrl+0** (View menu).
 12. Includes a right-docked, copyable **SQL Server schema query** that produces the
     expected columns. It is **hidden by default**; open it via **View → T-SQL statement**.
 13. **Help → Check for updates…** asks GitHub for the latest release and, if it's

@@ -58,7 +58,14 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import QColor, QImage, QPainter, QPageSize, QPalette, QPdfWriter
-from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 def resource_path(relative: str) -> Path:
@@ -121,9 +128,11 @@ def _shell_html() -> str:
 <html><head><meta charset="utf-8">
 <style>
   html { height: 100%; background: #ffffff; }
+  /* Flex + auto margins centre a small diagram; a large one simply overflows
+     right/down and scrolls, without being clipped on the left or top. */
   body { margin: 0; padding: 12px; min-height: 100%; box-sizing: border-box;
-         background: #ffffff; }
-  #container { font-family: "Trebuchet MS", Verdana, Arial, sans-serif; }
+         background: #ffffff; display: flex; }
+  #container { margin: auto; font-family: "Trebuchet MS", Verdana, Arial, sans-serif; }
 </style>
 <script src="mermaid.min.js"></script>
 </head>
@@ -133,7 +142,25 @@ def _shell_html() -> str:
   window._mermaidDone = false;
   window._mermaidError = null;
   window._renderSeq = 0;
-  window.renderDiagram = function (text, config, background, canvas) {
+  window._fit = true;
+  // Size the diagram to the view: up to 150% when it's small, down when it's
+  // big. "force" fits once even when the Fit option is off (the Fit button).
+  window.fitDiagram = function (force) {
+    var svg = document.querySelector('#container svg');
+    if (!svg) return;
+    var vb = svg.viewBox && svg.viewBox.baseVal;
+    if (!vb || !vb.width || !vb.height) return;
+    var scale = 1;
+    if (force || window._fit) {
+      var w = window.innerWidth - 24, h = window.innerHeight - 24;
+      scale = Math.max(0.05, Math.min(w / vb.width, h / vb.height, 1.5));
+    }
+    svg.style.maxWidth = 'none';
+    svg.style.width = (vb.width * scale) + 'px';
+    svg.style.height = (vb.height * scale) + 'px';
+  };
+  window.addEventListener('resize', function () { window.fitDiagram(false); });
+  window.renderDiagram = function (text, config, background, canvas, fit) {
     var seq = ++window._renderSeq;
     window._mermaidDone = false;
     window._mermaidError = null;
@@ -145,6 +172,8 @@ def _shell_html() -> str:
       mermaid.render('erGraph' + seq, text).then(function (res) {
         if (seq !== window._renderSeq) return;   // a newer render superseded us
         document.getElementById('container').innerHTML = res.svg;
+        window._fit = fit !== false;
+        window.fitDiagram(false);
         window._mermaidDone = true;
       }).catch(function (e) {
         if (seq !== window._renderSeq) return;
@@ -796,18 +825,40 @@ class DiagramView(QWidget):
             )
             self._view.loadFinished.connect(self._on_load_finished)
             layout.addWidget(self._view, 1)
-            self._zoom_label = QLabel("Zoom: 100%")
-            self._zoom_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            # One strip under the diagram: render status on the left (added by
+            # the window through add_status_widget), zoom controls on the right.
+            self._strip = QHBoxLayout()
+            self._strip.setContentsMargins(6, 2, 4, 2)
+            self._strip.setSpacing(4)
+            self._strip.addStretch(1)
+            self._zoom_label = QLabel("100%")
+            self._zoom_label.setAlignment(Qt.AlignCenter)
+            self._zoom_label.setMinimumWidth(44)
             self._zoom_label.setToolTip(
                 "Ctrl+scroll, or Ctrl+= / Ctrl+- / Ctrl+0, to zoom the diagram."
             )
+            self._zoom_label.setAccessibleName("Zoom level")
+            for text, tip, slot in (
+                ("−", "Zoom out (Ctrl+-)", lambda: self.zoom_by(0.8)),
+                (None, None, None),
+                ("+", "Zoom in (Ctrl+=)", lambda: self.zoom_by(1.25)),
+                ("Fit", "Fit the diagram to the view", self.fit_to_view),
+            ):
+                if text is None:
+                    self._strip.addWidget(self._zoom_label)
+                    continue
+                btn = QToolButton()
+                btn.setText(text)
+                btn.setToolTip(tip)
+                btn.setAccessibleName(tip.split(" (")[0])
+                btn.setAutoRaise(True)
+                btn.clicked.connect(slot)
+                self._strip.addWidget(btn)
             self._view.setAccessibleName("Rendered diagram")
             self._view.setAccessibleDescription(
                 "A picture of the diagram. Its text form is in the Mermaid source tab."
             )
-            # Keep the label to a single text line; the view takes the rest.
-            self._zoom_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-            layout.addWidget(self._zoom_label)
+            layout.addLayout(self._strip)
             self._zoom_timer = QTimer(self)
             self._zoom_timer.setInterval(200)
             self._zoom_timer.timeout.connect(self._update_zoom_label)
@@ -824,7 +875,20 @@ class DiagramView(QWidget):
             layout.addWidget(label)
 
     def _update_zoom_label(self):
-        self._zoom_label.setText(f"Zoom: {self._view.zoomFactor():.0%}")
+        self._zoom_label.setText(f"{self._view.zoomFactor():.0%}")
+
+    def add_status_widget(self, widget):
+        """Put a status widget (render status, Stop) at the strip's left end."""
+        if self._view is not None:
+            self._strip.insertWidget(self._strip.count() - 5, widget)
+
+    def fit_to_view(self):
+        """Reset zoom and size the diagram to the view, whatever Fit says."""
+        if self._view is None:
+            return
+        self._view.setZoomFactor(1.0)
+        self._update_zoom_label()
+        self._view.page().runJavaScript("window.fitDiagram && window.fitDiagram(true)")
 
     def zoom_by(self, factor: float):
         """Zoom the diagram in (>1) or out (<1); the keyboard twin of Ctrl+scroll."""
@@ -839,6 +903,7 @@ class DiagramView(QWidget):
             return
         self._view.setZoomFactor(1.0)
         self._update_zoom_label()
+        self._view.page().runJavaScript("window.fitDiagram && window.fitDiagram(false)")
 
     # -- rendering ---------------------------------------------------------
     def set_diagram(self, mermaid_text: str, style: RenderStyle | None = None):
@@ -864,11 +929,12 @@ class DiagramView(QWidget):
                 self._view.load(self._shell_url)
 
     def _invoke_render(self, mermaid_text: str, style: RenderStyle, gen: int):
-        script = "renderDiagram({}, {}, {}, {})".format(
+        script = "renderDiagram({}, {}, {}, {}, {})".format(
             json.dumps(mermaid_text),
             json.dumps(_mermaid_config(style)),
             json.dumps(style.background),
             json.dumps(self.palette().color(QPalette.Base).name()),
+            json.dumps(bool(style.use_max_width)),
         )
         self._view.page().runJavaScript(script)
         self._poll_mermaid(gen, 0)
@@ -1054,6 +1120,8 @@ class DiagramView(QWidget):
             "(function(){"
             "var s=document.querySelector('.mermaid svg');"
             "if(!s)return '';"
+            # The view's fit sets inline width/height; the file keeps its own.
+            "s.style.removeProperty('width');s.style.removeProperty('height');"
             "function skip(v){return !v||v==='none'||v==='transparent'||v==='rgba(0, 0, 0, 0)';}"
             "var els=s.querySelectorAll('text,tspan,path,rect,circle,ellipse,line,polygon,polyline');"
             "for(var i=0;i<els.length;i++){var el=els[i],cs=getComputedStyle(el);"
@@ -1074,7 +1142,7 @@ class DiagramView(QWidget):
             "else{t.style.setProperty('dominant-baseline','alphabetic');}"
             "var oy=parseFloat(t.getAttribute('y'))||0;"
             "t.setAttribute('y',(oy+offs[fs]).toFixed(2));});"
-            "return s.outerHTML;})()",
+            "var out=s.outerHTML;window.fitDiagram(false);return out;})()",
             timeout_ms=5000,
         )
         return svg or None

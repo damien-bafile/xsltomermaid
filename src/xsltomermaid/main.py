@@ -5,6 +5,7 @@ Run with:  uv run xsltomermaid
 
 from __future__ import annotations
 
+import dataclasses
 import html
 import os
 import shutil
@@ -57,12 +58,15 @@ from PySide6.QtCore import (
     QRectF,
     QSettings,
     QSortFilterProxyModel,
+    QUrl,
     Qt,
     QThread,
     QTimer,
     Signal,
 )
 from PySide6.QtGui import (
+    QActionGroup,
+    QDesktopServices,
     QPainter,
     QPen,
     QPixmap,
@@ -235,9 +239,13 @@ ORDER BY s.name, t.name, c.column_id;
 
 # Accent family and state colours, kept together so a tweak lives in one place
 # rather than scattered across widget stylesheets.
-_ACCENT = "#2f81f7"  # blue accent, reads well on light and dark
-_ACCENT_HOVER = "#4a92f9"  # accent, hover
-_ACCENT_PRESSED = "#1f6fe0"  # accent, pressed
+_ACCENT = "#2f81f7"  # blue accent: checkboxes, selection, spinner, rings
+# The filled primary button carries white text, so its fill is a darker blue
+# that clears 4.5:1 with white (4.76) in every state; the lighter _ACCENT only
+# managed 3.75.
+_ACCENT_FILL = "#1f6fe0"  # primary button
+_ACCENT_HOVER = "#1a64d6"  # primary button, hover (5.47:1 with white)
+_ACCENT_PRESSED = "#1559c2"  # primary button, pressed (6.48:1)
 _ACCENT_RING = "#cfe0ff"  # light focus ring on a filled accent button
 _ACCENT_WASH = "rgba(47,129,247,0.08)"  # translucent accent fill (drag-hover)
 _DISABLED_BG = "rgba(128,128,128,0.18)"  # filled button, disabled
@@ -254,7 +262,7 @@ def _apply_primary_button_style(button) -> None:
     button.setStyleSheet(
         (
         "QPushButton {"
-        f"  background: {_ACCENT};"
+        f"  background: {_ACCENT_FILL};"
         "  color: white;"
         "  font-weight: 600;"
         # A 2px transparent border reserves space so the focus ring doesn't
@@ -283,10 +291,29 @@ def _apply_primary_button_style(button) -> None:
         )
         ).replace("QPushButton", kind)
     )
-# Semantic status colours for the render indicator. Both clear the 3:1 non-text
-# (icon) contrast threshold on the light and dark surfaces the icon sits on.
-_OK_GREEN = "#2e9e57"  # render succeeded
-_ERR_ORANGE = "#d9822b"  # render failed
+# Semantic colours come in a light-surface and a dark-surface shade: one value
+# can't clear the contrast thresholds on both. Status icons need 3:1 against
+# the window; link-like text needs 4.5:1. Measured on #f3f3f3 / #2b2d31.
+_OK_GREEN = {"light": "#1a7f37", "dark": "#2e9e57"}  # 4.58 / 4.04
+_ERR_ORANGE = {"light": "#b4540a", "dark": "#d9822b"}  # 4.49 / 4.72
+_LINK = {"light": "#0a58ca", "dark": "#6aa7ff"}  # 5.80 / 5.64
+
+
+def _surface(widget) -> str:
+    """"dark" or "light", from the widget's own window colour."""
+    return "dark" if widget.palette().color(QPalette.Window).lightness() < 128 else "light"
+
+
+def _ok_hex(widget) -> str:
+    return _OK_GREEN[_surface(widget)]
+
+
+def _warn_hex(widget) -> str:
+    return _ERR_ORANGE[_surface(widget)]
+
+
+def _link_hex(widget) -> str:
+    return _LINK[_surface(widget)]
 
 
 # (key, menu label, file-dialog title, default filename, filter)
@@ -299,6 +326,17 @@ EXPORT_FORMATS = [
     ("png", "PNG image (.png)", "Save diagram PNG", "diagram.png", "PNG image (*.png)"),
     ("svg", "SVG image (.svg)", "Save diagram SVG", "diagram.svg", "SVG image (*.svg)"),
 ]
+
+
+# What exported diagrams are drawn on. Exports usually land on white pages
+# (Confluence, Word), so they default to White even when the app shows a dark
+# diagram on screen; "Match view" keeps the old behaviour.
+EXPORT_BACKGROUNDS = [
+    ("white", "White"),
+    ("transparent", "Transparent"),
+    ("match", "Match the view"),
+]
+PNG_SCALES = [1.0, 2.0, 3.0, 4.0]
 
 
 def app_settings() -> QSettings:
@@ -386,6 +424,22 @@ def _dark_palette() -> QPalette:
     return p
 
 
+def _light_palette(app) -> QPalette:
+    """The style's light palette, with today's Windows window grey.
+
+    The Windows style's standard palette still uses the classic #d4d0c8 grey,
+    which reads dated next to white panels; #f3f3f3 matches Windows 11.
+    """
+    p = app.style().standardPalette()
+    for role in (QPalette.Window, QPalette.Button, QPalette.AlternateBase):
+        p.setColor(role, QColor(0xF3, 0xF3, 0xF3))
+    p.setColor(QPalette.Link, QColor(_LINK["light"]))
+    # Disabled inputs (the empty table list) otherwise fall back to the old
+    # beige; keep them a quiet off-white.
+    p.setColor(QPalette.Disabled, QPalette.Base, QColor(0xF8, 0xF8, 0xF8))
+    return p
+
+
 def system_is_dark(app) -> bool:
     """Whether the OS is currently asking for a dark colour scheme (Qt 6.5+)."""
     hints = app.styleHints()
@@ -398,7 +452,7 @@ def system_is_dark(app) -> bool:
 def apply_system_palette(app) -> bool:
     """Apply a light or dark palette to match the OS. Returns True if dark."""
     dark = system_is_dark(app)
-    palette = _dark_palette() if dark else app.style().standardPalette()
+    palette = _dark_palette() if dark else _light_palette(app)
     # One accent everywhere: without this, Windows 11 tints checkboxes with the
     # system accent (often lilac) while the app's buttons are blue.
     accent = QColor(_ACCENT)
@@ -478,7 +532,7 @@ class DropArea(QLabel):
                 "#dropArea {"
                 f"  border: 2px solid {_ACCENT};"
                 "  border-radius: 12px;"
-                f"  color: {_ACCENT};"
+                f"  color: {_link_hex(self)};"
                 "  font-size: 15px;"
                 f"  background: {_ACCENT_WASH};"
                 "}"
@@ -511,7 +565,8 @@ class DropArea(QLabel):
 
     def _reset_style(self):
         # A keyboard-focus ring in the accent colour, on either variant.
-        focus = f"#dropArea:focus {{ border-color: {_ACCENT}; color: {_ACCENT}; }}"
+        link = _link_hex(self)
+        focus = f"#dropArea:focus {{ border-color: {link}; color: {link}; }}"
         if self._compact:
             self.setStyleSheet(
                 "#dropArea {"
@@ -679,7 +734,7 @@ class TableSelector(QWidget):
         self._count.setStyleSheet(f"color: {_muted_hex(self)};")
         count_row.addWidget(self._count, 1)
         # For big schemas: review what's ticked without scrolling 1,000+ rows.
-        self._ticked_only = QCheckBox("Ticked &only")
+        self._ticked_only = QCheckBox("Ticked onl&y")
         self._ticked_only.setToolTip("List only the tables that are ticked.")
         self._ticked_only.toggled.connect(lambda _on: self._apply_filter_text(self._filter.text()))
         count_row.addWidget(self._ticked_only)
@@ -704,6 +759,7 @@ class TableSelector(QWidget):
         )
         self._related_btn.clicked.connect(lambda: self.related_requested.emit())
         self._related_direction = QComboBox()
+        self._related_direction.setAccessibleName("Related tables direction")
         for label, value in _FK_DIRECTION_CHOICES:
             self._related_direction.addItem(label, value)
         self._related_direction.setToolTip(
@@ -743,8 +799,10 @@ class TableSelector(QWidget):
         endpoints_row = QHBoxLayout()
         self._path_from = QComboBox()
         self._path_from.setToolTip("Starting table for the path.")
+        self._path_from.setAccessibleName("Path from table")
         self._path_to = QComboBox()
         self._path_to.setToolTip("Destination table for the path.")
+        self._path_to.setAccessibleName("Path to table")
         for combo in (self._path_from, self._path_to):
             combo.currentIndexChanged.connect(self._update_path_enabled)
         endpoints_row.addWidget(self._path_from, 1)
@@ -758,6 +816,8 @@ class TableSelector(QWidget):
         via_row = QHBoxLayout()
         via_label = QLabel("via")
         self._path_via = QComboBox()
+        via_label.setBuddy(self._path_via)
+        self._path_via.setAccessibleName("Path via table")
         self._path_via.setToolTip(
             "Optional: force the route through this table on the way."
         )
@@ -767,6 +827,7 @@ class TableSelector(QWidget):
 
         # Foreign keys are directed, so let the user say which way to walk them.
         self._path_direction = QComboBox()
+        self._path_direction.setAccessibleName("Path direction")
         for label, value in _FK_DIRECTION_CHOICES:
             self._path_direction.addItem(label, value)
         self._path_direction.setToolTip(_FK_DIRECTION_TOOLTIP)
@@ -782,7 +843,7 @@ class TableSelector(QWidget):
         path_box.addWidget(self._path_hint)
 
         path_row = QHBoxLayout()
-        self._path_btn = QPushButton("&Trace path")
+        self._path_btn = QPushButton("Trace path")
         self._path_btn.setToolTip(
             "Trace the shortest foreign-key path between the two chosen tables "
             "(through the optional Via stop) and render it."
@@ -1468,18 +1529,21 @@ class DiagramOptionsBar(QWidget):
         self._font.setValue(12)
         self._font.setSuffix(" px")
         self._font.valueChanged.connect(lambda _v: self.changed.emit())
-        self._fit_width = QCheckBox("Fit &width")
+        self._fit_width = QCheckBox("Fit to vie&w")
         self._fit_width.setChecked(True)
-        self._fit_width.setToolTip("Scale the diagram down to fit the view's width.")
+        self._fit_width.setToolTip(
+            "Size the diagram to the view: enlarged up to 150% when small, "
+            "shrunk when large. Exports keep the diagram's own size."
+        )
         self._show_comments = QCheckBox("Descriptions/&notes")
         self._show_comments.setChecked(True)
         self._show_comments.setToolTip(
             "Show each column's description, identity, computed and not-null notes."
         )
-        self._show_rel_labels = QCheckBox("Relationship &labels")
+        self._show_rel_labels = QCheckBox("Relationship la&bels")
         self._show_rel_labels.setChecked(True)
         self._show_rel_labels.setToolTip("Name the foreign-key column on each line.")
-        self._prefix_schema = QCheckBox("Prefix &schema name")
+        self._prefix_schema = QCheckBox("Prefi&x schema name")
         self._prefix_schema.setToolTip("Title tables as schema.Table instead of Table.")
         self._keys_only = QCheckBox("&Keys only")
         self._keys_only.setToolTip("Show only primary-key and foreign-key columns.")
@@ -1499,7 +1563,7 @@ class DiagramOptionsBar(QWidget):
         for label, widget in [
             ("&Orientation:", self._orientation),
             ("&Theme:", self._theme),
-            ("&Background:", self._background),
+            ("Back&ground:", self._background),
         ]:
             row1.addWidget(self._buddy(label, widget))
             row1.addWidget(widget)
@@ -1531,8 +1595,8 @@ class DiagramOptionsBar(QWidget):
         row2.setContentsMargins(0, 0, 0, 0)
         row2.setSpacing(8)
         for label, widget in [
-            ("S&pacing:", self._spacing),
-            ("&Font:", self._font),
+            ("Spac&ing:", self._spacing),
+            ("Font si&ze:", self._font),
         ]:
             row2.addWidget(self._buddy(label, widget))
             row2.addWidget(widget)
@@ -1728,17 +1792,17 @@ class RenderStatus(QWidget):
     def finish(self, ok: bool = True):
         self._timer.stop()
         if ok:
-            self._icon.setPixmap(status_icon("ok", _OK_GREEN))
+            self._icon.setPixmap(status_icon("ok", _ok_hex(self)))
             self._text.setText("Rendered")
         else:
-            self._icon.setPixmap(status_icon("warn", _ERR_ORANGE))
+            self._icon.setPixmap(status_icon("warn", _warn_hex(self)))
             self._text.setText("Render failed")
         self.setVisible(True)
 
     def stale(self, text: str):
         """The drawn diagram no longer matches the selection."""
         self._timer.stop()
-        self._icon.setPixmap(status_icon("stale", _ERR_ORANGE))
+        self._icon.setPixmap(status_icon("stale", _warn_hex(self)))
         self._text.setText(text)
         self.setVisible(True)
 
@@ -1840,6 +1904,8 @@ class MainWindow(QMainWindow):
         outer.addWidget(self._drop)
 
         self._status = StatusLabel("No file loaded.")
+        self._status.setTextInteractionFlags(Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
+        self._status.linkActivated.connect(self._on_status_link)
         self._status.setAccessibleName("Status")
         self._status.setStyleSheet(f"color: {_muted_hex(self)};")
         # AutoText (the default) renders the <span> success summary as rich text
@@ -1860,18 +1926,7 @@ class MainWindow(QMainWindow):
         self._onboard_hint.setStyleSheet(f"color: {_muted_hex(self)};")
         self._sample_btn = QPushButton("try a sample")
         self._sample_btn.setCursor(Qt.PointingHandCursor)
-        self._sample_btn.setStyleSheet(
-            "QPushButton {"
-            f"  color: {_ACCENT};"
-            "  border: 1px solid transparent;"
-            "  border-radius: 3px;"
-            "  background: transparent;"
-            "  padding: 0 2px;"
-            "  text-decoration: underline;"
-            "}"
-            f"QPushButton:hover {{ color: {_ACCENT_HOVER}; }}"
-            f"QPushButton:focus {{ border-color: {_ACCENT}; }}"
-        )
+        self._style_sample_btn()
         self._sample_btn.clicked.connect(self.load_sample)
         onboard_row.addWidget(self._onboard_hint)
         onboard_row.addWidget(self._sample_btn)
@@ -1972,7 +2027,7 @@ class MainWindow(QMainWindow):
         self._sql_top.setSpecialValueText("No limit")
         self._sql_top.setToolTip("SELECT TOP (n). 0 means no limit.")
         for text, widget in (
-            ("Start &from:", self._sql_root),
+            ("Start &table:", self._sql_root),
             ("&Join:", self._sql_join),
             ("Row l&imit:", self._sql_top),
         ):
@@ -1982,7 +2037,7 @@ class MainWindow(QMainWindow):
             sql_row.addWidget(label)
             sql_row.addWidget(widget)
         sql_row.addStretch(1)
-        self._copy_sql_btn = QPushButton("&Copy SQL")
+        self._copy_sql_btn = QPushButton("Copy S&QL")
         self._copy_sql_btn.setToolTip("Copy the query to the clipboard (Ctrl+Shift+Q).")
         self._copy_sql_btn.clicked.connect(self.copy_sql)
         sql_row.addWidget(self._copy_sql_btn)
@@ -2029,13 +2084,10 @@ class MainWindow(QMainWindow):
         self._divider.setFrameShape(QFrame.HLine)
         self._divider.setStyleSheet(f"color: {_line_hex(self)};")
         diagram_layout.addWidget(self._divider)
-        # A right-aligned render status (spinner → tick) just above the diagram.
-        status_row = QHBoxLayout()
-        status_row.setContentsMargins(4, 0, 6, 0)
-        status_row.addStretch(1)
-        status_row.addWidget(self._render_status)
-        status_row.addWidget(self._stop_btn)
-        diagram_layout.addLayout(status_row)
+        # The render status (spinner → tick) and Stop share the diagram's
+        # bottom strip with the zoom controls, instead of spending a row.
+        self._diagram_view.add_status_widget(self._render_status)
+        self._diagram_view.add_status_widget(self._stop_btn)
         diagram_layout.addWidget(self._diagram_view, 1)
         tabs.addTab(diagram_tab, "Rendered diagram")
         tabs.addTab(self._sql_tab, "SQL query")
@@ -2081,6 +2133,38 @@ class MainWindow(QMainWindow):
                 lambda _checked=False, k=key: self._export_as(k)
             )
             self._export_actions[key] = action
+        export_menu.addSeparator()
+        bg_menu = export_menu.addMenu("&Background")
+        self._export_bg_group = QActionGroup(self)
+        saved_bg = str(app_settings().value("export/background", "white"))
+        for key, label in EXPORT_BACKGROUNDS:
+            action = bg_menu.addAction(label)
+            action.setCheckable(True)
+            action.setData(key)
+            action.setChecked(key == saved_bg)
+            self._export_bg_group.addAction(action)
+        if self._export_bg_group.checkedAction() is None:
+            self._export_bg_group.actions()[0].setChecked(True)
+        self._export_bg_group.triggered.connect(
+            lambda a: app_settings().setValue("export/background", a.data())
+        )
+        scale_menu = export_menu.addMenu("PNG &scale")
+        self._png_scale_group = QActionGroup(self)
+        try:
+            saved_scale = float(app_settings().value("export/png_scale", 2.0))
+        except (TypeError, ValueError):
+            saved_scale = 2.0
+        for scale in PNG_SCALES:
+            action = scale_menu.addAction(f"{scale:g}×")
+            action.setCheckable(True)
+            action.setData(scale)
+            action.setChecked(abs(scale - saved_scale) < 1e-6)
+            self._png_scale_group.addAction(action)
+        if self._png_scale_group.checkedAction() is None:
+            self._png_scale_group.actions()[1].setChecked(True)
+        self._png_scale_group.triggered.connect(
+            lambda a: app_settings().setValue("export/png_scale", a.data())
+        )
         self._export_btn.setMenu(export_menu)
         _apply_primary_button_style(self._export_btn)
 
@@ -2225,7 +2309,7 @@ class MainWindow(QMainWindow):
                 QKeySequence("Ctrl+Shift+C"), schema_only=True)
         )
         diagram_menu.addAction(
-            act("Copy &SQL query", self.copy_sql,
+            act("Copy S&QL query", self.copy_sql,
                 QKeySequence("Ctrl+Shift+Q"), schema_only=True)
         )
         diagram_menu.addAction(
@@ -2350,8 +2434,23 @@ class MainWindow(QMainWindow):
         self._set_rendering(False)
         self._status.setText("Render cancelled.")
 
+    def _style_sample_btn(self):
+        link = _link_hex(self)
+        self._sample_btn.setStyleSheet(
+            "QPushButton {"
+            f"  color: {link};"
+            "  border: 1px solid transparent;"
+            "  border-radius: 3px;"
+            "  background: transparent;"
+            "  padding: 0 2px;"
+            "  text-decoration: underline;"
+            "}"
+            f"QPushButton:focus {{ border-color: {link}; }}"
+        )
+
     def retheme(self):
         """Re-apply palette-derived colours after a light/dark scheme change."""
+        self._style_sample_btn()
         muted = f"color: {_muted_hex(self)};"
         self._status.setStyleSheet(muted)
         self._onboard_hint.setStyleSheet(muted)
@@ -2610,6 +2709,7 @@ class MainWindow(QMainWindow):
 
         for btn in self._action_buttons:
             btn.setEnabled(True)
+        self._sync_export_enabled()
         for action in self._schema_actions:
             action.setEnabled(True)
 
@@ -2759,6 +2859,13 @@ class MainWindow(QMainWindow):
 
     def _render_selection(self):
         """Render the currently-selected tables (Mermaid source + diagram)."""
+        try:
+            self._render_selection_now()
+        finally:
+            if self._schema is not None:
+                self._sync_export_enabled()
+
+    def _render_selection_now(self):
         if self._schema is None:
             self._drawio_schema = None
             return
@@ -2811,8 +2918,16 @@ class MainWindow(QMainWindow):
             self._diagram_rendered = False
             self._render_status.clear()
             self._diagram_view.show_message(
-                "No tables selected.\n\n"
-                "Tick the tables you want on the left, then click “Render selected”."
+                (
+                    "No tables selected.\n\n"
+                    "Tick tables on the left; the diagram updates as you go."
+                    if total <= RENDER_WARN_LIMIT
+                    else f"{total:,} tables is too many to draw at once.\n\n"
+                    "Filter the list on the left and tick a starting table, then use "
+                    "“Add related tables” to grow the diagram around it, or open "
+                    "“Trace path between tables” to connect two tables. Saved "
+                    "selections load from the Table list menu."
+                )
             )
             self._status.setText(
                 f"Loaded {self._loaded_name} — {_plural(total, 'table')}. "
@@ -2949,25 +3064,21 @@ class MainWindow(QMainWindow):
     def save_mmd(self):
         if not self._ensure_current():
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Mermaid file", "schema.mmd", "Mermaid (*.mmd);;All files (*)"
-        )
+        path = self._save_path("Save Mermaid file", ".mmd", "Mermaid (*.mmd);;All files (*)")
         if path:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(self._mermaid_text)
-            self._status.setText(f"Saved {path}")
+            self._report_saved(path)
 
     def save_md(self):
         if not self._ensure_current():
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Markdown file", "schema.md", "Markdown (*.md);;All files (*)"
-        )
+        path = self._save_path("Save Markdown file", ".md", "Markdown (*.md);;All files (*)")
         if path:
             content = f"# Database ER Diagram\n\n```mermaid\n{self._mermaid_text.strip()}\n```\n"
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(content)
-            self._status.setText(f"Saved {path}")
+            self._report_saved(path)
 
     def save_table_selection_toml(self):
         if self._schema is None:
@@ -3193,22 +3304,6 @@ class MainWindow(QMainWindow):
         )
         return answer == QMessageBox.Yes
 
-    def _png_export_options(self) -> tuple[float, str] | None:
-        scale, ok = QInputDialog.getDouble(
-            self,
-            "PNG scale",
-            "Scale multiplier (1.0–10.0):",
-            2.0,
-            1.0,
-            10.0,
-            1,
-        )
-        if not ok:
-            return None
-        # The Background option (White / Transparent / Dark) already says what
-        # the user wants behind the diagram, so PNG uses it as-is.
-        return float(scale), self._options_bar.background_value()
-
     @staticmethod
     def _remembered_export_kind() -> str:
         kind = str(app_settings().value("export/format", "png"))
@@ -3224,6 +3319,67 @@ class MainWindow(QMainWindow):
         self._export_kind = kind
         app_settings().setValue("export/format", kind)
         self._sync_export_label()
+
+    def export_background(self) -> str:
+        action = self._export_bg_group.checkedAction()
+        return str(action.data()) if action is not None else "white"
+
+    def png_scale(self) -> float:
+        action = self._png_scale_group.checkedAction()
+        return float(action.data()) if action is not None else 2.0
+
+    def _export_style(self) -> RenderStyle:
+        """How the exported diagram is drawn: the view's style, re-lit for paper.
+
+        White/Transparent swap a dark theme for the default one (dark-theme
+        text is light and vanishes on a white page); Match keeps the view.
+        """
+        view = self._options_bar.render_style()
+        choice = self.export_background()
+        if choice == "match":
+            return view
+        return dataclasses.replace(
+            view,
+            background="#ffffff" if choice == "white" else "transparent",
+            theme="default" if view.theme == "dark" else view.theme,
+        )
+
+    def _save_path(self, title: str, ext: str, file_filter: str) -> str:
+        """Ask where to save, defaulting to "<spreadsheet name>.<ext>" in the
+        folder used last time; remembers the folder chosen."""
+        stem = os.path.splitext(self._loaded_name)[0] or "diagram"
+        folder = str(app_settings().value("export/dir", "") or "")
+        if not os.path.isdir(folder):
+            folder = ""
+        default = os.path.join(folder, f"{stem}{ext}") if folder else f"{stem}{ext}"
+        path, _ = QFileDialog.getSaveFileName(self, title, default, file_filter)
+        if path:
+            app_settings().setValue("export/dir", os.path.dirname(path))
+        return path
+
+    def _report_saved(self, path: str, note: str = ""):
+        """Say where the file went, with a link that opens its folder."""
+        self._last_saved = path
+        self._status.setText(
+            f"Saved {html.escape(os.path.basename(path))}{html.escape(note)} · "
+            f'<a href="show-in-folder" style="color:{_link_hex(self)}">Show in folder</a>'
+        )
+
+    def _on_status_link(self, href: str):
+        if href == "show-in-folder" and getattr(self, "_last_saved", ""):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(self._last_saved)))
+
+    def _sync_export_enabled(self):
+        """Export/Preview/Mermaid only when there's a selection to output."""
+        has_tables = bool(self._drawio_schema is not None and self._drawio_schema.tables)
+        for widget in (self._export_btn, self._preview_btn, self._mermaid_btn):
+            widget.setEnabled(has_tables)
+        self._export_btn.setToolTip(
+            "Export the diagram. Use the arrow to pick another format, the "
+            "background, or the PNG scale."
+            if has_tables
+            else "Tick some tables first; there's nothing to export yet."
+        )
 
     def _export_as(self, kind: str):
         self.set_export_format(kind)
@@ -3242,87 +3398,66 @@ class MainWindow(QMainWindow):
     def export_diagram(self):
         if self._rendering or not self._ensure_current():
             return
-
-        render_started = False
-        schema = None
         export_kind = self._export_kind
-        file_specs = {key: rest for key, _label, *rest in EXPORT_FORMATS}
-        if export_kind not in file_specs:
+        specs = {key: rest for key, _label, *rest in EXPORT_FORMATS}
+        if export_kind not in specs:
             return
 
-        rendered_export_kinds = {"pdf", "png", "svg"}
+        schema = None
         if export_kind in {"drawio", "excalidraw"}:
             schema = self._schema_for_export()
-            if schema is None:
+            if schema is None or not self._confirm_large_export(export_kind, schema):
                 return
-            if not self._confirm_large_export(export_kind, schema):
-                return
-        elif export_kind in rendered_export_kinds and self._nothing_to_export():
+        elif self._nothing_to_export():
             return
 
-        png_options: tuple[float, str] | None = None
-        if export_kind == "png":
-            png_options = self._png_export_options()
-            if png_options is None:
-                return
-
-        title, default_name, file_filter = file_specs[export_kind]
-        path, _ = QFileDialog.getSaveFileName(self, title, default_name, file_filter)
+        title, default_name, file_filter = specs[export_kind]
+        path = self._save_path(title, os.path.splitext(default_name)[1], file_filter)
         if not path:
             return
 
+        style = self._export_style()
         try:
-            if export_kind == "drawio":
-                dark = self._options_bar.render_style().theme == "dark"
-                content = schema_to_drawio(schema, dark=dark)
+            if export_kind in {"drawio", "excalidraw"}:
+                build = schema_to_drawio if export_kind == "drawio" else schema_to_excalidraw
+                content = build(schema, dark=style.theme == "dark")
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(content)
-                self._status.setText(f"Saved Draw.io diagram to {path}")
+                self._report_saved(path)
                 return
-
-            if export_kind == "excalidraw":
-                dark = self._options_bar.render_style().theme == "dark"
-                content = schema_to_excalidraw(schema, dark=dark)
-                with open(path, "w", encoding="utf-8") as handle:
-                    handle.write(content)
-                self._status.setText(f"Saved Excalidraw scene to {path}")
-                return
-
-            if export_kind == "svg":
-                self._begin_render("Rendering diagram to SVG…")
-                render_started = True
-                self._diagram_view.save_svg(path)
-                self._end_render()
-                render_started = False
-                self._status.setText(f"Saved rendered diagram to {path}")
-                return
-
-            if export_kind == "pdf":
-                background = self._options_bar.background_value()
-                if background == "transparent":
-                    background = "white"
-                self._begin_render("Rendering diagram to PDF…")
-                render_started = True
-                self._diagram_view.save_pdf(path, background=background)
-                self._end_render()
-                render_started = False
-                self._status.setText(f"Saved rendered diagram to {path}")
-                return
-
-            scale, background = png_options
-            self._begin_render("Rendering diagram to PNG…")
-            render_started = True
-            used = self._diagram_view.save_png(path, scale=scale, background=background)
-            self._end_render()
-            render_started = False
-            note = ""
-            if used < scale - 1e-6:
-                note = f" (scaled to {used:.2f}× to keep it within size limits)"
-            self._status.setText(f"Saved rendered diagram to {path}{note}")
+            note = self._export_rendered(export_kind, path, style)
+            self._report_saved(path, note)
         except Exception as exc:  # noqa: BLE001
-            if render_started:
-                self._end_render()
             QMessageBox.critical(self, "Could not save diagram", str(exc))
+
+    def _export_rendered(self, kind: str, path: str, style: RenderStyle) -> str:
+        """Save an SVG/PDF/PNG drawn in ``style``; returns a note for the status.
+
+        If the export style differs from the view (e.g. a white export of a
+        dark diagram), the diagram is redrawn for the capture and the view is
+        put back afterwards.
+        """
+        view_style = self._options_bar.render_style()
+        relit = style != view_style
+        self._begin_render(f"Rendering diagram to {kind.upper()}…")
+        try:
+            if relit:
+                self._diagram_view.set_diagram(self._mermaid_text, style)
+            if kind == "svg":
+                self._diagram_view.save_svg(path)
+                return ""
+            if kind == "pdf":
+                self._diagram_view.save_pdf(path, background=style.background)
+                return ""
+            scale = self.png_scale()
+            used = self._diagram_view.save_png(path, scale=scale, background=style.background)
+            if used < scale - 1e-6:
+                return f" (scaled to {used:.2f}× to stay within size limits)"
+            return ""
+        finally:
+            if relit:
+                self._diagram_view.set_diagram(self._mermaid_text, view_style)
+            self._end_render()
 
     # -- testing helpers ---------------------------------------------------
     def capture(self, path: str) -> str:
