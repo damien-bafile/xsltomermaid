@@ -1075,3 +1075,34 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as directory:
         test_diagram_screenshot(Path(directory))
         print("PASS  test_diagram_screenshot")
+
+
+def test_help_menu_update_check_reports_both_outcomes(monkeypatch):
+    from xsltomermaid.updates import Release
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    help_menu = next(
+        a.menu() for a in window.menuBar().actions() if a.text() == "&Help"
+    )
+    labels = [a.text() for a in help_menu.actions()]
+    assert labels == ["Check for &updates…", "&About"]
+
+    shown: list[str] = []
+    opened: list[str] = []
+    monkeypatch.setattr(
+        app_module.QMessageBox, "information", lambda *a: shown.append(a[1])
+    )
+    monkeypatch.setattr(
+        app_module.QMessageBox, "exec", lambda box: shown.append(box.windowTitle())
+    )
+    monkeypatch.setattr(app_module.webbrowser, "open", opened.append)
+
+    current = app_module.__version__
+    window._on_update_found(Release(f"v{current}", f"v{current}", "https://x/same"))
+    window._on_update_found(Release("v999.0.0", "v999.0.0", "https://x/new"))
+    window._on_update_failed("Couldn't reach GitHub (offline).")
+    assert shown == ["No updates available", "Update available", "Couldn't check for updates"]
+    assert opened == []  # nothing opens unless the user clicks the button
+    assert window._status.text() == "Couldn't check for updates."
+    del app

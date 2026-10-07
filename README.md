@@ -34,6 +34,10 @@ DefaultValue | ComputedDefinition | Collation | Description
 9. Shows the diagram's **zoom percentage**; use **Ctrl+scroll** to zoom.
 10. Includes a right-docked, copyable **SQL Server schema query** that produces the
     expected columns. It is **hidden by default**; open it via **View → T-SQL statement**.
+11. **Help → Check for updates…** asks GitHub for the latest release and, if it's
+    newer than the running version, offers to open its download page. The app
+    makes no network calls unless you choose this. **Help → About** shows the
+    running version.
 
 Foreign-key references are parsed flexibly — `dbo.Customer.CustomerID`,
 `Customer.CustomerID`, `Customer(CustomerID)`, and a bare `Customer` all resolve to
@@ -125,6 +129,8 @@ erDiagram
 | `src/xsltomermaid/main.py` | PySide6 GUI with drag-and-drop and the `--screenshot*` CLI modes. |
 | `src/xsltomermaid/diagram_view.py` | Renders the Mermaid diagram in a `QWebEngineView` and exports it as SVG/PNG. |
 | `src/xsltomermaid/services.py` | Application services for coordinating schema import workflows. |
+| `src/xsltomermaid/updates.py` | Checks the GitHub API for a newer release (Help → Check for updates). |
+| `src/xsltomermaid/__init__.py` | Holds `__version__`, the single source of the app version. |
 | `src/xsltomermaid/assets/` | Packaged application icons. |
 | `src/xsltomermaid/vendor/mermaid.min.js` | Locally bundled Mermaid (MIT) so rendering works offline. |
 | `src/xsltomermaid/make_sample.py` | Writes a small `sample_schema.xlsx` for testing. |
@@ -173,7 +179,9 @@ Two GitHub Actions workflows build the `.exe` on a Windows runner:
   which requires a GitHub login and expires after 90 days.
 - **Release** (`.github/workflows/release.yml`) — runs when you push a version tag
   and publishes the exe as a **GitHub Release** asset with a permanent, no-login
-  download link:
+  download link. First set `__version__` in `src/xsltomermaid/__init__.py` to
+  match the tag (`pyproject.toml` reads it from there, and the in-app update
+  check compares against it), run `uv lock`, and merge that. Then:
 
   ```bash
   git tag v0.1.0
