@@ -154,6 +154,12 @@ def _line_hex(widget) -> str:
     return widget.palette().color(QPalette.Mid).name()
 
 
+def _control_border_hex(widget) -> str:
+    """A border that marks a control's edge: at least 3:1 with the window."""
+    dark = widget.palette().color(QPalette.Window).lightness() < 128
+    return "#7a7e86" if dark else "#8a8a8a"  # 3.39:1 / 3.11:1
+
+
 def _text_hex(widget) -> str:
     """The normal (full-contrast) text colour for the current palette."""
     return widget.palette().color(QPalette.WindowText).name()
@@ -182,9 +188,9 @@ def _dark_palette() -> QPalette:
     p.setColor(QPalette.ButtonText, text)
     p.setColor(QPalette.BrightText, QColor(0xFF, 0x6B, 0x6B))
     p.setColor(QPalette.Link, QColor(_ACCENT))
-    p.setColor(QPalette.Highlight, QColor(_ACCENT))
+    p.setColor(QPalette.Highlight, QColor(_ACCENT_FILL))
     p.setColor(QPalette.HighlightedText, QColor(0xFF, 0xFF, 0xFF))
-    p.setColor(QPalette.PlaceholderText, disabled)
+    p.setColor(QPalette.PlaceholderText, QColor(0x90, 0x94, 0x9C))  # 5.4:1 on Base
     p.setColor(QPalette.Mid, QColor(0x4A, 0x4D, 0x54))
     for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
         p.setColor(QPalette.Disabled, role, disabled)
@@ -204,6 +210,7 @@ def _light_palette(app) -> QPalette:
     # Disabled inputs (the empty table list) otherwise fall back to the old
     # beige; keep them a quiet off-white.
     p.setColor(QPalette.Disabled, QPalette.Base, QColor(0xF8, 0xF8, 0xF8))
+    p.setColor(QPalette.PlaceholderText, QColor(0x6B, 0x6B, 0x6B))  # 5.3:1 on white
     return p
 
 
@@ -223,7 +230,7 @@ def apply_system_palette(app) -> bool:
     # One accent everywhere: without this, Windows 11 tints checkboxes with the
     # system accent (often lilac) while the app's buttons are blue.
     accent = QColor(_ACCENT)
-    palette.setColor(QPalette.Highlight, accent)
+    palette.setColor(QPalette.Highlight, QColor(_ACCENT_FILL))
     palette.setColor(QPalette.HighlightedText, QColor(0xFF, 0xFF, 0xFF))
     if hasattr(QPalette, "Accent"):  # Qt 6.6+
         palette.setColor(QPalette.Accent, accent)

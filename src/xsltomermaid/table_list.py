@@ -140,7 +140,8 @@ class _TableRowDelegate(QStyledItemDelegate):
             painter.drawText(right.adjusted(0, 0, -dot, 0), Qt.AlignRight | Qt.AlignVCenter, text)
         if drawn:
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(_ACCENT))
+            # Accent on the accent selection vanished; use the selected text colour.
+            painter.setBrush(muted if selected else QColor(_ACCENT))
             r = 3.5
             cy = right.center().y()
             painter.drawEllipse(QPointF(right.right() - r, cy), r, r)

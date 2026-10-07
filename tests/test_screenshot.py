@@ -1219,7 +1219,7 @@ def test_export_format_is_remembered(tmp_path, monkeypatch):
     window = app_module.MainWindow()
     assert window._export_kind == "png"  # default
     window.set_export_format("svg")
-    assert window._export_btn.text() == "&Export .svg…"
+    assert window._export_btn.text() == "&Export SVG…"
     window._diagram_view.cleanup()
     again = app_module.MainWindow()
     assert again._export_kind == "svg"
@@ -1974,6 +1974,26 @@ def test_state_chips_and_undo_draw_restores_keys_only(tmp_path):
     bar._audit_chip.click()
     assert not bar.hide_audit_links() and bar._audit_chip.isHidden()
     assert not window._map_view._hide.isChecked()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_polish_contrast_names_and_zoom_shortcut(tmp_path):
+    from PySide6.QtGui import QKeySequence, QPalette
+
+    app = QApplication.instance() or QApplication([])
+    app_module.apply_system_palette(app)
+    assert app.palette().color(QPalette.Highlight).name() == app_module._ACCENT_FILL
+    window = app_module.MainWindow()
+    assert window._table.accessibleName() == "Extracted data"
+    window.set_export_format("png")
+    assert window._export_btn.text() == "&Export PNG…"
+    assert window._export_btn.accessibleName() == "Export PNG…"
+    zoom_in = next(a for a in window.menuBar().actions()[1].menu().actions()
+                   if a.text() == "Zoom &in")
+    assert QKeySequence("Ctrl+=") in zoom_in.shortcuts()
+    border = app_module._control_border_hex(window)
+    assert border in window._map_btn.styleSheet()
     window._diagram_view.cleanup()
     del app
 
