@@ -43,11 +43,18 @@ DefaultValue | ComputedDefinition | Collation | Description
    next launch. Theme and background still follow the OS's light/dark mode.
    **Ticked only** under the table list shows just the selection, which helps
    on schemas with thousands of tables.
-10. Shows the diagram's **zoom percentage**. Zoom with **Ctrl+scroll** or
+10. Writes a **T-SQL query** in the **SQL query** tab: a `SELECT` over the
+    diagram's tables, joined on their foreign keys (composite keys included),
+    listing the columns chosen in the Columns tab. You choose the starting table,
+    `INNER` or `LEFT` joins, and a `TOP (n)` row limit. Anything that can't be a
+    clean join is written as a `--` comment: a second foreign key between the
+    same tables, a self-reference, unknown join columns, or tables with no
+    foreign-key path. **Copy SQL** or **Ctrl+Shift+Q** copies it.
+11. Shows the diagram's **zoom percentage**. Zoom with **Ctrl+scroll** or
    **Ctrl+= / Ctrl+- / Ctrl+0** (View menu).
-11. Includes a right-docked, copyable **SQL Server schema query** that produces the
+12. Includes a right-docked, copyable **SQL Server schema query** that produces the
     expected columns. It is **hidden by default**; open it via **View → T-SQL statement**.
-12. **Help → Check for updates…** asks GitHub for the latest release and, if it's
+13. **Help → Check for updates…** asks GitHub for the latest release and, if it's
     newer than the running version, offers to open its download page. The app
     makes no network calls unless you choose this. **Help → About** shows the
     running version.
@@ -142,6 +149,7 @@ erDiagram
 | `src/xsltomermaid/main.py` | PySide6 GUI with drag-and-drop and the `--screenshot*` CLI modes. |
 | `src/xsltomermaid/diagram_view.py` | Renders the Mermaid diagram in a `QWebEngineView` and exports it as SVG/PNG. |
 | `src/xsltomermaid/services.py` | Application services for coordinating schema import workflows. |
+| `src/xsltomermaid/sql_query.py` | Writes the T-SQL `SELECT … JOIN` for the SQL query tab. No Qt required. |
 | `src/xsltomermaid/updates.py` | Checks the GitHub API for a newer release (Help → Check for updates). |
 | `src/xsltomermaid/__init__.py` | Holds `__version__`, the single source of the app version. |
 | `src/xsltomermaid/assets/` | Packaged application icons. |

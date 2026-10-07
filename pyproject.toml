@@ -24,6 +24,7 @@ xsltomermaid-sample = "xsltomermaid.make_sample:main"
 dev = [
     "pytest>=8.0",
     "pyinstaller>=6.6",
+    "sqlglot>=30.21.0",
 ]
 
 [tool.uv]

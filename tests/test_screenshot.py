@@ -1323,3 +1323,27 @@ def test_extracted_data_tab_explains_the_format_until_a_file_loads(tmp_path):
     assert window._table_stack.currentWidget() is window._table
     window._diagram_view.cleanup()
     del app
+
+
+def test_sql_tab_follows_the_diagram_and_its_options(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    sample = tmp_path / "s.xlsx"
+    _ensure_sample(str(sample))
+    window.load_file(str(sample))
+    sql = window._sql_view.toPlainText()
+    assert sql.startswith("SELECT TOP (100)") and "JOIN" in sql
+    assert window._tabs.tabText(window._tabs.count() - 1) == "SQL query"
+
+    window._sql_root.setCurrentText("OrderLine")
+    window._sql_join.setCurrentIndex(window._sql_join.findData("LEFT"))
+    window._sql_top.setValue(0)
+    sql = window._sql_view.toPlainText()
+    assert sql.startswith("SELECT\n") and "FROM [dbo].[OrderLine]" in sql and "LEFT JOIN" in sql
+
+    copied = []
+    monkeypatch.setattr(app_module.QGuiApplication.clipboard(), "setText", copied.append)
+    window.copy_sql()
+    assert copied == [sql]
+    window._diagram_view.cleanup()
+    del app

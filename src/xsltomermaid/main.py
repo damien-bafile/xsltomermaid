@@ -134,6 +134,7 @@ from .excel_to_mermaid import (
 from .make_sample import write_sample
 from .selection_preset import dump_selection_toml, load_selection_toml
 from .services import SchemaImportService
+from .sql_query import generate_select
 from . import __version__
 from .updates import (
     RELEASES_PAGE,
@@ -1948,6 +1949,60 @@ class MainWindow(QMainWindow):
         )
         tabs.addTab(self._mermaid_view, "Mermaid source")
 
+        # SQL query: a T-SQL SELECT over the diagram's tables, joined on their
+        # foreign keys, listing the columns chosen in the Columns tab.
+        sql_tab = QWidget()
+        sql_layout = QVBoxLayout(sql_tab)
+        sql_layout.setContentsMargins(8, 8, 8, 8)
+        sql_layout.setSpacing(6)
+        sql_row = QHBoxLayout()
+        sql_row.setSpacing(8)
+        self._sql_root = QComboBox()
+        self._sql_root.setToolTip("The table in FROM; joins branch out from it.")
+        self._sql_join = QComboBox()
+        self._sql_join.addItem("INNER JOIN", "INNER")
+        self._sql_join.addItem("LEFT JOIN", "LEFT")
+        self._sql_join.setToolTip(
+            "INNER keeps only rows that match in every table; LEFT keeps every "
+            "row of the start table."
+        )
+        self._sql_top = QSpinBox()
+        self._sql_top.setRange(0, 1_000_000)
+        self._sql_top.setValue(100)
+        self._sql_top.setSpecialValueText("No limit")
+        self._sql_top.setToolTip("SELECT TOP (n). 0 means no limit.")
+        for text, widget in (
+            ("Start &from:", self._sql_root),
+            ("&Join:", self._sql_join),
+            ("Row l&imit:", self._sql_top),
+        ):
+            label = QLabel(text)
+            label.setBuddy(widget)
+            widget.setAccessibleName(text.replace("&", "").rstrip(":"))
+            sql_row.addWidget(label)
+            sql_row.addWidget(widget)
+        sql_row.addStretch(1)
+        self._copy_sql_btn = QPushButton("&Copy SQL")
+        self._copy_sql_btn.setToolTip("Copy the query to the clipboard (Ctrl+Shift+Q).")
+        self._copy_sql_btn.clicked.connect(self.copy_sql)
+        sql_row.addWidget(self._copy_sql_btn)
+        sql_layout.addLayout(sql_row)
+        self._sql_view = QPlainTextEdit()
+        self._sql_view.setReadOnly(True)
+        self._sql_view.setFont(QFont("Menlo, Consolas, monospace"))
+        self._sql_view.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self._sql_view.setAccessibleName("SQL query")
+        self._sql_view.setPlaceholderText(
+            "A SELECT joining the diagram's tables on their foreign keys "
+            "appears here once tables are selected."
+        )
+        sql_layout.addWidget(self._sql_view, 1)
+        self._sql_tab = sql_tab  # added after the diagram tab, below
+        self._sql_schema: Schema | None = None
+        self._sql_root.currentIndexChanged.connect(lambda _i: self._refresh_sql())
+        self._sql_join.currentIndexChanged.connect(lambda _i: self._refresh_sql())
+        self._sql_top.valueChanged.connect(lambda _v: self._refresh_sql())
+
         # Rendered diagram tab = an options bar above the actual diagram view.
         self._diagram_view = DiagramView()
         self._options_bar = DiagramOptionsBar()
@@ -1983,6 +2038,7 @@ class MainWindow(QMainWindow):
         diagram_layout.addLayout(status_row)
         diagram_layout.addWidget(self._diagram_view, 1)
         tabs.addTab(diagram_tab, "Rendered diagram")
+        tabs.addTab(self._sql_tab, "SQL query")
 
         self._tabs = tabs
         self._diagram_tab = diagram_tab
@@ -2167,6 +2223,10 @@ class MainWindow(QMainWindow):
         diagram_menu.addAction(
             act("&Copy Mermaid", self.copy_mermaid,
                 QKeySequence("Ctrl+Shift+C"), schema_only=True)
+        )
+        diagram_menu.addAction(
+            act("Copy &SQL query", self.copy_sql,
+                QKeySequence("Ctrl+Shift+Q"), schema_only=True)
         )
         diagram_menu.addAction(
             act("&Export diagram…", self.export_diagram,
@@ -2738,6 +2798,7 @@ class MainWindow(QMainWindow):
             filter_columns(filtered, self._columns.excluded_pairs())
         )
         self._drawio_schema = final
+        self._set_sql_schema(final)
 
         mermaid_text = generate_mermaid(final, self._options_bar.diagram_options())
         self._mermaid_text = mermaid_text
@@ -2843,6 +2904,42 @@ class MainWindow(QMainWindow):
         return "".join(ch for ch in str(text).lower() if ch.isalnum())
 
     # -- actions -----------------------------------------------------------
+    def _set_sql_schema(self, schema: Schema):
+        """New tables for the SQL tab: refill Start from, keeping the choice."""
+        self._sql_schema = schema
+        current = self._sql_root.currentText()
+        names = [t.name for t in schema.tables]
+        self._sql_root.blockSignals(True)
+        self._sql_root.clear()
+        self._sql_root.addItems(names)
+        if current in names:
+            self._sql_root.setCurrentText(current)
+        self._sql_root.blockSignals(False)
+        self._refresh_sql()
+
+    def _refresh_sql(self):
+        if self._sql_schema is None or not self._sql_schema.tables:
+            self._sql_view.setPlainText("")
+            return
+        self._sql_view.setPlainText(
+            generate_select(
+                self._sql_schema,
+                root=self._sql_root.currentText() or None,
+                join=self._sql_join.currentData(),
+                top=self._sql_top.value(),
+            )
+        )
+
+    def copy_sql(self):
+        if not self._ensure_current():
+            return
+        text = self._sql_view.toPlainText()
+        if not text:
+            self._status.setText("Select some tables first; there's no query yet.")
+            return
+        QGuiApplication.clipboard().setText(text)
+        self._status.setText("SQL query copied to clipboard.")
+
     def copy_mermaid(self):
         if not self._ensure_current():
             return

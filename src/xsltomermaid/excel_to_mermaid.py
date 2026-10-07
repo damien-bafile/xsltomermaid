@@ -149,6 +149,11 @@ class Relationship:
     parent_table: str  # referenced (the "one" side)
     child_table: str  # holds the foreign key (the "many" side)
     label: str = ""
+    # The join, column for column: child_columns[i] references
+    # parent_columns[i]. Empty, or of different lengths, when the sheet doesn't
+    # say which parent column is referenced (e.g. a bare "Customer").
+    child_columns: tuple[str, ...] = ()
+    parent_columns: tuple[str, ...] = ()
 
 
 @dataclass
@@ -411,15 +416,31 @@ def _derive_relationships(
     seen: set[tuple[str, str, str]] = set()
     relationships: list[Relationship] = []
 
-    def add(parent_label: str, child: str, columns: list[Column]) -> None:
+    def add(
+        parent_label: str, child: str, columns: list[Column], refs: list[str]
+    ) -> None:
         label = ", ".join(c.name for c in columns)
         key = (parent_label.lower(), child.lower(), label.lower())
         if key in seen:
             return
         seen.add(key)
         relationships.append(
-            Relationship(parent_table=parent_label, child_table=child, label=label)
+            Relationship(
+                parent_table=parent_label,
+                child_table=child,
+                label=label,
+                child_columns=tuple(c.name for c in columns),
+                parent_columns=tuple(refs),
+            )
         )
+
+    def canonical(parent: Table | None, name: str) -> str:
+        """The parent's own spelling of a referenced column, when it has one."""
+        if parent is not None:
+            for c in parent.columns:
+                if c.name.lower() == name.lower():
+                    return c.name
+        return name
 
     for table in tables:
         # Composite-key candidates, per parent: FK columns in column order
@@ -427,9 +448,12 @@ def _derive_relationships(
         pending: dict[str, list[tuple[Column, str]]] = {}
         labels: dict[str, str] = {}
 
+        parents: dict[str, Table | None] = {}
+
         def flush(parent_key: str) -> None:
-            for column, _ in pending.pop(parent_key, []):
-                add(labels[parent_key], table.name, [column])
+            parent = parents[parent_key]
+            for column, ref in pending.pop(parent_key, []):
+                add(labels[parent_key], table.name, [column], [canonical(parent, ref)])
 
         for column in table.columns:
             if not column.foreign_key_reference:
@@ -444,10 +468,18 @@ def _derive_relationships(
             ref = ref_columns[0].lower() if len(ref_columns) == 1 else ""
 
             if len(pk) < 2 or ref not in pk:
-                add(parent_label, table.name, [column])
+                if ref_columns:
+                    refs = [canonical(parent, r) for r in ref_columns]
+                else:
+                    # A bare "Table" reference means its primary key — when
+                    # that key is a single column, the join is unambiguous.
+                    keys = [c.name for c in parent.columns if c.is_primary_key] if parent else []
+                    refs = keys if len(keys) == 1 else []
+                add(parent_label, table.name, [column], refs)
                 continue
 
             labels[parent_key] = parent_label
+            parents[parent_key] = parent
             group = pending.setdefault(parent_key, [])
             if any(r == ref for _, r in group):
                 # The same key column again: a second FK has started, so the
@@ -456,7 +488,13 @@ def _derive_relationships(
                 group = pending.setdefault(parent_key, [])
             group.append((column, ref))
             if {r for _, r in group} == pk:
-                add(parent_label, table.name, [c for c, _ in pending.pop(parent_key)])
+                done = pending.pop(parent_key)
+                add(
+                    parent_label,
+                    table.name,
+                    [c for c, _ in done],
+                    [canonical(parent, r) for _, r in done],
+                )
 
         for parent_key in list(pending):
             flush(parent_key)
