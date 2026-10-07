@@ -579,6 +579,7 @@ class MainWindow(QMainWindow):
         # The list is built after the canvas, so look it up when the signal fires.
         self._map_view.selection_changed.connect(lambda names: self._selector.mark_map_selection(names))
         self._map_view.show_diagram_requested.connect(lambda: self.show_map(False))
+        self._map_view.export_requested.connect(self.export_map)
         self._map_view._hide.toggled.connect(self._options_bar._hide_audit.setChecked)
         self._options_bar._hide_audit.toggled.connect(self._sync_map_hide_audit)
         self._audit_share = 0.0
@@ -1423,8 +1424,9 @@ class MainWindow(QMainWindow):
         # shape of the schema shows and a region can be picked to draw.
         if len(names) <= AUTO_RENDER_LIMIT:
             self._selector.check_all()
+        # The map first, so the status written by the render can point at it.
+        self.show_map(len(names) > AUTO_RENDER_LIMIT)
         self._render_selection()
-        self.show_map(len(names) > RENDER_WARN_LIMIT)
 
         # Foreign keys pointing at tables not in this sheet draw no relationship;
         # flag them so a missing edge isn't a silent surprise.
@@ -1714,7 +1716,9 @@ class MainWindow(QMainWindow):
                 "Rendered exports require PySide6 WebEngine."
             )
             return
-        self._diagram_view.set_diagram(mermaid_text, self._options_bar.render_style())
+        self._diagram_view.set_diagram(
+            mermaid_text, self._options_bar.render_style(), self._hub_entity(final)
+        )
         # A brighter, scannable success summary: dim the "Loaded <file> —" lead
         # (the name is already in the file chip) and give the counts full contrast.
         stats = (
@@ -1733,6 +1737,17 @@ class MainWindow(QMainWindow):
             f'{html.escape(self._loaded_name)} —</span> '
             f'<span style="color:{_text_hex(self)}">{stats}</span>'
         )
+
+    def _hub_entity(self, schema: Schema) -> str:
+        """The entity id of the drawn table with the most drawn links."""
+        degree: dict[str, int] = {}
+        for rel in schema.relationships:
+            for name in {rel.parent_table, rel.child_table}:
+                degree[name] = degree.get(name, 0) + 1
+        if not degree:
+            return ""
+        hub = max(sorted(degree), key=lambda name: degree[name])
+        return next((e for e, t in self._entity_to_table.items() if t == hub), "")
 
     def _populate_table(self, rows: list[dict]):
         # Build a plain 2-D grid of strings (loose header matching so extra or
@@ -2156,6 +2171,22 @@ class MainWindow(QMainWindow):
             font = action.font()
             font.setBold(key == self._export_kind)
             action.setFont(font)
+
+    def export_map(self):
+        """Save the schema map as a PNG or SVG image."""
+        if self._map_view.schema_map() is None:
+            return
+        path = self._save_path(
+            "Save schema map", "-map.png", "PNG image (*.png);;SVG image (*.svg)"
+        )
+        if not path:
+            return
+        try:
+            self._map_view.export_image(path)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Couldn't save the map", str(exc))
+            return
+        self._report_saved(path)
 
     def export_diagram(self):
         if self._rendering or not self._ensure_current():

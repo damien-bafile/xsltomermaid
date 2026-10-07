@@ -263,7 +263,21 @@ def _shell_html() -> str:
       e.preventDefault();
     }
   });
-  window.renderDiagram = function (text, config, background, canvas, fit) {
+  // When the diagram is bigger than the view even at the fit floor, start
+  // with the busiest table in the middle rather than the top-left corner.
+  window.centreOnEntity = function (entityId) {
+    var svg = document.querySelector('#container svg');
+    if (!entityId || !svg) return false;
+    var r = svg.getBoundingClientRect();
+    if (r.width <= window.innerWidth && r.height <= window.innerHeight) return false;
+    var g = document.querySelector('#container g[id^="entity-' + entityId + '-"]');
+    if (!g) return false;
+    // A table taller than the view shows its title first, not its middle.
+    var tall = g.getBoundingClientRect().height > window.innerHeight - 24;
+    g.scrollIntoView({ block: tall ? 'start' : 'center', inline: 'center' });
+    return true;
+  };
+  window.renderDiagram = function (text, config, background, canvas, fit, focus) {
     var seq = ++window._renderSeq;
     window._mermaidDone = false;
     window._mermaidError = null;
@@ -277,6 +291,7 @@ def _shell_html() -> str:
         document.getElementById('container').innerHTML = res.svg;
         window._fit = fit !== false;
         window.fitDiagram(false);
+        window.centreOnEntity(focus);
         window._mermaidDone = true;
       }).catch(function (e) {
         if (seq !== window._renderSeq) return;
@@ -916,6 +931,7 @@ class DiagramView(QWidget):
         self._shell_loaded = False
         self._loading_shell = False
         self._pending_render: tuple[str, RenderStyle, int] | None = None
+        self._focus_entity = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1050,14 +1066,19 @@ class DiagramView(QWidget):
         self._update_zoom_label()
 
     # -- rendering ---------------------------------------------------------
-    def set_diagram(self, mermaid_text: str, style: RenderStyle | None = None):
+    def set_diagram(
+        self, mermaid_text: str, style: RenderStyle | None = None, focus: str = ""
+    ):
         """Render a diagram into the view (async).
 
         Draws into the already-loaded shell via a JS call; only the first render
         (or the first after a message page) loads the shell + mermaid.js.
+        ``focus`` is an entity id to centre on when the diagram overflows the
+        view at the smallest automatic fit.
         """
         if not self.available or self._view is None or self._workdir is None:
             return
+        self._focus_entity = focus
         style = style or RenderStyle()
         self._render_gen += 1
         gen = self._render_gen
@@ -1073,12 +1094,13 @@ class DiagramView(QWidget):
                 self._view.load(self._shell_url)
 
     def _invoke_render(self, mermaid_text: str, style: RenderStyle, gen: int):
-        script = "renderDiagram({}, {}, {}, {}, {})".format(
+        script = "renderDiagram({}, {}, {}, {}, {}, {})".format(
             json.dumps(mermaid_text),
             json.dumps(_mermaid_config(style)),
             json.dumps(style.background),
             json.dumps(self.palette().color(QPalette.Base).name()),
             json.dumps(bool(style.use_max_width)),
+            json.dumps(self._focus_entity),
         )
         self._view.page().runJavaScript(script)
         self._poll_mermaid(gen, 0)

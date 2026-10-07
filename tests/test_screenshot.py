@@ -1762,6 +1762,42 @@ def test_big_schema_opens_on_the_map(tmp_path):
     del app
 
 
+def test_medium_schema_opens_on_the_map_instead_of_an_empty_canvas(tmp_path):
+    app, window = _big_window(n=40)  # over the auto-draw limit, under the warning one
+    window._apply_loaded(str(tmp_path / "mid.xlsx"), [], window._schema, "")
+    assert window.map_visible()
+    assert "Pick a cluster on the map" in window._status.text()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_the_map_saves_as_png_and_svg(tmp_path):
+    from PySide6.QtGui import QImage
+
+    app, window = _big_window()
+    window.show()
+    window.show_map(True)
+    png, svg = tmp_path / "map.png", tmp_path / "map.svg"
+    window._map_view.export_image(str(png))
+    window._map_view.export_image(str(svg))
+    image = QImage(str(png))
+    assert max(image.width(), image.height()) == window._map_view.EXPORT_PNG_SIDE
+    assert svg.read_text(encoding="utf-8").lstrip().startswith("<?xml")
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_a_big_draw_centres_on_the_busiest_table():
+    from xsltomermaid.excel_to_mermaid import filter_schema
+
+    app, window = _big_window(n=10)
+    final = filter_schema(window._schema, [t.name for t in window._schema.tables])
+    window._entity_to_table = app_module.mermaid_entity_ids(final)
+    assert window._entity_to_table[window._hub_entity(final)] == "H"
+    window._diagram_view.cleanup()
+    del app
+
+
 # -- smarter table list ---------------------------------------------------------
 def _list_window():
     from xsltomermaid.excel_to_mermaid import Relationship
