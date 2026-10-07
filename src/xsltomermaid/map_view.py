@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QImage,
     QPainter,
     QPainterPath,
     QPalette,
@@ -122,6 +123,11 @@ class SchemaMapView(QWidget):
     selection_changed = Signal(list)  # names selected on the map
     draw_requested = Signal(list)  # draw these tables as the ER diagram
     show_diagram_requested = Signal()
+    export_requested = Signal()  # save the map as an image
+
+    # Long side of an exported PNG, in pixels: sharp when zoomed in a viewer,
+    # without the multi-hundred-megabyte images a 1:1 scene would give.
+    EXPORT_PNG_SIDE = 4000
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -157,8 +163,15 @@ class SchemaMapView(QWidget):
         )
         self._draw_btn.clicked.connect(lambda: self.draw_requested.emit(self.selected()))
         self._draw_btn.setEnabled(False)
+        self._export_btn = QPushButton("Save map image…")
+        self._export_btn.setToolTip(
+            "Save the whole map as a PNG or SVG image, with the cluster names "
+            "showing at the current zoom."
+        )
+        self._export_btn.clicked.connect(self.export_requested.emit)
         bar.addWidget(self._summary, 1)
         bar.addWidget(self._hide)
+        bar.addWidget(self._export_btn)
         bar.addWidget(self._diagram_btn)
         bar.addWidget(self._draw_btn)
         layout.addLayout(bar)
@@ -186,6 +199,44 @@ class SchemaMapView(QWidget):
         self._unconnected.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self._unconnected)
         self.retheme()
+
+    # -- export ---------------------------------------------------------------
+    def export_image(self, path: str) -> None:
+        """Write the whole map to ``path`` (.svg, otherwise PNG).
+
+        The scene is drawn as it looks now (colours, ticks, selection and the
+        labels the current zoom shows) on the view's background.
+        """
+        rect = self._scene.itemsBoundingRect().adjusted(-30, -30, 30, 30)
+        if rect.isEmpty():
+            raise ValueError("The map is empty; load a schema first.")
+        background = self._view.backgroundBrush().color()
+        if path.lower().endswith(".svg"):
+            from PySide6.QtSvg import QSvgGenerator
+
+            generator = QSvgGenerator()
+            generator.setFileName(path)
+            generator.setSize(QSize(int(rect.width()), int(rect.height())))
+            generator.setViewBox(QRectF(0, 0, rect.width(), rect.height()))
+            generator.setTitle("Schema map")
+            painter = QPainter(generator)
+            painter.fillRect(QRectF(0, 0, rect.width(), rect.height()), background)
+            self._scene.render(painter, QRectF(0, 0, rect.width(), rect.height()), rect)
+            painter.end()
+            return
+        scale = self.EXPORT_PNG_SIDE / max(rect.width(), rect.height())
+        image = QImage(
+            max(1, int(rect.width() * scale)), max(1, int(rect.height() * scale)),
+            QImage.Format_ARGB32,
+        )
+        image.fill(background)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.TextAntialiasing)
+        self._scene.render(painter, QRectF(image.rect()), rect)
+        painter.end()
+        if not image.save(path):
+            raise OSError(f"Couldn't write {path}.")
 
     # -- data -----------------------------------------------------------------
     def set_schema(self, schema: Schema | None):

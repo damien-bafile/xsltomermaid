@@ -39,7 +39,8 @@ this export.
 
 1. **Drop** an `.xlsx` / `.xlsm` file on the window (or click to browse).
 2. **Pick tables** in the list on the left. Small schemas are drawn straight
-   away; big ones open on the [schema map](#big-schemas-the-schema-map).
+   away (up to 25 tables); bigger ones open on the
+   [schema map](#big-schemas-the-schema-map).
 3. **Read the diagram** in the centre. It redraws a moment after you tick or
    untick tables or columns.
 4. **Check the details** in the panel on the right: the selected table, the
@@ -67,7 +68,7 @@ this export.
 
 ### Big schemas: the schema map
 
-Schemas over 60 tables open on the **map**, and the **Diagram | Map** switch
+Schemas over 25 tables open on the **map**, and the **Diagram | Map** switch
 (Ctrl+M) changes view.
 
 - **Every table is a point**, sized by its links and grouped into **clusters**
@@ -81,6 +82,11 @@ Schemas over 60 tables open on the **map**, and the **Diagram | Map** switch
   ticks and can be undone.
 - The table filter highlights matches on the map, ticked tables show as dashed
   rings, and tables with no links at all are listed underneath.
+- **Save map image…** saves the whole map as a PNG (4,000 px on the long side)
+  or SVG.
+- A drawn diagram too big to fit at 50% opens centred on its most-connected
+  table (its top, when the table is taller than the view), not the top-left
+  corner.
 
 ### Dynamics 365 / Dataverse exports
 
