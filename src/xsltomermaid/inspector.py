@@ -21,7 +21,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .excel_to_mermaid import is_audit_relationship
+from .excel_to_mermaid import (
+    DiagramOptions,
+    Table,
+    drawn_columns,
+    is_audit_relationship,
+)
 from .theme import (
     _link_hex,
     _muted_hex,
@@ -104,12 +109,17 @@ class TableInspector(QWidget):
     def current_table(self) -> str:
         return self._table
 
-    def show_table(self, table, outgoing, incoming, drawn: set[str], excluded: set):
+    def show_table(
+        self, table, outgoing, incoming, drawn: set[str], excluded: set,
+        options: DiagramOptions | None = None, linked: set[str] | None = None,
+    ):
         """Fill the view for ``table`` (None shows the empty state).
 
         ``outgoing`` / ``incoming`` are the table's relationships, ``drawn`` the
         lowercase names of tables in the diagram, ``excluded`` the hidden
-        (table, column) pairs.
+        (table, column) pairs. ``options`` and ``linked`` (its FK columns whose
+        table is drawn) say what Keys only leaves out, so the counts and ticks
+        match the diagram.
         """
         self._table = table.name if table is not None else ""
         self._drawn = drawn
@@ -123,13 +133,21 @@ class TableInspector(QWidget):
             return
 
         key = table.name.lower()
-        shown = sum(1 for c in table.columns if (key, c.name.lower()) not in excluded)
+        opts = options or DiagramOptions()
+        included = [c for c in table.columns if (key, c.name.lower()) not in excluded]
+        result = drawn_columns(Table(table.schema, table.name, included), opts, linked)
+        on_canvas = {c.name.lower() for c in result.columns}
         self._title.setText(table.full_name)
-        in_diagram = "in the diagram" if key in drawn else "not in the diagram"
+        total = _plural(len(table.columns), "column")
+        if key in drawn:
+            count = f"{len(result.columns):,} of {total} drawn"
+            if result.hidden:
+                count += " (Keys only)"
+        else:
+            count = f"{len(included):,} of {total} ticked · not in the diagram"
         self._meta.setText(
-            f"{shown:,} of {_plural(len(table.columns), 'column')} shown · "
-            f"references {_plural(len(outgoing), 'table')} · "
-            f"referenced by {len(incoming):,} · {in_diagram}"
+            f"{count} · references {_plural(len(outgoing), 'table')} · "
+            f"referenced by {len(incoming):,}"
         )
 
         self._updating = True
@@ -145,6 +163,12 @@ class TableInspector(QWidget):
             item.setData(Qt.UserRole, column.name)
             excluded_here = (key, column.name.lower()) in excluded
             item.setCheckState(Qt.Unchecked if excluded_here else Qt.Checked)
+            if key in drawn and not excluded_here and column.name.lower() not in on_canvas:
+                # Ticked, but Keys only leaves it out: say so rather than let
+                # the tick claim it's in the diagram.
+                item.setText(f"{text}  · hidden by Keys only")
+                item.setForeground(QColor(_muted_hex(self)))
+                item.setToolTip("Ticked, but Keys only leaves it out of the diagram.")
             self._columns.addItem(item)
         self._updating = False
 

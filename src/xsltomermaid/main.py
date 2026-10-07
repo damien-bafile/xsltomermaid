@@ -107,6 +107,7 @@ from .excel_to_mermaid import (
     filter_columns,
     filter_schema,
     generate_mermaid,
+    linked_fk_columns,
     related_tables,
     route_paths,
     unresolved_foreign_keys,
@@ -1118,9 +1119,12 @@ class MainWindow(QMainWindow):
         key = table.name.lower()
         outgoing = [r for r in schema.relationships if r.child_table.lower() == key]
         incoming = [r for r in schema.relationships if r.parent_table.lower() == key]
-        drawn = {t.name.lower() for t in (self._drawio_schema.tables if self._drawio_schema else [])}
+        final = self._drawio_schema
+        drawn = {t.name.lower() for t in (final.tables if final else [])}
+        linked = linked_fk_columns(final).get(key, set()) if final else set()
         self._inspector.show_table(
-            table, outgoing, incoming, drawn, self._columns.excluded_pairs()
+            table, outgoing, incoming, drawn, self._columns.excluded_pairs(),
+            self._options_bar.diagram_options(), linked,
         )
 
     def _columns_set_included(self, table: str, column: str, included: bool):
@@ -1595,6 +1599,7 @@ class MainWindow(QMainWindow):
                 relationships=[r for r in final.relationships if not is_hidden_link(r)],
             )
         self._drawio_schema = final
+        self._columns.set_keys_only(self._options_bar.diagram_options().keys_only)
         self._set_sql_schema(final)
         self._refresh_inspector()
         self._map_view.set_ticked(self._selector.selected_tables())

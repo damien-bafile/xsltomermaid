@@ -46,6 +46,7 @@ class ColumnSelector(QWidget):
         self._excluded: set[tuple[str, str]] = set()
         self._signature: tuple[str, ...] | None = None
         self._tables: list[Table] = []
+        self._keys_only = False
         self._updating = False
 
         layout = QVBoxLayout(self)
@@ -407,7 +408,16 @@ class ColumnSelector(QWidget):
             if (t.name.lower(), c.name.lower()) in self._excluded
         )
         included = total - excluded_here
-        self._count.setText(f"{included:,} of {total:,} columns included")
+        text = f"{included:,} of {total:,} columns included"
+        if self._keys_only:
+            text += " · Keys only is on, so only key columns are drawn"
+        self._count.setText(text)
+
+    def set_keys_only(self, on: bool):
+        """Say in the count when Keys only draws fewer columns than are ticked."""
+        if on != self._keys_only:
+            self._keys_only = on
+            self._update_count()
 
     def retheme(self):
         muted = f"color: {_muted_hex(self)};"
