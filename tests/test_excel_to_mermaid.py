@@ -512,3 +512,61 @@ def test_keys_only_collapses_long_fk_lists_to_drawn_tables():
     # A short table keeps every key, drawn or not.
     short = build_schema(rows[:4])
     assert len(drawn_columns(short.tables[0], opts, set()).columns) == 4
+
+
+def _schema_row(schema, table, order, column, pk=False, fk=""):
+    return {"SchemaName": schema, "TableName": table, "ColumnOrder": order,
+            "ColumnName": column, "DataType": "int", "IsPrimaryKey": int(pk),
+            "IsNullable": int(not pk), "ForeignKeyReference": fk}
+
+
+def test_tables_sharing_a_name_across_schemas_stay_separate():
+    from xsltomermaid.excel_to_mermaid import mermaid_entity_ids, unresolved_foreign_keys
+
+    rows = [
+        _schema_row("dbo", "Customer", 1, "Id", pk=True),
+        _schema_row("dbo", "Customer", 2, "Name"),
+        _schema_row("sales", "Customer", 1, "Id", pk=True),
+        _schema_row("sales", "Customer", 2, "Region"),
+        _schema_row("sales", "Order", 1, "Id", pk=True),
+        # Schema named: sales' Customer. No schema: the order's own schema first.
+        _schema_row("sales", "Order", 2, "BuyerId", fk="sales.Customer.Id"),
+        _schema_row("sales", "Order", 3, "OwnerId", fk="Customer.Id"),
+        _schema_row("dbo", "Invoice", 1, "CustomerId", fk="dbo.Customer(Id)"),
+    ]
+    schema = build_schema(rows)
+    names = [t.name for t in schema.tables]
+    assert "dbo.Customer" in names and "sales.Customer" in names  # not merged
+    assert "Order" in names and "Invoice" in names  # unique names stay plain
+    customers = {t.name: [c.name for c in t.columns] for t in schema.tables if "Customer" in t.name}
+    assert customers == {"dbo.Customer": ["Id", "Name"], "sales.Customer": ["Id", "Region"]}
+    links = {(r.child_table, r.label): r.parent_table for r in schema.relationships}
+    assert links[("Order", "BuyerId")] == "sales.Customer"
+    assert links[("Order", "OwnerId")] == "sales.Customer"
+    assert links[("Invoice", "CustomerId")] == "dbo.Customer"
+    assert unresolved_foreign_keys(schema) == []
+    # Two entities in the diagram, each with its own columns.
+    text = generate_mermaid(schema)
+    assert "dbo_Customer {" in text and "sales_Customer {" in text
+    assert len(set(mermaid_entity_ids(schema))) == len(schema.tables)
+    sales = next(t for t in schema.tables if t.name == "sales.Customer")
+    assert sales.full_name == "sales.Customer"  # not qualified twice
+    from xsltomermaid.sql_query import generate_select
+    order = next(t for t in schema.tables if t.name == "Order")
+    sql = generate_select(Schema([order, sales], [r for r in schema.relationships
+                                                  if r.child_table == "Order"]))
+    assert "sales.Customer AS" in sql and "sales.[sales.Customer]" not in sql
+
+
+def test_names_that_clean_to_the_same_diagram_id_get_their_own():
+    from xsltomermaid.excel_to_mermaid import mermaid_entity_ids
+
+    rows = [_row("Order Line", 1, "Id", pk=True), _row("Order_Line", 1, "Id", pk=True),
+            _row("hsl_day_rule", 1, "Id", pk=True), _row("hsldayrule", 1, "Id", pk=True)]
+    schema = build_schema(rows)
+    ids = mermaid_entity_ids(schema)
+    assert len(ids) == 4 and set(ids.values()) == {t.name for t in schema.tables}
+    # Unique even as Mermaid draws them (underscores dropped from group ids).
+    assert len({i.replace("_", "").lower() for i in ids}) == 4
+    text = generate_mermaid(schema)
+    assert sum(1 for line in text.splitlines() if line.rstrip().endswith("{")) == 4

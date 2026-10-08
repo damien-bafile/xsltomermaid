@@ -140,8 +140,18 @@ class Table:
     columns: list[Column] = field(default_factory=list)
 
     @property
+    def plain_name(self) -> str:
+        """The name without a schema qualifier added for a shared name."""
+        prefix = self.schema.lower() + "."
+        if self.schema and self.name.lower().startswith(prefix):
+            return self.name[len(prefix):]
+        return self.name
+
+    @property
     def full_name(self) -> str:
-        return f"{self.schema}.{self.name}" if self.schema else self.name
+        if not self.schema or self.name.lower().startswith(self.schema.lower() + "."):
+            return self.name  # already qualified (a name shared by two schemas)
+        return f"{self.schema}.{self.name}"
 
 
 @dataclass
@@ -302,7 +312,6 @@ def build_schema(
     processed, so a caller can drive a progress bar for large schemas.
     """
     tables: dict[str, Table] = {}
-    order_by_full: dict[str, Table] = {}
 
     rows = list(rows)
     total = len(rows)
@@ -321,7 +330,6 @@ def build_schema(
         if table is None:
             table = Table(schema=schema_name, name=table_name)
             tables[key] = table
-            order_by_full[table_name.lower()] = table
 
         try:
             order = int(float(_norm(get("ColumnOrder"))))
@@ -353,12 +361,25 @@ def build_schema(
     if progress is not None:
         progress(1.0)
 
+    # A name used in more than one schema (dbo.Customer, sales.Customer) is
+    # qualified, so the two stay separate tables everywhere names are keys:
+    # the list, the diagram, relationships and SQL.
+    schemas_per_name: dict[str, set[str]] = defaultdict(set)
+    for table in tables.values():
+        schemas_per_name[table.name.lower()].add(table.schema.lower())
+    for table in tables.values():
+        if len(schemas_per_name[table.name.lower()]) > 1 and table.schema:
+            qualified = f"{table.schema}.{table.name}"
+            table.name = qualified
+            for column in table.columns:
+                column.table = qualified
+
     ordered_tables = sorted(tables.values(), key=lambda t: (t.schema.lower(), t.name.lower()))
     for table in ordered_tables:
         table.columns.sort(key=lambda c: c.order)
         _drop_solution_layering_keys(table)
 
-    relationships = _derive_relationships(ordered_tables, order_by_full)
+    relationships = _derive_relationships(ordered_tables, _TableLookup(ordered_tables))
     return Schema(tables=ordered_tables, relationships=relationships)
 
 
@@ -393,6 +414,48 @@ def _drop_solution_layering_keys(table: Table) -> None:
 
 
 _REF_COLUMNS_RE =re.compile(r"^(?P<table>[^(]*)\((?P<columns>[^)]*)\)\s*$")
+
+
+class _TableLookup:
+    """Finds the table a foreign-key reference means, schema-aware.
+
+    ``sales.Customer.Id`` means sales' Customer. A reference without a schema
+    to a name several schemas use prefers the referencing table's own
+    schema, then ``dbo``.
+    """
+
+    def __init__(self, tables: list[Table]):
+        self._qualified = {f"{t.schema}.{t.name}".lower(): t for t in tables}
+        self._qualified.update({t.full_name.lower(): t for t in tables})
+        self._by_plain: dict[str, list[Table]] = defaultdict(list)
+        for t in tables:
+            plain = t.name.split(".", 1)[1] if t.full_name == t.name and "." in t.name else t.name
+            self._by_plain[plain.lower()].append(t)
+
+    def find(self, schema: str | None, name: str, from_schema: str = "") -> Table | None:
+        if schema:
+            found = self._qualified.get(f"{schema}.{name}".lower())
+            if found is not None:
+                return found
+        candidates = self._by_plain.get(name.lower(), [])
+        if len(candidates) <= 1:
+            return candidates[0] if candidates else self._qualified.get(name.lower())
+        for wanted in (from_schema.lower(), "dbo"):
+            for table in candidates:
+                if table.schema.lower() == wanted:
+                    return table
+        return candidates[0]
+
+
+def _parse_reference_schema(reference: str) -> str | None:
+    """The schema a foreign-key reference names, if any (``sales.Customer.Id``)."""
+    ref = _norm(reference)
+    match = _REF_COLUMNS_RE.match(ref) if ref else None
+    head = match["table"] if match else ref
+    parts = [p for p in re.split(r"[.\s]+", re.sub(r'[\[\]"`]', "", head or "")) if p]
+    if match:
+        return parts[-2] if len(parts) >= 2 else None
+    return parts[-3] if len(parts) >= 3 else None
 
 
 def _parse_reference(reference: str) -> tuple[str | None, list[str]]:
@@ -434,7 +497,7 @@ def _parse_reference_table(reference: str) -> str | None:
 
 
 def _derive_relationships(
-    tables: list[Table], by_name: dict[str, Table]
+    tables: list[Table], lookup: "_TableLookup"
 ) -> list[Relationship]:
     """One relationship per foreign key.
 
@@ -492,7 +555,9 @@ def _derive_relationships(
             parent_name, ref_columns = _parse_reference(column.foreign_key_reference)
             if not parent_name:
                 continue
-            parent = by_name.get(parent_name.lower())
+            parent = lookup.find(
+                _parse_reference_schema(column.foreign_key_reference), parent_name, table.schema
+            )
             parent_label = parent.name if parent else parent_name
             parent_key = parent_label.lower()
             pk = {c.name.lower() for c in parent.columns if c.is_primary_key} if parent else set()
@@ -794,7 +859,7 @@ def unresolved_foreign_keys(schema: Schema) -> list[tuple[str, str]]:
     table that isn't in the sheet, so no relationship is drawn for it. Useful for
     telling the user their export may be missing tables.
     """
-    names = {t.name.lower() for t in schema.tables}
+    lookup = _TableLookup(schema.tables)
     dangling: list[tuple[str, str]] = []
     for table in schema.tables:
         for column in table.columns:
@@ -802,7 +867,9 @@ def unresolved_foreign_keys(schema: Schema) -> list[tuple[str, str]]:
             if not ref:
                 continue
             target = _parse_reference_table(ref)
-            if target is None or target.lower() not in names:
+            if target is None or lookup.find(
+                _parse_reference_schema(ref), target, table.schema
+            ) is None:
                 dangling.append((table.name, ref))
     return dangling
 
@@ -972,16 +1039,33 @@ def drawn_columns(
     return DrawnColumns(keys, len(table.columns) - len(keys), collapsed, len(system))
 
 
+def _entity_ids(schema: Schema, opts: DiagramOptions) -> dict[str, str]:
+    """``{table name (lowercase): entity id}``, every id unique.
+
+    Two names can clean up to the same id (``Order Line`` / ``Order_Line``),
+    and Mermaid drops underscores from the drawn group id, so ``hsl_day_rule``
+    and ``hsldayrule`` would also collide there. A clash gets ``_2``, ``_3``.
+    """
+    ids: dict[str, str] = {}
+    taken: set[str] = set()  # by the underscore-free form Mermaid draws
+    for table in schema.tables:
+        base = _entity_id(table.full_name if opts.prefix_schema else table.name)
+        candidate, n = base, 2
+        while candidate.replace("_", "").lower() in taken:
+            candidate, n = f"{base}_{n}", n + 1
+        taken.add(candidate.replace("_", "").lower())
+        ids[table.name.lower()] = candidate
+    return ids
+
+
 def mermaid_entity_ids(schema: Schema, options: DiagramOptions | None = None) -> dict[str, str]:
     """``{entity id: table name}`` for the ids :func:`generate_mermaid` writes.
 
     Lets the GUI map a click on a drawn table back to the table it shows.
     """
     opts = options or DiagramOptions()
-    return {
-        _entity_id(t.full_name if opts.prefix_schema else t.name): t.name
-        for t in schema.tables
-    }
+    names = {t.name.lower(): t.name for t in schema.tables}
+    return {entity: names[key] for key, entity in _entity_ids(schema, opts).items()}
 
 
 def generate_mermaid(schema: Schema, options: DiagramOptions | None = None) -> str:
@@ -991,12 +1075,10 @@ def generate_mermaid(schema: Schema, options: DiagramOptions | None = None) -> s
 
     # Map table names to their Mermaid ids, so relationships and entity blocks
     # agree even when the schema prefix is switched on.
-    by_name = {t.name.lower(): t for t in schema.tables}
+    ids = _entity_ids(schema, opts)
 
     def entity_id(name: str) -> str:
-        table = by_name.get(name.lower())
-        label = table.full_name if (table and opts.prefix_schema) else name
-        return _entity_id(label)
+        return ids.get(name.lower()) or _entity_id(name)
 
     # Relationships first so the diagram reads top-down.
     for rel in schema.relationships:
