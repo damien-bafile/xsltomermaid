@@ -130,10 +130,10 @@ class DiagramOptionsBar(QWidget):
         self._diagram_only: list[QWidget] = []
         self._row1_labels: list[QLabel] = []
         self._full_width = 0
+        # Theme and background are set once and rarely touched, so they sit
+        # behind More; the row keeps room for its labels at narrow widths.
         for label, widget in [
             ("&Orientation:", self._orientation),
-            ("&Theme:", self._theme),
-            ("Canvas back&ground:", self._background),
         ]:
             buddy = self._buddy(label, widget)
             self._row1_labels.append(buddy)
@@ -170,7 +170,10 @@ class DiagramOptionsBar(QWidget):
         self._more.setCheckable(True)
         self._more.setArrowType(Qt.RightArrow)
         self._more.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self._more.setToolTip("Spacing, font size, width, notes and schema prefix.")
+        self._more.setToolTip(
+            "Theme, canvas background, spacing, font size, width, notes, schema "
+            "prefix and audit links."
+        )
         self._more.setStyleSheet(
             "QToolButton { border: none; padding: 2px 6px; border-radius: 4px; }"
             f"QToolButton:hover, QToolButton:focus {{ background: {_ACCENT_WASH}; }}"
@@ -183,20 +186,30 @@ class DiagramOptionsBar(QWidget):
         self._row1 = row1
         outer.addLayout(row1)
 
+        # Two lines (looks, then content) so neither is squeezed in a narrow
+        # canvas.
         self._more_box = QWidget()
-        row2 = QHBoxLayout(self._more_box)
-        row2.setContentsMargins(0, 0, 0, 0)
+        more = QVBoxLayout(self._more_box)
+        more.setContentsMargins(0, 0, 0, 0)
+        more.setSpacing(4)
+        row2 = QHBoxLayout()
         row2.setSpacing(8)
         for label, widget in [
+            ("&Theme:", self._theme),
+            ("Canvas back&ground:", self._background),
             ("Spac&ing:", self._spacing),
             ("Font si&ze:", self._font),
         ]:
             row2.addWidget(self._buddy(label, widget))
             row2.addWidget(widget)
-        row2.addSpacing(8)
-        for chk in (self._fit_width, self._show_comments, self._prefix_schema, self._hide_audit):
-            row2.addWidget(chk)
         row2.addStretch(1)
+        row3 = QHBoxLayout()
+        row3.setSpacing(12)
+        for chk in (self._fit_width, self._show_comments, self._prefix_schema, self._hide_audit):
+            row3.addWidget(chk)
+        row3.addStretch(1)
+        more.addLayout(row2)
+        more.addLayout(row3)
         self._more_box.setVisible(False)
         outer.addWidget(self._more_box)
 

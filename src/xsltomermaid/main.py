@@ -84,6 +84,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QToolButton,
@@ -570,7 +571,9 @@ class MainWindow(QMainWindow):
         width = max(b.sizeHint().width() for b in (self._diagram_view_btn, self._map_btn))
         for button in (self._diagram_view_btn, self._map_btn):
             button.setFixedWidth(width)
-        switch.setFixedWidth(2 * width)
+        # Fixed at its size hint (both segments plus the layout's margin), so the
+        # bar can never squeeze it into its neighbours.
+        switch.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._options_bar.add_leading_widget(switch)
         # The map no longer needs its own "Diagram" button.
         self._map_view._diagram_btn.setVisible(False)
@@ -1017,6 +1020,11 @@ class MainWindow(QMainWindow):
         self._options_bar.retheme()
         self._render_status.retheme()
         self._style_view_switch()
+        # Views that bake colours into items or pages when they fill.
+        self._inspector.retheme()
+        self._refresh_inspector()
+        self._map_view.retheme()
+        self._diagram_view.retheme()
 
     def _style_view_switch(self):
         """The Diagram | Map segments, in the current palette's colours."""
@@ -1044,8 +1052,16 @@ class MainWindow(QMainWindow):
             QEvent.ApplicationPaletteChange,
             QEvent.ThemeChange,
         ):
-            self.retheme()
+            # After this turn of the event loop: the children get their new
+            # palettes after the window does, and retheme reads theirs.
+            if not getattr(self, "_retheme_pending", False):
+                self._retheme_pending = True
+                QTimer.singleShot(0, self._deferred_retheme)
         super().changeEvent(event)
+
+    def _deferred_retheme(self):
+        self._retheme_pending = False
+        self.retheme()
 
     # -- diagram ↔ list selection ------------------------------------------
     def _on_entity_clicked(self, entity_id: str, double: bool):

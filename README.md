@@ -60,10 +60,11 @@ this export.
 - **Click a table** to select it: it's highlighted, and the table list scrolls
   to it. **Double-click** (or **Enter**) opens it in the Table view. With the
   diagram focused, the **arrow keys** move between tables and **Esc** clears.
-- **The options bar** has Orientation (Left → Right by default), Theme,
-  Background, Relationship labels and *Keys only*. **More** adds spacing, font
-  size, fit to view, notes, a schema-name prefix, and *Hide audit and system
-  links*.
+- **The options bar** has Orientation (Left → Right by default), Relationship
+  labels and *Keys only*. **More** adds the theme, the canvas background (the
+  view only; exports have their own), spacing, font size, fit to view, notes, a
+  schema-name prefix, and *Hide audit and system links*. The app follows a
+  light/dark switch while it's open.
 - **Selections over 60 tables** don't redraw on every tick. They show *Out of
   date* until you press **Draw ticked** (F5). If Mermaid can't draw a
   diagram, its error message is shown on the canvas.
