@@ -147,7 +147,7 @@ specific view.
 | **Data** | The rows read from the spreadsheet, sortable by column. Before a file loads, it explains the expected format. |
 | **Columns** | Include or leave out columns per table; sort by name or type; *PK, FK first*; **All / None / Keys only**, which can be undone. |
 | **Mermaid** | The generated `erDiagram` source, syntax-coloured. |
-| **SQL** | A syntax-coloured T-SQL `SELECT` over the diagram's tables, joined on their foreign keys (composite keys included). Choose the start table, `INNER` or `LEFT` joins and a `TOP (n)` limit. Anything that can't be a clean join (a second foreign key between the same tables, a self-reference, a table with no path) is written as a `--` comment. |
+| **SQL** | A syntax-coloured T-SQL `SELECT` over the diagram's tables, joined on their foreign keys (composite keys included). Choose the start table, `INNER` or `LEFT` joins and a `TOP (n)` limit. Names are bracketed only where T-SQL needs it (**Quote all names** brackets every one). For Dynamics data, **Latest version only** keeps each record's newest row in a Synapse Link or Fabric copy (by `versionnumber`, without `IsDelete` rows), and **Active records only** keeps `statecode = 0`, each applied per table where it fits. Anything that can't be a clean join (a second foreign key between the same tables, a self-reference, a table with no path) is written as a `--` comment. |
 
 ### Exporting
 

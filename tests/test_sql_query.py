@@ -93,6 +93,57 @@ def test_names_are_bracketed_only_where_tsql_needs_it():
     assert "o.CustomerID AS Order_CustomerID" in sql
 
 
+def _dynamics_schema():
+    """account <- contact (via parentcustomerid); only account has statecode."""
+    return Schema(
+        tables=[
+            Table("dbo", "account", [
+                Column("dbo", "account", 1, "accountid", "guid", is_primary_key=True),
+                Column("dbo", "account", 2, "name", "nvarchar"),
+                Column("dbo", "account", 3, "statecode", "int"),
+            ]),
+            Table("dbo", "contact", [
+                Column("dbo", "contact", 1, "contactid", "guid", is_primary_key=True),
+                Column("dbo", "contact", 2, "parentcustomerid", "guid",
+                       foreign_key_reference="dbo.account.accountid"),
+            ]),
+            Table("dbo", "note", [  # no primary key
+                Column("dbo", "note", 1, "regarding", "guid",
+                       foreign_key_reference="dbo.account.accountid"),
+            ]),
+        ],
+        relationships=[
+            Relationship("account", "contact", "parentcustomerid",
+                         ("parentcustomerid",), ("accountid",)),
+            Relationship("account", "note", "regarding", ("regarding",), ("accountid",)),
+        ],
+    )
+
+
+def test_latest_version_and_active_filters_are_per_table():
+    schema = _dynamics_schema()
+    plain = generate_select(schema)
+    assert "_version_rank" not in plain and "statecode = 0" not in plain  # off by default
+    sql = generate_select(schema, join="LEFT", latest_only=True, active_only=True)
+    # Each keyed table is reduced to its newest, undeleted row per key...
+    assert ("FROM (\n    SELECT *, ROW_NUMBER() OVER (PARTITION BY accountid "
+            "ORDER BY versionnumber DESC) AS _version_rank\n    FROM dbo.account\n"
+            "    WHERE ISNULL(IsDelete, 0) = 0\n) AS acc") in sql
+    # ...joined tables filter in ON (LEFT JOIN keeps its meaning), FROM in WHERE.
+    assert "    ON con.parentcustomerid = acc.accountid AND con._version_rank = 1" in sql
+    assert "WHERE acc._version_rank = 1\n  AND acc.statecode = 0" in sql
+    # Tables the filters can't apply to are named, not guessed at.
+    assert "-- Active records only: no statecode column in contact, note." in sql
+    assert "-- Latest version only: no primary key to rank versions by" in sql and "note." in sql
+
+
+def test_filters_use_columns_left_out_in_the_columns_tab():
+    full = _dynamics_schema()
+    trimmed = filter_columns(full, {("account", "statecode")})
+    sql = generate_select(trimmed, active_only=True, full_schema=full)
+    assert "acc.statecode = 0" in sql and "statecode" not in sql.split("FROM")[0]
+
+
 def test_quoting_escapes_brackets():
     assert quote("we]ird") == "[we]]ird]"
     schema = Schema(tables=[Table("odd]schema", "t]1", [Column("", "t]1", 1, "c]1", "int")])])
