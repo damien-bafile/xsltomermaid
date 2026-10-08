@@ -1333,7 +1333,8 @@ def test_sql_tab_follows_the_diagram_and_its_options(tmp_path, monkeypatch):
     window.load_file(str(sample))
     sql = window._sql_view.toPlainText()
     assert sql.startswith("SELECT TOP (100)") and "JOIN" in sql
-    assert window._tabs.tabText(window._tabs.count() - 1) == "SQL"
+    tabs = [window._tabs.tabText(i) for i in range(window._tabs.count())]
+    assert tabs == ["Table", "Columns", "Mermaid", "SQL", "Data"]  # raw rows last
 
     window._sql_root.setCurrentText("OrderLine")
     window._sql_join.setCurrentIndex(window._sql_join.findData("LEFT"))
