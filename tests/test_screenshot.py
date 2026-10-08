@@ -2411,6 +2411,40 @@ def test_map_names_tables_once_zoomed_in_and_selected_ones_always(tmp_path):
     del app
 
 
+def test_sql_and_mermaid_text_is_coloured_by_token():
+    from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QPlainTextEdit
+
+    from xsltomermaid.highlight import _COLOURS, MermaidHighlighter, SqlHighlighter
+
+    app = QApplication.instance() or QApplication([])
+
+    def colours(highlighter_cls, text):
+        edit = QPlainTextEdit()
+        highlighter = highlighter_cls(edit.document(), edit)
+        edit.setPlainText(text)
+        highlighter.rehighlight()
+        found = {}
+        block = edit.document().begin()
+        while block.isValid():
+            for r in block.layout().formats():
+                found[block.text()[r.start:r.start + r.length]] = r.format.foreground().color().name()
+            block = block.next()
+        dark = edit.palette().color(QPalette.Base).lightness() < 128
+        return found, _COLOURS["dark" if dark else "light"]
+
+    sql, c = colours(SqlHighlighter, "SELECT TOP (100)\n    [o].[Name] -- note\n"
+                                     "FROM [dbo].[Order] AS [o]\n/* a\nb */")
+    assert sql["SELECT"] == c["keyword"] and sql["100"] == c["number"]
+    assert sql["[Name]"] == c["name"] and sql["-- note"] == c["comment"]
+    assert sql["b */"] == c["comment"]  # a block comment over two lines
+    mmd, c = colours(MermaidHighlighter,
+                     'erDiagram\n    A ||--o{ B : "fk"\n    A {\n        int id PK\n    }')
+    assert mmd["erDiagram"] == c["keyword"] and mmd["||--o{"] == c["keyword"]
+    assert mmd['"fk"'] == c["string"] and mmd["PK"] == c["keyword"] and mmd["A"] == c["name"]
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()

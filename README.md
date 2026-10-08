@@ -146,8 +146,8 @@ specific view.
 | **Table** | The selected table's columns (tick to show them) and every table it references or is referenced by, each with **Add**. Audit links are folded into their own group. Selecting a connected table glows it orange in the diagram (beside the selected table's blue) when it's drawn, and tints the rows the two tables join on; double-click it to move to it. Selecting a column tints its row blue, and clicking a row in the diagram selects that column here. |
 | **Data** | The rows read from the spreadsheet, sortable by column. Before a file loads, it explains the expected format. |
 | **Columns** | Include or leave out columns per table; sort by name or type; *PK, FK first*; **All / None / Keys only**, which can be undone. |
-| **Mermaid** | The generated `erDiagram` source. |
-| **SQL** | A T-SQL `SELECT` over the diagram's tables, joined on their foreign keys (composite keys included). Choose the start table, `INNER` or `LEFT` joins and a `TOP (n)` limit. Anything that can't be a clean join (a second foreign key between the same tables, a self-reference, a table with no path) is written as a `--` comment. |
+| **Mermaid** | The generated `erDiagram` source, syntax-coloured. |
+| **SQL** | A syntax-coloured T-SQL `SELECT` over the diagram's tables, joined on their foreign keys (composite keys included). Choose the start table, `INNER` or `LEFT` joins and a `TOP (n)` limit. Anything that can't be a clean join (a second foreign key between the same tables, a self-reference, a table with no path) is written as a `--` comment. |
 
 ### Exporting
 
@@ -264,6 +264,7 @@ erDiagram
 | `src/xsltomermaid/column_selector.py` | The Details panel's Columns view. |
 | `src/xsltomermaid/options_bar.py` | The diagram options bar. |
 | `src/xsltomermaid/map_view.py` | The schema map (`QGraphicsView`). |
+| `src/xsltomermaid/highlight.py` | Syntax colouring for the SQL and Mermaid text (`QSyntaxHighlighter`). |
 | `src/xsltomermaid/diagram_view.py` | Renders Mermaid in a `QWebEngineView`; SVG/PNG/PDF/Draw.io/Excalidraw export. |
 | `src/xsltomermaid/widgets.py` | Small pieces: drop area, status line, render status, data model, workers. |
 | `src/xsltomermaid/theme.py` | Colours, light/dark palettes, button styles, drawn status icons. |
