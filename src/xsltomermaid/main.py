@@ -99,6 +99,7 @@ from .diagram_view import (
     VENDOR_MERMAID,
     DiagramView,
     RenderStyle,
+    dom_entity_key,
     schema_to_drawio,
     schema_to_excalidraw,
 )
@@ -1700,7 +1701,14 @@ class MainWindow(QMainWindow):
         )
 
         mermaid_text = generate_mermaid(final, self._options_bar.diagram_options())
-        self._entity_to_table = mermaid_entity_ids(final, self._options_bar.diagram_options())
+        # Keyed the way Mermaid names the drawn tables (no underscores), so a
+        # click on hsl_dayrule (entity-hsldayrule-…) finds its table.
+        self._entity_to_table = {
+            dom_entity_key(entity): table
+            for entity, table in mermaid_entity_ids(
+                final, self._options_bar.diagram_options()
+            ).items()
+        }
         self._mermaid_text = mermaid_text
         self._mermaid_view.setPlainText(mermaid_text)
 

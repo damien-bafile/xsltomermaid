@@ -2145,6 +2145,28 @@ def test_load_errors_are_explained_in_plain_language():
     assert describe_load_error(ValueError("no header")) == "no header"
 
 
+def test_clicking_a_table_with_underscores_opens_it():
+    """Mermaid drops underscores from its group ids (hsl_dayrule is drawn as
+    entity-hsldayrule-…); clicks and highlights must still find the table."""
+    from xsltomermaid.diagram_view import dom_entity_key, entity_id_from_group
+    from xsltomermaid.excel_to_mermaid import Relationship
+
+    app, window = _window_with_schema(
+        ["hsl_dayrule", "hsl_dayrulegroup"],
+        [Relationship("hsl_dayrulegroup", "hsl_dayrule", "grp", ("grp",), ("id",))],
+    )
+    window._selector.set_ready(True)
+    window._selector.check_tables(["hsl_dayrule", "hsl_dayrulegroup"])
+    window._render_selection()
+    group = "entity-hsldayrule-ead42477-c0aa-545e-ab0c-1307fce3a23c"
+    assert entity_id_from_group(group) == dom_entity_key("hsl_dayrule") == "hsldayrule"
+    window._on_entity_clicked(entity_id_from_group(group), False)
+    assert window._inspector.current_table() == "hsl_dayrule"
+    assert window._selector._list.currentItem().text() == "hsl_dayrule"
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()

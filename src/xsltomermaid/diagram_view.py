@@ -98,9 +98,23 @@ _ENTITY_GROUP_RE = re.compile(r"^entity-(.+)-[0-9a-f]{8}-[0-9a-f-]{27}$")
 
 
 def entity_id_from_group(group_id: str) -> str | None:
-    """``"entity-Customer-7db3…"`` → ``"Customer"`` (None if it isn't one)."""
+    """``"entity-Customer-7db3…"`` → ``"Customer"`` (None if it isn't one).
+
+    The result is the DOM key (see :func:`dom_entity_key`), not the id in the
+    Mermaid text.
+    """
     match = _ENTITY_GROUP_RE.match(group_id or "")
     return match.group(1) if match else None
+
+
+def dom_entity_key(entity_id: str) -> str:
+    """The name Mermaid puts in a table's ``entity-<name>-<uuid>`` group id.
+
+    Mermaid drops underscores there, so ``hsl_dayrule`` is drawn as
+    ``entity-hsldayrule-…``. Entity ids only hold letters, digits and
+    underscores (``_entity_id``), so removing underscores is the whole rule.
+    """
+    return entity_id.replace("_", "")
 
 
 if WEBENGINE_AVAILABLE:
