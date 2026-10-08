@@ -495,6 +495,10 @@ class MainWindow(QMainWindow):
         self._diagram_view.row_clicked.connect(self._on_row_clicked)
         self._entity_to_table: dict[str, str] = {}
         self._diagram_view.render_finished.connect(lambda _ok: self._set_rendering(False))
+        # After a draw from the map: select the busiest drawn table once the
+        # new diagram is on screen (see _draw_from_map).
+        self._focus_after_render = ""
+        self._diagram_view.render_finished.connect(self._arrive_after_draw)
         diagram_tab = QWidget()
         diagram_layout = QVBoxLayout(diagram_tab)
         diagram_layout.setContentsMargins(0, 0, 0, 0)
@@ -1243,6 +1247,12 @@ class MainWindow(QMainWindow):
         self._selector.set_selected_tables(names)
         self.show_map(False)
         self._render_selection()
+        # Arrive somewhere: once drawn, select the busiest table (centred and
+        # outlined in the diagram, scrolled to in the list, open in the Table
+        # view) instead of leaving the list at its top.
+        hub = self._entity_to_table.get(self._hub_entity(self._drawio_schema), "") if (
+            self._drawio_schema is not None) else ""
+        self._focus_after_render = hub or (names[0] if names else "")
         schema = self._drawio_schema
         keys = self._options_bar._keys_only
         if schema is not None and schema.tables and not keys.isChecked():
@@ -1297,6 +1307,11 @@ class MainWindow(QMainWindow):
         )
         if column and self._inspector.select_column(column) and not self._tabs.isHidden():
             self.show_details(self._inspector)
+
+    def _arrive_after_draw(self, ok: bool):
+        name, self._focus_after_render = self._focus_after_render, ""
+        if ok and name:
+            self._focus_table(name)
 
     def _focus_table(self, name: str, from_diagram: bool = False, from_map: bool = False):
         """Make ``name`` the selected table everywhere ("" clears)."""

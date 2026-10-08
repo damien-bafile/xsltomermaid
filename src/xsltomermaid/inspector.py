@@ -58,6 +58,7 @@ class TableInspector(QWidget):
 
     _ROLE_TABLE = Qt.UserRole
     _ROLE_JOIN = Qt.UserRole + 1  # [(table, column), ...] the link joins on
+    _ROLE_FOLD = Qt.UserRole + 2  # the "Hidden by Keys only" group header
     _ADD_COL = 1
 
     def __init__(self, parent=None):
@@ -90,6 +91,11 @@ class TableInspector(QWidget):
         self._columns.setUniformItemSizes(True)
         self._columns.itemChanged.connect(self._on_column_changed)
         self._columns.currentItemChanged.connect(self._on_column_current)
+        self._columns.itemClicked.connect(self._on_fold_clicked)
+        self._columns.itemActivated.connect(self._on_fold_clicked)
+        self._fold = None
+        self._hidden_items: list[QListWidgetItem] = []
+        self._hidden_open = False  # remembered while the app runs
         self._links = QTreeWidget()
         self._links.setAccessibleName("Tables connected to the selected table")
         self._links.setColumnCount(2)
@@ -163,6 +169,10 @@ class TableInspector(QWidget):
 
         self._updating = True
         self._columns.clear()
+        # Under Keys only, the drawn columns come first and the ticked-but-
+        # hidden ones fold into one group below them (closed by default), so
+        # the few drawn keys aren't lost among dozens of hidden columns.
+        shown_items, hidden_items = [], []
         for column in table.columns:
             marks = [m for m, on in (("PK", column.is_primary_key),
                                      ("FK", bool(column.foreign_key_reference))) if on]
@@ -175,12 +185,32 @@ class TableInspector(QWidget):
             excluded_here = (key, column.name.lower()) in excluded
             item.setCheckState(Qt.Unchecked if excluded_here else Qt.Checked)
             if key in drawn and not excluded_here and column.name.lower() not in on_canvas:
-                # Ticked, but Keys only leaves it out: say so rather than let
-                # the tick claim it's in the diagram.
-                item.setText(f"{text}  · hidden by Keys only")
+                # Ticked, but Keys only leaves it out: the group header says so.
                 item.setForeground(QColor(_muted_hex(self)))
                 item.setToolTip("Ticked, but Keys only leaves it out of the diagram.")
+                hidden_items.append(item)
+            else:
+                shown_items.append(item)
+        for item in shown_items:
             self._columns.addItem(item)
+        if hidden_items:
+            self._fold = QListWidgetItem()
+            self._fold.setData(self._ROLE_FOLD, True)
+            self._fold.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            font = self._fold.font()
+            font.setBold(True)
+            self._fold.setFont(font)
+            self._fold.setToolTip(
+                "Ticked columns that Keys only leaves out of the diagram. "
+                "Click (or Enter) to show or hide them."
+            )
+            self._columns.addItem(self._fold)
+            for item in hidden_items:
+                self._columns.addItem(item)
+            self._hidden_items = hidden_items
+            self._set_hidden_open(self._hidden_open)
+        else:
+            self._fold, self._hidden_items = None, []
         self._updating = False
 
         self._links.clear()
@@ -223,10 +253,23 @@ class TableInspector(QWidget):
                 row.setFont(self._ADD_COL, font)
                 row.setForeground(self._ADD_COL, QColor(_link_hex(self)))
 
+    def _set_hidden_open(self, open_: bool):
+        self._hidden_open = open_
+        if self._fold is None:
+            return
+        arrow = "▾" if open_ else "▸"
+        self._fold.setText(f"{arrow}  Hidden by Keys only ({len(self._hidden_items):,})")
+        for item in self._hidden_items:
+            item.setHidden(not open_)
+
+    def _on_fold_clicked(self, item):
+        if item is not None and item.data(self._ROLE_FOLD):
+            self._set_hidden_open(not self._hidden_open)
+
     def _on_column_current(self, item, _prev=None):
         if self._updating:
             return
-        if item is None or not self._table:
+        if item is None or not self._table or item.data(Qt.UserRole) is None:
             self.column_picked.emit("", "")
         else:
             self.column_picked.emit(self._table, item.data(Qt.UserRole))
@@ -242,14 +285,14 @@ class TableInspector(QWidget):
         """Make ``name`` the current column (a row clicked in the diagram)."""
         for i in range(self._columns.count()):
             item = self._columns.item(i)
-            if item.data(Qt.UserRole).lower() == name.lower():
+            if (item.data(Qt.UserRole) or "").lower() == name.lower():
                 self._columns.setCurrentItem(item)
                 self._columns.scrollToItem(item)
                 return True
         return False
 
     def _on_column_changed(self, item):
-        if self._updating or not self._table:
+        if self._updating or not self._table or item.data(Qt.UserRole) is None:
             return
         self.column_toggled.emit(
             self._table, item.data(Qt.UserRole), item.checkState() == Qt.Checked

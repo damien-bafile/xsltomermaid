@@ -235,10 +235,10 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
     if (!window._actual && (force || window._fit)) {
       var w = window.innerWidth - 24, h = window.innerHeight - 24;
       scale = Math.min(w / vb.width, h / vb.height, 1.5);
-      // Below three-quarter size the column text (12px) drops under about
-      // 9px, so automatic fitting stops there and the view scrolls (centred
-      // on the busiest table); the Fit button (force) still shows it all.
-      scale = Math.max(force ? 0.05 : 0.75, scale);
+      // Below 85% the column text (12px) drops under about 10px, so
+      // automatic fitting stops there and the view scrolls (centred on the
+      // busiest table); the Fit button (force) still shows it all.
+      scale = Math.max(force ? 0.05 : 0.85, scale);
     }
     svg.style.maxWidth = 'none';
     svg.style.width = (vb.width * scale) + 'px';
@@ -1157,7 +1157,7 @@ class DiagramView(QWidget):
             self._sync_small_hint()
 
     # Drawn text smaller than this (in px) is unreadable; say so.
-    SMALL_TEXT_PX = 9.0
+    SMALL_TEXT_PX = 10.0
 
     def effective_text_px(self) -> float:
         """How tall the diagram's text is on screen right now."""
