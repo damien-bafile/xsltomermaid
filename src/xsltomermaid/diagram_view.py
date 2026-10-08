@@ -207,6 +207,11 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
   #container g.xref { filter: drop-shadow(0 0 2px var(--ref)) drop-shadow(0 0 4px var(--ref)); }
   #container g.xref > rect.entityBox {
     stroke: var(--ref) !important; stroke-width: 2px !important; stroke-dasharray: 6 3; }
+  /* Relationship labels can be moved and rotated (page CSS: not exported). */
+  #container text.relationshipLabel, #container rect.relationshipLabelBox { cursor: move; }
+  #container rect.relationshipLabelBox.xlabel {
+    stroke: var(--sel) !important; stroke-width: 1.5px !important; opacity: 1 !important; }
+  #xlabelhandle { fill: var(--sel); stroke: #ffffff; stroke-width: 1.5px; cursor: grab; }
   #container rect.xrow { fill: __ROWFILL__ !important; stroke: var(--sel) !important;
     stroke-width: 2px !important; }
   #container rect.xjoin { fill: __JOINFILL__ !important; stroke: var(--ref) !important;
@@ -352,7 +357,7 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
   }
   document.addEventListener('keydown', function (e) {
     var current = document.querySelector('#container g.xsel');
-    if (e.key === 'Escape') { window.selectEntity(''); console.log('xsltomermaid:click:'); return; }
+    if (e.key === 'Escape') { window.clearLabelSelection(); window.selectEntity(''); console.log('xsltomermaid:click:'); return; }
     if (e.key === 'Enter' && current) {
       console.log('xsltomermaid:dblclick:' + current.id); e.preventDefault(); return;
     }
@@ -378,7 +383,147 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
     g.scrollIntoView({ block: tall ? 'start' : 'center', inline: 'center' });
     return true;
   };
-  window.renderDiagram = function (text, config, background, canvas, fit, focus) {
+  // Relationship labels: click one to select it (outline plus a round
+  // handle), drag the label to move it, drag the handle to rotate it around
+  // its centre (Shift snaps to 15 degrees), double-click to reset, Esc to let
+  // go. Edits are inline transforms, so exports keep them; Python remembers
+  // them per relationship (window._labelKeys[i] names the i-th label drawn).
+  window._labelKeys = [];
+  window._labelEdits = {};
+  var _lab = null, _drag = null;
+  function labelParts(t) {
+    var r = t.previousElementSibling;
+    return (r && r.tagName === 'rect' && r.classList.contains('relationshipLabelBox')) ? [r, t] : [t];
+  }
+  function labelKey(t) {
+    // By position, not id: Mermaid keeps counting rel<n> across renders.
+    var all = document.querySelectorAll('#container text.relationshipLabel');
+    var n = Array.prototype.indexOf.call(all, t);
+    return window._labelKeys[n] || t.id;
+  }
+  function labelCentre(t) {
+    var b = t.getBBox();  // untransformed: the label's own centre
+    return { x: b.x + b.width / 2, y: b.y + b.height / 2, w: b.width };
+  }
+  function applyLabel(t, e) {
+    var c = labelCentre(t);
+    var on = e && (e.a || e.dx || e.dy);
+    var tf = on ? 'translate(' + (e.dx || 0) + ',' + (e.dy || 0) + ') rotate(' +
+      (e.a || 0) + ',' + c.x + ',' + c.y + ')' : '';
+    labelParts(t).forEach(function (el) {
+      if (on) el.setAttribute('transform', tf); else el.removeAttribute('transform');
+    });
+  }
+  window.setLabelEdits = function (keys, edits) {
+    window._labelKeys = keys || [];
+    window._labelEdits = edits || {};
+    document.querySelectorAll('#container text.relationshipLabel').forEach(function (t) {
+      applyLabel(t, window._labelEdits[labelKey(t)]);
+    });
+    placeHandle();
+  };
+  function placeHandle() {
+    var h = document.getElementById('xlabelhandle');
+    if (!_lab || !_lab.isConnected) {
+      _lab = null;
+      if (h) h.remove();
+      return;
+    }
+    var c = labelCentre(_lab), e = window._labelEdits[labelKey(_lab)] || {};
+    var r = c.w / 2 + 12, a = (e.a || 0) * Math.PI / 180;
+    if (!h) {
+      h = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      h.id = 'xlabelhandle';
+      h.setAttribute('r', 5);
+      _lab.ownerSVGElement.appendChild(h);
+    }
+    h.setAttribute('cx', c.x + (e.dx || 0) + r * Math.cos(a));
+    h.setAttribute('cy', c.y + (e.dy || 0) + r * Math.sin(a));
+  }
+  function selectLabel(t) {
+    document.querySelectorAll('#container .xlabel').forEach(function (el) {
+      el.classList.remove('xlabel');
+    });
+    _lab = t;
+    if (t) labelParts(t).forEach(function (el) { el.classList.add('xlabel'); });
+    placeHandle();
+  }
+  window.clearLabelSelection = function () { selectLabel(null); };
+  function labelFrom(target) {
+    if (!target || !target.classList) return null;
+    if (target.classList.contains('relationshipLabel')) return target;
+    if (target.classList.contains('relationshipLabelBox')) {
+      var t = target.nextElementSibling;
+      return t && t.classList.contains('relationshipLabel') ? t : null;
+    }
+    return null;
+  }
+  function svgPoint(ev) {
+    var svg = document.querySelector('#container svg');
+    var p = svg.createSVGPoint();
+    p.x = ev.clientX; p.y = ev.clientY;
+    return p.matrixTransform(svg.getScreenCTM().inverse());
+  }
+  function saveLabel(t) {
+    var e = window._labelEdits[labelKey(t)] || {};
+    console.log('xsltomermaid:label:' + JSON.stringify(
+      [labelKey(t), e.a || 0, e.dx || 0, e.dy || 0]));
+  }
+  document.addEventListener('mousedown', function (ev) {
+    if (ev.button !== 0) return;
+    if (ev.target.id === 'xlabelhandle' && _lab) {
+      _drag = { kind: 'rotate', moved: false };
+    } else {
+      var t = labelFrom(ev.target);
+      if (!t) return;
+      selectLabel(t);
+      var p = svgPoint(ev), e = window._labelEdits[labelKey(t)] || {};
+      _drag = { kind: 'move', x: p.x - (e.dx || 0), y: p.y - (e.dy || 0), moved: false };
+    }
+    ev.preventDefault();
+    ev.stopPropagation();
+  }, true);
+  document.addEventListener('mousemove', function (ev) {
+    if (!_drag || !_lab) return;
+    var key = labelKey(_lab);
+    var e = window._labelEdits[key] || (window._labelEdits[key] = { a: 0, dx: 0, dy: 0 });
+    var p = svgPoint(ev);
+    if (_drag.kind === 'move') {
+      e.dx = Math.round(p.x - _drag.x);
+      e.dy = Math.round(p.y - _drag.y);
+    } else {
+      var c = labelCentre(_lab);
+      var a = Math.atan2(p.y - (c.y + (e.dy || 0)), p.x - (c.x + (e.dx || 0))) * 180 / Math.PI;
+      if (ev.shiftKey) a = Math.round(a / 15) * 15;
+      e.a = Math.round(a);
+    }
+    _drag.moved = true;
+    applyLabel(_lab, e);
+    placeHandle();
+  });
+  document.addEventListener('mouseup', function () {
+    if (_drag && _drag.moved && _lab) saveLabel(_lab);
+    _drag = null;
+  });
+  // Label and handle clicks are theirs: they don't select or clear a table.
+  document.addEventListener('click', function (ev) {
+    if (labelFrom(ev.target) || ev.target.id === 'xlabelhandle') {
+      ev.stopImmediatePropagation();
+    } else if (_lab) {
+      selectLabel(null);
+    }
+  }, true);
+  document.addEventListener('dblclick', function (ev) {
+    var t = labelFrom(ev.target);
+    if (!t) return;
+    window._labelEdits[labelKey(t)] = { a: 0, dx: 0, dy: 0 };
+    applyLabel(t, null);
+    placeHandle();
+    saveLabel(t);
+    ev.stopImmediatePropagation();
+  }, true);
+  window.renderDiagram = function (text, config, background, canvas, fit, focus,
+                                   labelKeys, labelEdits) {
     var seq = ++window._renderSeq;
     window._mermaidDone = false;
     window._mermaidError = null;
@@ -397,6 +542,8 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
       mermaid.render('erGraph' + seq, text).then(function (res) {
         if (seq !== window._renderSeq) return;   // a newer render superseded us
         document.getElementById('container').innerHTML = res.svg;
+        _lab = null;
+        window.setLabelEdits(labelKeys, labelEdits);
         window._fit = fit !== false;
         window.fitDiagram(false);
         window.centreOnEntity(focus);
@@ -1043,6 +1190,7 @@ class DiagramView(QWidget):
     # the bool is True for a double-click.
     entity_clicked = Signal(str, bool)
     row_clicked = Signal(str, str)  # entity id (DOM key), column name in the diagram
+    labels_changed = Signal()  # a relationship label was moved, rotated or reset
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1060,6 +1208,10 @@ class DiagramView(QWidget):
         self._pending_render: tuple[str, RenderStyle, int] | None = None
         self._focus_entity = ""
         self._last_message: tuple[str, str] | None = None  # re-themed on a scheme switch
+        # Relationship-label edits, {key: [angle, dx, dy]}, kept across redraws;
+        # _label_keys names the drawn labels in order (rel1, rel2, ...).
+        self._label_edits: dict[str, list[float]] = {}
+        self._label_keys: list[str] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1201,6 +1353,9 @@ class DiagramView(QWidget):
         self._view.page().runJavaScript("window.fitDiagram && window.fitDiagram(true)")
 
     def _on_bridge(self, kind: str, payload: str):
+        if kind == "label":
+            self._on_label_edit(payload)
+            return
         if kind not in ("click", "dblclick"):
             return
         group_id, _, row = payload.partition("|")
@@ -1208,6 +1363,33 @@ class DiagramView(QWidget):
         self.entity_clicked.emit(entity, kind == "dblclick")
         if entity and row:
             self.row_clicked.emit(entity, row)
+
+    def _on_label_edit(self, payload: str):
+        """A label was moved, rotated or reset in the page: remember it."""
+        try:
+            key, angle, dx, dy = json.loads(payload)
+            angle, dx, dy = float(angle), float(dx), float(dy)
+        except (ValueError, TypeError):
+            return
+        if angle or dx or dy:
+            self._label_edits[str(key)] = [angle, dx, dy]
+        else:
+            self._label_edits.pop(str(key), None)
+        self.labels_changed.emit()
+
+    def has_label_edits(self) -> bool:
+        return bool(self._label_edits)
+
+    def reset_labels(self):
+        """Put every relationship label back where Mermaid placed it."""
+        self._label_edits.clear()
+        if self._view is not None and self._shell_loaded:
+            self._view.page().runJavaScript(
+                "window.setLabelEdits && window.setLabelEdits({}, {{}})".format(
+                    json.dumps(self._label_keys)
+                )
+            )
+        self.labels_changed.emit()
 
     def mark_rows(self, kind: str, rows: list[tuple[str, str]]):
         """Tint rows in the drawn diagram: ``kind`` "xrow" (a picked column,
@@ -1259,7 +1441,8 @@ class DiagramView(QWidget):
 
     # -- rendering ---------------------------------------------------------
     def set_diagram(
-        self, mermaid_text: str, style: RenderStyle | None = None, focus: str = ""
+        self, mermaid_text: str, style: RenderStyle | None = None, focus: str = "",
+        label_keys: list[str] | None = None,
     ):
         """Render a diagram into the view (async).
 
@@ -1271,6 +1454,8 @@ class DiagramView(QWidget):
         if not self.available or self._view is None or self._workdir is None:
             return
         self._focus_entity = focus
+        if label_keys is not None:
+            self._label_keys = list(label_keys)
         style = style or RenderStyle()
         self._font_px = style.font_size
         self._last_message = None
@@ -1289,13 +1474,18 @@ class DiagramView(QWidget):
                 self._view.load(self._shell_url)
 
     def _invoke_render(self, mermaid_text: str, style: RenderStyle, gen: int):
-        script = "renderDiagram({}, {}, {}, {}, {}, {})".format(
+        edits = {
+            key: {"a": a, "dx": dx, "dy": dy} for key, (a, dx, dy) in self._label_edits.items()
+        }
+        script = "renderDiagram({}, {}, {}, {}, {}, {}, {}, {})".format(
             json.dumps(mermaid_text),
             json.dumps(_mermaid_config(style)),
             json.dumps(style.background),
             json.dumps(self.palette().color(QPalette.Base).name()),
             json.dumps(bool(style.use_max_width)),
             json.dumps(self._focus_entity),
+            json.dumps(self._label_keys),
+            json.dumps(edits),
         )
         self._view.page().runJavaScript(script)
         self._poll_mermaid(gen, 0)
@@ -1495,6 +1685,7 @@ class DiagramView(QWidget):
         #    keeps the .svg centred in browsers too.
         svg = self._run_js(
             "(function(){"
+            "window.clearLabelSelection&&window.clearLabelSelection();"
             "var s=document.querySelector('.mermaid svg');"
             "if(!s)return '';"
             # The view's fit sets inline width/height; the file keeps its own.

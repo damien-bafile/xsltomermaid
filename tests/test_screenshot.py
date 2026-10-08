@@ -2355,6 +2355,33 @@ def test_a_map_draw_arrives_on_the_busiest_table(monkeypatch):
     del app
 
 
+def test_relationship_labels_can_be_moved_rotated_kept_and_reset(tmp_path, monkeypatch):
+    from xsltomermaid.diagram_view import _shell_html
+
+    page = _shell_html()
+    for name in ("window.setLabelEdits", "xlabelhandle", "window.clearLabelSelection"):
+        assert name in page
+    app, window = _inspector_window(tmp_path)
+    view = window._diagram_view
+    calls = []
+    monkeypatch.setattr(view, "set_diagram", lambda *a, **k: calls.append(a))
+    window._render_selection()
+    keys = calls[-1][3]  # each label named by its relationship, in drawn order
+    assert keys and all(k.count("|") == 2 for k in keys)
+    changed = []
+    view.labels_changed.connect(lambda: changed.append(1))
+    view._on_bridge("label", '["%s", 90, 28, 19]' % keys[0])
+    assert view._label_edits == {keys[0]: [90.0, 28.0, 19.0]} and view.has_label_edits()
+    view._on_bridge("label", '["%s", 0, 0, 0]' % keys[0])  # double-click reset
+    assert not view.has_label_edits()
+    view._on_bridge("label", '["%s", -30, 0, 0]' % keys[0])
+    window._reset_labels_action.trigger()
+    assert not view.has_label_edits() and len(changed) == 4
+    view._on_bridge("label", "not json")  # ignored
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()

@@ -874,6 +874,13 @@ class MainWindow(QMainWindow):
                                 QKeySequence.StandardKey.Undo, schema_only=True)
         diagram_menu.addAction(self._undo_action)
         diagram_menu.aboutToShow.connect(self._sync_undo_action)
+        self._reset_labels_action = act(
+            "Reset &label layout", self._diagram_view.reset_labels, schema_only=True
+        )
+        self._reset_labels_action.setToolTip(
+            "Put moved or rotated relationship labels back where they were drawn."
+        )
+        diagram_menu.addAction(self._reset_labels_action)
         diagram_menu.addSeparator()
         diagram_menu.addAction(
             act("&Draw ticked", self._render_selection,
@@ -955,6 +962,8 @@ class MainWindow(QMainWindow):
             ("Map: drag, Ctrl+click", "Select a region, add or remove a table"),
             ("Map: arrows, Space, Enter, Ctrl+A", "Move, select, open, select the cluster"),
             ("Table view: Space", "Tick the highlighted connected table"),
+            ("Diagram: drag a relationship label", "Move it; drag its dot to rotate "
+             "(Shift: 15° steps); double-click to reset"),
         ]
         table = "".join(
             f"<tr><td style='padding:2px 16px 2px 0'><b>{keys}</b></td><td>{what}</td></tr>"
@@ -1925,7 +1934,10 @@ class MainWindow(QMainWindow):
             )
             return
         self._diagram_view.set_diagram(
-            mermaid_text, self._options_bar.render_style(), self._hub_entity(final)
+            mermaid_text, self._options_bar.render_style(), self._hub_entity(final),
+            # Names each drawn relationship label (rel1, rel2, ... in the order
+            # generate_mermaid writes them), so moved/rotated labels are kept.
+            [f"{r.parent_table}|{r.child_table}|{r.label}" for r in final.relationships],
         )
         # A brighter, scannable success summary: dim the "Loaded <file> —" lead
         # (the name is already in the file chip) and give the counts full contrast.
@@ -2477,7 +2489,7 @@ class MainWindow(QMainWindow):
         """
         view_style = self._options_bar.render_style()
         relit = style != view_style
-        self._begin_render(f"Rendering diagram to {kind.upper()}…")
+        self._begin_render(f"Exporting {kind.upper()}…")
         try:
             if relit:
                 self._diagram_view.set_diagram(self._mermaid_text, style)

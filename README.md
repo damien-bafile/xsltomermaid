@@ -57,6 +57,11 @@ this export.
   controls. The percentage is the real on-screen scale. When you zoom or Fit
   below a readable size it says so, and picking a table in the list, map or
   Table view goes back to a readable size centred on it.
+- **Relationship labels can be moved and rotated** to clear tables they
+  overlap: click one, drag it to move it, drag its round handle to rotate it
+  around its centre (Shift snaps to 15°), double-click to reset. Changes are
+  kept while the app runs, survive redraws, go into PNG/SVG/PDF exports, and
+  **Diagram → Reset label layout** puts them all back.
 - **Click a table** to select it: it's highlighted, and the table list scrolls
   to it. **Double-click** (or **Enter**) opens it in the Table view. With the
   diagram focused, the **arrow keys** move between tables and **Esc** clears.
