@@ -125,7 +125,12 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
   links not counted), and a dot when the table is in the diagram.
 - **Sort** by name, **Most connected**, or **By cluster** (the map's clusters,
   with a header for each).
-- **Filter** by text (Ctrl+F) or by publisher **prefix** (`msdyn_`, `hsl_`, …),
+- **Find** tables (Ctrl+F) by name or by a column they have. The search is fuzzy:
+  letters in order match (`bkhdr` finds `bookingheader`, `acount` finds
+  `account`), a word of three letters or more also matches column names (the
+  column is shown beside the table), several words must all match, and the best
+  matches come first. The map highlights the same tables.
+- **Filter** by publisher **prefix** (`msdyn_`, `hsl_`, …),
   or use **Ticked only** and **Hide unconnected**.
 - **Grow selection** (under the list) holds **Add related tables**, which ticks
   the neighbours of the ticked tables (choose the foreign-key direction), and
@@ -175,7 +180,7 @@ specific view.
 | Keys | Action |
 |---|---|
 | Ctrl+O | Open a spreadsheet |
-| Ctrl+F | Filter the table list |
+| Ctrl+F | Find tables (by name or column) |
 | F5 · Ctrl+Enter | Draw the ticked tables now |
 | Esc | Stop drawing · clear the diagram selection |
 | Ctrl+Z | Undo the last change to the ticks |
