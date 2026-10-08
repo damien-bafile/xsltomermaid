@@ -464,11 +464,28 @@ class MainWindow(QMainWindow):
             "with spaces or symbols, and names starting with a digit are bracketed."
         )
         self._sql_quote_all.toggled.connect(lambda _on: self._refresh_sql())
+        # Dynamics data: an append-only copy keeps every version of a row.
+        self._sql_latest = QCheckBox("Latest version only")
+        self._sql_latest.setToolTip(
+            "For a Dynamics copy made by Azure Synapse Link or Fabric, where every "
+            "change adds a row: keep each record's newest row (highest "
+            "versionnumber per primary key) and leave out deleted ones "
+            "(IsDelete). Those copies add both columns to every table."
+        )
+        self._sql_active = QCheckBox("Active records only")
+        self._sql_active.setToolTip(
+            "Keep rows with statecode = 0 (active) in every table that has a "
+            "statecode column."
+        )
+        for box in (self._sql_latest, self._sql_active):
+            box.toggled.connect(lambda _on: self._refresh_sql())
         self._copy_sql_btn = QPushButton("Copy S&QL")
         self._copy_sql_btn.setToolTip("Copy the query to the clipboard (Ctrl+Shift+Q).")
         self._copy_sql_btn.clicked.connect(self.copy_sql)
         sql_grid.addWidget(self._copy_sql_btn, 2, 2, Qt.AlignRight)
         sql_grid.addWidget(self._sql_quote_all, 3, 1, 1, 2)
+        sql_grid.addWidget(self._sql_latest, 4, 1, 1, 2)
+        sql_grid.addWidget(self._sql_active, 5, 1, 1, 2)
         sql_grid.setColumnStretch(2, 1)
         sql_layout.addLayout(sql_grid)
         self._sql_view = QPlainTextEdit()
@@ -2047,6 +2064,9 @@ class MainWindow(QMainWindow):
                 join=self._sql_join.currentData(),
                 top=self._sql_top.value(),
                 quote_all=self._sql_quote_all.isChecked(),
+                latest_only=self._sql_latest.isChecked(),
+                active_only=self._sql_active.isChecked(),
+                full_schema=self._schema,
             )
         )
 

@@ -116,6 +116,9 @@ def generate_select(
     join: str = "INNER",
     top: int = 0,
     quote_all: bool = False,
+    latest_only: bool = False,
+    active_only: bool = False,
+    full_schema: Schema | None = None,
 ) -> str:
     """A ``SELECT`` over ``schema.tables``, joined along ``schema.relationships``.
 
@@ -128,6 +131,19 @@ def generate_select(
 
     Names are bracketed only where T-SQL needs it (see :func:`ident`);
     ``quote_all`` brackets every name.
+
+    For Dynamics data:
+
+    - ``latest_only`` is for an append-only copy (Azure Synapse Link, Fabric),
+      where every change adds a row: each table becomes a subquery ranking its
+      rows per primary key by ``versionnumber`` (newest first) without the
+      ``IsDelete`` rows, and the joins keep rank 1. Those copies add both
+      columns to every table, so they needn't be in the spreadsheet.
+    - ``active_only`` keeps ``statecode = 0`` for every table that has one.
+
+    Both go in each join's ``ON`` (so LEFT JOINs keep their meaning) and, for
+    the ``FROM`` table, in ``WHERE``. ``full_schema`` (the whole sheet) is
+    where columns are looked up, as ``schema`` may have had some left out.
     """
 
     def q(name: str) -> str:
@@ -191,19 +207,63 @@ def generate_select(
     else:
         lines.append(f"{head} *  -- every column was left out in the Columns tab")
 
-    lines.append(f"FROM {_table_ref(root_table, q)} AS {q(aliases[root_table.name.lower()])}")
+    full = {t.name.lower(): t for t in (full_schema.tables if full_schema else tables)}
+    unranked: list[str] = []  # no primary key to rank by
+    no_state: list[str] = []  # no statecode column
+
+    def source(table: Table, alias: str) -> tuple[str, list[str]]:
+        """The table (or its latest-version subquery) and its row filters."""
+        ref, conditions = _table_ref(table, q), []
+        columns = full.get(table.name.lower(), table).columns
+        if latest_only:
+            keys = [c.name for c in columns if c.is_primary_key]
+            if keys:
+                ref = (
+                    "(\n"
+                    f"    SELECT *, ROW_NUMBER() OVER (PARTITION BY "
+                    f"{', '.join(q(k) for k in keys)} ORDER BY versionnumber DESC)"
+                    " AS _version_rank\n"
+                    f"    FROM {ref}\n"
+                    "    WHERE ISNULL(IsDelete, 0) = 0\n"
+                    ")"
+                )
+                conditions.append(f"{q(alias)}._version_rank = 1")
+            else:
+                unranked.append(table.name)
+        if active_only:
+            state = next((c.name for c in columns if c.name.lower() == "statecode"), None)
+            if state:
+                conditions.append(f"{q(alias)}.{q(state)} = 0")
+            else:
+                no_state.append(table.name)
+        return ref, conditions
+
+    root_alias = aliases[root_table.name.lower()]
+    root_ref, where = source(root_table, root_alias)
+    lines.append(f"FROM {root_ref} AS {q(root_alias)}")
     keyword = "INNER JOIN" if join == "INNER" else "LEFT JOIN"
     for rel, new in tree:
         table = by_name[new]
-        lines.append(f"{keyword} {_table_ref(table, q)} AS {q(aliases[new])}")
+        ref, conditions = source(table, aliases[new])
+        lines.append(f"{keyword} {ref} AS {q(aliases[new])}")
         on = _on_clause(rel, aliases, q)
+        extra = "".join(f" AND {c}" for c in conditions)
         if on is None:
             lines.append(
-                f"    ON 1 = 1  -- TODO: join columns unknown for "
+                f"    ON 1 = 1{extra}  -- TODO: join columns unknown for "
                 f"{rel.child_table}.{rel.label or '?'} → {rel.parent_table}"
             )
         else:
-            lines.append(f"    ON {on}")
+            lines.append(f"    ON {on}{extra}")
+    if where:
+        lines.append("WHERE " + "\n  AND ".join(where))
+    if unranked:
+        notes.append(
+            "Latest version only: no primary key to rank versions by, so all rows "
+            f"are kept for {', '.join(unranked)}."
+        )
+    if no_state:
+        notes.append(f"Active records only: no statecode column in {', '.join(no_state)}.")
 
     # Everything that didn't become a JOIN, said out loud.
     for i, rel in enumerate(schema.relationships):
