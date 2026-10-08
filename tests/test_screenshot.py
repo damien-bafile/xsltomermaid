@@ -1339,7 +1339,10 @@ def test_sql_tab_follows_the_diagram_and_its_options(tmp_path, monkeypatch):
     window._sql_join.setCurrentIndex(window._sql_join.findData("LEFT"))
     window._sql_top.setValue(0)
     sql = window._sql_view.toPlainText()
-    assert sql.startswith("SELECT\n") and "FROM [dbo].[OrderLine]" in sql and "LEFT JOIN" in sql
+    assert sql.startswith("SELECT\n") and "FROM dbo.OrderLine" in sql and "LEFT JOIN" in sql
+    window._sql_quote_all.setChecked(True)  # every name bracketed
+    assert "FROM [dbo].[OrderLine]" in window._sql_view.toPlainText()
+    window._sql_quote_all.setChecked(False)
 
     copied = []
     monkeypatch.setattr(app_module.QGuiApplication.clipboard(), "setText", copied.append)
