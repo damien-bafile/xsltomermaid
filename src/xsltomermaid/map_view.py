@@ -175,6 +175,7 @@ class SchemaMapView(QWidget):
         self._items: dict[str, QGraphicsEllipseItem] = {}
         self._ticked: set[str] = set()
         self._filter = ""
+        self._matches = None  # the list's search, or None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -490,7 +491,7 @@ class SchemaMapView(QWidget):
             return (
                 not (item.isSelected() or name == self._current),
                 name not in self._ticked,
-                not (self._filter and self._filter in name.lower()),
+                not (self._filter and self._is_match(name)),
                 -node.degree,
                 name,
             )
@@ -503,7 +504,7 @@ class SchemaMapView(QWidget):
             marked = item.isSelected() or name == self._current or name in self._ticked
             if not (zoomed or marked) or not visible.contains(node.x, node.y):
                 continue
-            if self._filter and self._filter not in name.lower() and not item.isSelected():
+            if self._filter and not self._is_match(name) and not item.isSelected():
                 continue  # dimmed tables stay unnamed while filtering
             w, h = label.boundingRect().width(), label.boundingRect().height()
             offset = r * scale + 4  # just right of the dot, in screen pixels
@@ -603,8 +604,21 @@ class SchemaMapView(QWidget):
         self._draw_btn.setText(text)
 
     def set_filter(self, text: str):
-        self._filter = text.strip().lower()
+        """Highlight tables containing ``text`` (see :meth:`set_matches`)."""
+        needle = text.strip().lower()
+        self.set_matches(
+            {n for n in self._items if needle in n.lower()} if needle else None
+        )
+
+    def set_matches(self, names):
+        """Highlight these tables (the list's search) and dim the rest; None
+        clears the search."""
+        self._matches = set(names) if names is not None else None
+        self._filter = "1" if names is not None else ""  # searching or not
         self._restyle()
+
+    def _is_match(self, name: str) -> bool:
+        return self._matches is None or name in self._matches
 
     def _on_selection_changed(self, emit: bool = True):
         names = self.selected()
@@ -637,7 +651,7 @@ class SchemaMapView(QWidget):
                 item.setPen(ticked_pen)
             else:
                 item.setPen(QPen(Qt.NoPen))
-            match = not self._filter or self._filter in name.lower()
+            match = self._is_match(name)
             # A selected table is never dimmed, even when it isn't a match.
             item.setOpacity(1.0 if (match or item.isSelected()) else 0.15)
             item.setZValue(1 if (item.isSelected() or (self._filter and match)) else 0)

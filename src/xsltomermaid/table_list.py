@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import (
     QPointF,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import (
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from .config import RENDER_WARN_LIMIT
+from .search import match_table
 from .schema_map import name_prefix
 from .theme import (
     _ACCENT,
@@ -73,6 +75,21 @@ _ROLE_DRAWN = Qt.UserRole + 2  # True when the table is in the current diagram
 
 
 _ROLE_MAPSEL = Qt.UserRole + 3  # True when the table is selected on the map
+_ROLE_MATCH = Qt.UserRole + 5  # the column a search matched ("" if the name did)
+
+_ROLE_RANK = Qt.UserRole + 6  # position in the current order (for sortItems)
+
+
+class _TableItem(QListWidgetItem):
+    """A table row that Qt can sort in place by its rank (taking 1,800 rows
+    out and back took most of a second)."""
+
+    def __lt__(self, other):  # noqa: D105
+        return (self.data(_ROLE_RANK) or 0) < (other.data(_ROLE_RANK) or 0)
+
+
+# Above this many tables, searching waits for a pause in typing.
+_SEARCH_DEBOUNCE_TABLES = 300
 
 
 _ROLE_GROUP = Qt.UserRole + 4  # header text above the first row of a cluster
@@ -111,7 +128,8 @@ class _TableRowDelegate(QStyledItemDelegate):
             tint.setAlphaF(0.16)
             painter.fillRect(option.rect, tint)
             painter.fillRect(option.rect.adjusted(0, 0, -(option.rect.width() - 3), 0), QColor(_ACCENT))
-        if not links and not drawn:
+        matched = index.data(_ROLE_MATCH) or ""
+        if not links and not drawn and not matched:
             super().paint(painter, option, index)
             return
         out, in_ = links or (0, 0)
@@ -127,6 +145,26 @@ class _TableRowDelegate(QStyledItemDelegate):
         style.drawPrimitive(QStyle.PE_PanelItemViewItem, opt, painter, opt.widget)
         opt.rect = option.rect.adjusted(0, 0, -width, 0)
         style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        if matched:
+            # Found through a column: name it, muted, after the table name.
+            text_rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+            start = text_rect.left() + metrics.horizontalAdvance(opt.text) + 8
+            room = opt.rect.right() - start
+            if room > 24:
+                painter.save()
+                selected_now = bool(option.state & QStyle.State_Selected)
+                painter.setPen(
+                    option.palette.color(QPalette.HighlightedText)
+                    if selected_now
+                    else QColor(_muted_hex(option.widget))
+                )
+                hint = metrics.elidedText(f"· {matched}", Qt.ElideRight, room)
+                painter.drawText(
+                    text_rect.adjusted(start - text_rect.left(), 0, 0, 0),
+                    Qt.AlignLeft | Qt.AlignVCenter,
+                    hint,
+                )
+                painter.restore()
         painter.save()
         right = option.rect.adjusted(0, 0, -6, 0)
         selected = bool(option.state & QStyle.State_Selected)
@@ -159,6 +197,7 @@ class TableSelector(QWidget):
     related_requested = Signal()  # user asked to also tick the related tables
     path_requested = Signal()  # user asked for the shortest path between two tables
     undone = Signal(str)  # the undo button restored the selection before this action
+    matches_changed = Signal(object)  # names the search matches, or None (no search)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -175,8 +214,20 @@ class TableSelector(QWidget):
         layout.addLayout(self._header_row)
 
         self._filter = QLineEdit()
-        self._filter.setPlaceholderText("Filter tables…")
-        self._filter.setAccessibleName("Filter tables")
+        self._filter.setPlaceholderText("Find tables or columns…")
+        self._filter.setAccessibleName("Find tables or columns")
+        self._filter.setToolTip(
+            "Fuzzy: letters in order find a table (\"bkhdr\" finds bookingheader); "
+            "a word of 3+ letters also finds tables with a matching column. "
+            "Several words must all match. Best matches come first."
+        )
+        self._search_index: dict[str, list[str]] = {}  # table -> column names
+        self._search_lower: dict[str, list[str]] = {}
+        self._matches = None  # {table: Match} while searching, else None
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(150)
+        self._search_timer.timeout.connect(self._run_search)
         self._filter.setClearButtonEnabled(True)
         self._filter.textChanged.connect(self._apply_filter_text)
         layout.addWidget(self._filter)
@@ -483,7 +534,7 @@ class TableSelector(QWidget):
         self._list.blockSignals(True)
         self._list.clear()
         for name in names:
-            item = QListWidgetItem(name)
+            item = _TableItem(name)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Unchecked)
             self._list.addItem(item)
@@ -522,19 +573,57 @@ class TableSelector(QWidget):
     def _items(self):
         return (self._list.item(i) for i in range(self._list.count()))
 
+    def set_search_index(self, columns: dict[str, list[str]]):
+        """Each table's column names, so a search can find tables by column."""
+        self._search_index = columns
+        # Lowercased once here, not on every keystroke.
+        self._search_lower = {t: [c.lower() for c in cols] for t, cols in columns.items()}
+        if self._filter.text().strip():
+            self._run_search()
+
     def _apply_filter_text(self, _text: str = ""):
-        self._apply_filters()
+        # A big schema waits for a pause in typing; a small one is instant.
+        if self._list.count() > _SEARCH_DEBOUNCE_TABLES:
+            self._search_timer.start()
+        else:
+            self._run_search()
+
+    def _run_search(self):
+        """Match the search text against every table, then filter and order."""
+        terms = self._filter.text().lower().split()
+        if not terms:
+            self._matches = None
+        else:
+            self._matches = {}
+            for item in self._items():
+                name = item.text()
+                found = match_table(
+                    terms, name, self._search_index.get(name, []), self._search_lower.get(name)
+                )
+                if found is not None:
+                    self._matches[name] = found
+        self._list.blockSignals(True)
+        for item in self._items():
+            found = self._matches.get(item.text()) if self._matches else None
+            item.setData(_ROLE_MATCH, found.column if found else "")
+        self._list.blockSignals(False)
+        self._resort()  # orders, then filters
+        if self._matches:  # show the best match
+            first = next((i for i in self._items() if not i.isHidden()), None)
+            if first is not None:
+                self._list.scrollToItem(first)
+        self.matches_changed.emit(set(self._matches) if self._matches is not None else None)
 
     def _apply_filters(self):
         """Text, Ticked only, prefix and Hide unconnected, all together."""
-        needle = self._filter.text().strip().lower()
+        matches = self._matches
         ticked_only = self._ticked_only.isChecked()
         prefix = self._prefix.currentData()
         hide_lonely = self._hide_unconnected.isChecked()
         for item in self._items():
             links = item.data(_ROLE_LINKS)
             item.setHidden(
-                needle not in item.text().lower()
+                (matches is not None and item.text() not in matches)
                 or (ticked_only and item.checkState() != Qt.Checked)
                 or (prefix is not None and name_prefix(item.text()) != prefix)
                 or (hide_lonely and links is not None and sum(links) == 0)
@@ -551,7 +640,7 @@ class TableSelector(QWidget):
         self._hide_unconnected.setChecked(False)
         for widget in (self._filter, self._prefix, self._ticked_only, self._hide_unconnected):
             widget.blockSignals(False)
-        self._apply_filters()
+        self._run_search()  # re-filters and re-orders
 
     def _update_mapsel_note(self):
         hidden = sum(
@@ -622,9 +711,7 @@ class TableSelector(QWidget):
         """Reorder rows in place (ticks, data and the current row survive)."""
         mode = self._sort.currentData()
         current = self._list.currentItem().text() if self._list.currentItem() else ""
-        self._list.blockSignals(True)
-        items = [self._list.takeItem(0) for _ in range(self._list.count())]
-        self._list.blockSignals(False)
+        items = list(self._items())
         for item in items:  # headers only in "By cluster" order
             item.setData(_ROLE_GROUP, None)
         if mode == "cluster" and self.cluster_provider is not None:
@@ -661,10 +748,21 @@ class TableSelector(QWidget):
             items.sort(key=lambda it: (-sum(it.data(_ROLE_LINKS) or (0, 0)), it.text().lower()))
         else:
             items.sort(key=lambda it: it.text().lower())
+        if self._matches:
+            # Searching: best matches first. Cluster headers would be cut up
+            # by the new order, so they're left off until the search clears.
+            for item in items:
+                item.setData(_ROLE_GROUP, None)
+            items.sort(key=lambda it: -self._matches[it.text()].score
+                       if it.text() in self._matches else 1)
+        # Rank each row, then let Qt reorder in place (fast, and rows keep
+        # their state); filter again in case the move dropped hidden flags.
         self._list.blockSignals(True)
-        for item in items:
-            self._list.addItem(item)
+        for rank, item in enumerate(items):
+            item.setData(_ROLE_RANK, rank)
+        self._list.sortItems(Qt.AscendingOrder)
         self._list.blockSignals(False)
+        self._apply_filters()
         if current:
             self.focus_table(current)
 

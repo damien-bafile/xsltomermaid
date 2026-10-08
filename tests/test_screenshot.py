@@ -2448,6 +2448,46 @@ def test_sql_and_mermaid_text_is_coloured_by_token():
     del app
 
 
+def test_search_finds_tables_by_fuzzy_name_or_column_best_first():
+    from xsltomermaid.excel_to_mermaid import Column, Schema, Table
+    from xsltomermaid.search import fuzzy_score, match_table
+
+    assert fuzzy_score("acount", "account") is not None  # a missing letter
+    assert fuzzy_score("bkhdr", "msdyn_bookingheader") is not None  # letters in order
+    assert fuzzy_score("zq", "account") is None
+    assert fuzzy_score("acc", "account") > fuzzy_score("acc", "msdyn_account")  # prefix wins
+    hit = match_table(["parentcustomerid"], "contact", ["contactid", "parentcustomerid"])
+    assert hit.column == "parentcustomerid"
+    assert match_table(["id"], "contact", ["contactid"]) is None  # short words: names only
+
+    tables = [
+        Table("dbo", "account", [Column("dbo", "account", 1, "accountid", "guid")]),
+        Table("dbo", "contact", [Column("dbo", "contact", 1, "parentcustomerid", "guid")]),
+        Table("dbo", "msdyn_accountkpi", [Column("dbo", "msdyn_accountkpi", 1, "x", "int")]),
+        Table("dbo", "lead", [Column("dbo", "lead", 1, "subject", "nvarchar")]),
+    ]
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window._apply_loaded("x.xlsx", [], Schema(tables, []), "")
+    sel = window._selector
+    seen = []
+    sel.matches_changed.connect(seen.append)
+    sel._filter.setText("acount")  # a typo still finds both, best first
+    shown = [i.text() for i in sel._items() if not i.isHidden()]
+    assert shown == ["account", "msdyn_accountkpi"]
+    assert seen[-1] == {"account", "msdyn_accountkpi"}  # the map highlights these
+    sel._filter.setText("parentcustomer")  # by column
+    rows = [i for i in sel._items() if not i.isHidden()]
+    assert [r.text() for r in rows] == ["contact"]
+    assert rows[0].data(app_module.Qt.UserRole + 5) == "parentcustomerid"  # the hint
+    sel._sort.setCurrentIndex(sel._sort.findData("links"))  # re-sorting keeps the filter
+    assert [i.text() for i in sel._items() if not i.isHidden()] == ["contact"]
+    sel._filter.setText("")
+    assert seen[-1] is None and all(not i.isHidden() for i in sel._items())
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()

@@ -638,7 +638,7 @@ class MainWindow(QMainWindow):
         self._selector.applied.connect(self._render_selection)
         self._selector.selection_changed.connect(self._on_selection_edited)
         self._selector.current_table_changed.connect(self._on_list_table_changed)
-        self._selector._filter.textChanged.connect(lambda t: self._map_view.set_filter(t))
+        self._selector.matches_changed.connect(self._map_view.set_matches)
         self._selector.related_requested.connect(self._add_related_tables)
         self._selector.path_requested.connect(self._find_shortest_path)
         self._selector.undone.connect(self._on_selection_undone)
@@ -981,7 +981,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+O", "Open a spreadsheet"),
             ("Ctrl+M", "Switch between the diagram and the map"),
             ("Ctrl+I / Ctrl+1–5", "Show the Details panel / one of its views"),
-            ("Ctrl+F", "Filter the table list"),
+            ("Ctrl+F", "Find tables by name or column (fuzzy)"),
             ("F5 or Ctrl+Enter", "Draw the ticked tables"),
             ("Esc", "Stop drawing; in the diagram or map, clear the selection"),
             ("Ctrl+Z", "Undo the last change to the ticks"),
@@ -1254,7 +1254,9 @@ class MainWindow(QMainWindow):
         self._options_bar.set_diagram_controls_visible(not visible)
         if visible:
             self._map_view.set_ticked(self._selector.selected_tables())
-            self._map_view.set_filter(self._selector._filter.text())
+            self._map_view.set_matches(
+                set(self._selector._matches) if self._selector._matches is not None else None
+            )
 
     def _on_map_table_activated(self, name: str, double: bool):
         self._focus_table(name, from_map=True)
@@ -1637,6 +1639,9 @@ class MainWindow(QMainWindow):
         names = [t.name for t in schema.tables]
         self._selector.set_tables(names)
         self._selector.set_link_counts(link_counts(schema))
+        self._selector.set_search_index(
+            {t.name: [c.name for c in t.columns] for t in schema.tables}
+        )
         self._selector.cluster_provider = lambda s=schema: cluster_index(s)
         self._auto_hide_audit(schema)
         self._map_view.set_schema(schema if names else None)
