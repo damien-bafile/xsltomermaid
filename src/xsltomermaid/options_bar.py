@@ -113,6 +113,13 @@ class DiagramOptionsBar(QWidget):
         self._prefix_schema.setToolTip("Title tables as schema.Table instead of Table.")
         self._keys_only = QCheckBox("&Keys only")
         self._keys_only.setToolTip("Show only primary-key and foreign-key columns.")
+        self._hide_system = QCheckBox("Hide system columns")
+        self._hide_system.setToolTip(
+            "Leave out Dynamics bookkeeping columns (importsequencenumber, "
+            "overriddencreatedon, time-zone and solution columns), the …name and "
+            "…yominame copies of a lookup, and …_base currency copies, from the "
+            "diagram, Table view and SQL. Keys are always kept."
+        )
         self._hide_audit = QCheckBox("Hide audit and system links")
         self._hide_audit.setToolTip(
             "Leave out createdby, modifiedby, owning…, organizationid and "
@@ -126,6 +133,7 @@ class DiagramOptionsBar(QWidget):
             self._prefix_schema,
             self._keys_only,
             self._hide_audit,
+            self._hide_system,
         ):
             chk.toggled.connect(lambda _v: self.changed.emit())
             # Never clip a checkbox label when the canvas narrows.
@@ -160,6 +168,9 @@ class DiagramOptionsBar(QWidget):
         self._keys_auto = False
         self._diagram_visible = True
         self._audit_chip = self._chip(lambda: self._hide_audit.setChecked(False))
+        self._system_share = 0.0
+        self._system_chip = self._chip(lambda: self._hide_system.setChecked(False))
+        self._hide_system.toggled.connect(lambda _on: self._sync_chips())
         self._keys_chip = self._chip(lambda: self._keys_only.setChecked(False))
         self._keys_chip.setText("Keys only: on for wide tables  ✕")
         self._keys_chip.setToolTip(
@@ -218,7 +229,8 @@ class DiagramOptionsBar(QWidget):
         row2.addStretch(1)
         row3 = QHBoxLayout()
         row3.setSpacing(12)
-        for chk in (self._fit_width, self._show_comments, self._prefix_schema, self._hide_audit):
+        for chk in (self._fit_width, self._show_comments, self._prefix_schema,
+                    self._hide_audit, self._hide_system):
             row3.addWidget(chk)
         row3.addStretch(1)
         more.addLayout(row2)
@@ -268,7 +280,15 @@ class DiagramOptionsBar(QWidget):
 
     def state_chips(self) -> list[QPushButton]:
         """The chips, for the window to place (the bar itself is full)."""
-        return [self._keys_chip, self._audit_chip]
+        return [self._keys_chip, self._audit_chip, self._system_chip]
+
+    def set_system_share(self, share: float):
+        """How much of the schema's columns are Dynamics system columns (0–1)."""
+        self._system_share = share
+        self._sync_chips()
+
+    def hide_system_columns(self) -> bool:
+        return self._hide_system.isChecked()
 
     def set_audit_share(self, share: float):
         """How much of the schema's links are audit/system ones (0–1)."""
@@ -302,6 +322,18 @@ class DiagramOptionsBar(QWidget):
                 f"Audit links hidden ({share}). Click to show them"
             )
         self._audit_chip.setVisible(audit)
+        system = self._hide_system.isChecked() and self._system_share > 0
+        if system:
+            share = f"{self._system_share:.0%}"
+            self._system_chip.setText(f"System columns hidden ({share})  ✕")
+            self._system_chip.setToolTip(
+                f"Dynamics system columns are {share} of all columns, so the diagram, "
+                "Table view and SQL leave them out. Click to show them."
+            )
+            self._system_chip.setAccessibleName(
+                f"System columns hidden ({share}). Click to show them"
+            )
+        self._system_chip.setVisible(system and self._diagram_visible)
         self._keys_chip.setVisible(self._diagram_visible and self.keys_only_auto())
 
     def add_trailing_widget(self, widget):
@@ -347,6 +379,7 @@ class DiagramOptionsBar(QWidget):
             prefix_schema=self._prefix_schema.isChecked(),
             keys_only=self._keys_only.isChecked(),
             hide_columns=HIDDEN_BY_DEFAULT if self._hide_audit.isChecked() else frozenset(),
+            hide_system=self._hide_system.isChecked(),
         )
 
     def hide_audit_links(self) -> bool:
@@ -362,7 +395,7 @@ class DiagramOptionsBar(QWidget):
             f"QPushButton:hover {{ background: {_ACCENT_WASH}; }}"
             f"QPushButton:focus {{ background: {_ACCENT_WASH}; border-color: {_ACCENT}; }}"
         )
-        for chip in (self._audit_chip, self._keys_chip):
+        for chip in (self._audit_chip, self._keys_chip, self._system_chip):
             chip.setStyleSheet(style)
 
     # Theme and background are left out on purpose: they follow the OS's light
@@ -378,6 +411,7 @@ class DiagramOptionsBar(QWidget):
             ("prefix_schema", self._prefix_schema),
             ("keys_only", self._keys_only),
             ("hide_audit", self._hide_audit),
+            ("hide_system", self._hide_system),
             ("more_open", self._more),
         ]
 

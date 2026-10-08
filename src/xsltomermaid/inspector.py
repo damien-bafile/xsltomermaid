@@ -94,6 +94,7 @@ class TableInspector(QWidget):
         self._columns.itemClicked.connect(self._on_fold_clicked)
         self._columns.itemActivated.connect(self._on_fold_clicked)
         self._fold = None
+        self._fold_label = "Hidden by Keys only"
         self._hidden_items: list[QListWidgetItem] = []
         self._hidden_open = False  # remembered while the app runs
         self._links = QTreeWidget()
@@ -159,7 +160,7 @@ class TableInspector(QWidget):
         if key in drawn:
             count = f"{len(result.columns):,} of {total} drawn"
             if result.hidden:
-                count += " (Keys only)"
+                count += " (Keys only)" if opts.keys_only else " (system columns hidden)"
         else:
             count = f"{len(included):,} of {total} ticked · not in the diagram"
         self._meta.setText(
@@ -187,7 +188,11 @@ class TableInspector(QWidget):
             if key in drawn and not excluded_here and column.name.lower() not in on_canvas:
                 # Ticked, but Keys only leaves it out: the group header says so.
                 item.setForeground(QColor(_muted_hex(self)))
-                item.setToolTip("Ticked, but Keys only leaves it out of the diagram.")
+                item.setToolTip(
+                    "Ticked, but Keys only leaves it out of the diagram."
+                    if opts.keys_only
+                    else "A Dynamics system column, hidden (More › Hide system columns)."
+                )
                 hidden_items.append(item)
             else:
                 shown_items.append(item)
@@ -200,9 +205,16 @@ class TableInspector(QWidget):
             font = self._fold.font()
             font.setBold(True)
             self._fold.setFont(font)
+            self._fold_label = (
+                "Hidden by Keys only" if opts.keys_only else "Hidden system columns"
+            )
             self._fold.setToolTip(
-                "Ticked columns that Keys only leaves out of the diagram. "
-                "Click (or Enter) to show or hide them."
+                (
+                    "Ticked columns that Keys only leaves out of the diagram. "
+                    if opts.keys_only
+                    else "Dynamics system columns, left out of the diagram and SQL. "
+                )
+                + "Click (or Enter) to show or hide them."
             )
             self._columns.addItem(self._fold)
             for item in hidden_items:
@@ -258,7 +270,7 @@ class TableInspector(QWidget):
         if self._fold is None:
             return
         arrow = "▾" if open_ else "▸"
-        self._fold.setText(f"{arrow}  Hidden by Keys only ({len(self._hidden_items):,})")
+        self._fold.setText(f"{arrow}  {self._fold_label} ({len(self._hidden_items):,})")
         for item in self._hidden_items:
             item.setHidden(not open_)
 

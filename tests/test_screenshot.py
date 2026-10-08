@@ -2488,6 +2488,62 @@ def test_search_finds_tables_by_fuzzy_name_or_column_best_first():
     del app
 
 
+def test_dynamics_system_columns_are_hidden_from_diagram_table_view_and_sql():
+    from xsltomermaid.excel_to_mermaid import (
+        Column, DiagramOptions, Relationship, Schema, Table, drawn_columns,
+        generate_mermaid, system_columns,
+    )
+
+    def col(n, name, **kw):
+        return Column("dbo", "account", n, name, "nvarchar", **kw)
+
+    account = Table("dbo", "account", [
+        col(1, "accountid", is_primary_key=True),
+        col(2, "name"),
+        col(3, "createdby", foreign_key_reference="dbo.systemuser.systemuserid"),
+        col(4, "createdbyname"),  # display copy of a lookup
+        col(5, "createdbyyominame"),
+        col(6, "revenue"),
+        col(7, "revenue_base"),  # currency copy
+        col(8, "importsequencenumber"),  # bookkeeping
+        col(9, "statecode"),
+        col(10, "statecodename"),  # choice label copy
+    ])
+    user = Table("dbo", "systemuser", [Column("dbo", "systemuser", 1, "systemuserid", "guid",
+                                              is_primary_key=True)])
+    schema = Schema([account, user], [Relationship("systemuser", "account", "createdby",
+                                                   ("createdby",), ("systemuserid",))])
+    assert system_columns(account) == {
+        "createdbyname", "createdbyyominame", "revenue_base", "importsequencenumber",
+        "statecodename",
+    }
+    opts = DiagramOptions(hide_system=True)
+    drawn = drawn_columns(account, opts)
+    assert [c.name for c in drawn.columns] == ["accountid", "name", "createdby", "revenue", "statecode"]
+    assert drawn.hidden == drawn.system == 5
+    assert 'more columns "+5 system columns hidden"' in generate_mermaid(schema, opts)
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window._apply_loaded("x.xlsx", [], schema, "")
+    bar = window._options_bar
+    assert bar.hide_system_columns()  # a third of the columns: switched on
+    assert bar._system_chip.text().startswith("System columns hidden (")
+    window._selector.check_tables(["account", "systemuser"])
+    window._render_selection()
+    assert "importsequencenumber" not in window._mermaid_text
+    assert "acc.importsequencenumber" not in window._sql_view.toPlainText()
+    assert "acc.revenue" in window._sql_view.toPlainText()
+    window._focus_table("account")
+    ins = window._inspector
+    assert ins._fold is not None and ins._fold.text().endswith("Hidden system columns (5)")
+    bar._system_chip.click()  # show them again
+    assert not bar.hide_system_columns()
+    assert "importsequencenumber" in window._mermaid_text
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()

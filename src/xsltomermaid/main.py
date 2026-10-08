@@ -112,6 +112,8 @@ from .excel_to_mermaid import (
     filter_schema,
     drawn_column_name,
     generate_mermaid,
+    system_columns,
+    without_system_columns,
     linked_fk_columns,
     related_tables,
     route_paths,
@@ -1286,6 +1288,19 @@ class MainWindow(QMainWindow):
             self._sync_map_hide_audit(True)
         self._options_bar.set_audit_share(self._audit_share)
 
+    def _auto_hide_system(self, schema: Schema):
+        """Hide Dynamics system columns when they're a big share (Dynamics
+        exports), with a chip to show them again."""
+        total = sum(len(t.columns) for t in schema.tables)
+        system = sum(len(system_columns(t)) for t in schema.tables)
+        share = system / total if total else 0.0
+        if share > 0.20:
+            box = self._options_bar._hide_system
+            box.blockSignals(True)
+            box.setChecked(True)
+            box.blockSignals(False)
+        self._options_bar.set_system_share(share)
+
     def _draw_from_map(self, names: list[str]):
         """Tick the map's selection (replacing the ticks, undoably) and draw it.
 
@@ -1644,6 +1659,7 @@ class MainWindow(QMainWindow):
         )
         self._selector.cluster_provider = lambda s=schema: cluster_index(s)
         self._auto_hide_audit(schema)
+        self._auto_hide_system(schema)
         self._map_view.set_schema(schema if names else None)
 
         # The file parsed but yielded no tables — every row was missing a
@@ -2047,6 +2063,8 @@ class MainWindow(QMainWindow):
     # -- actions -----------------------------------------------------------
     def _set_sql_schema(self, schema: Schema):
         """New tables for the SQL tab: refill Start from, keeping the choice."""
+        if self._options_bar.hide_system_columns():
+            schema = without_system_columns(schema)  # out of the SELECT list too
         self._sql_schema = schema
         current = self._sql_root.currentText()
         names = [t.name for t in schema.tables]
