@@ -34,6 +34,12 @@ from .theme import (
 )
 
 
+def _join_columns(rel) -> list[tuple[str, str]]:
+    """The (table, column) pairs a relationship joins on, both sides."""
+    child = rel.child_columns or tuple(c.strip() for c in rel.label.split(",") if c.strip())
+    return [(rel.child_table, c) for c in child] + [(rel.parent_table, p) for p in rel.parent_columns]
+
+
 class TableInspector(QWidget):
     """The Details panel's Table view: one table, its columns and neighbours.
 
@@ -47,9 +53,11 @@ class TableInspector(QWidget):
     column_toggled = Signal(str, str, bool)  # table, column, included
     add_requested = Signal(str)  # tick this table
     select_requested = Signal(str)  # move the view (and selection) here
-    reference_picked = Signal(str)  # a connected table picked in the list ("" for none)
+    reference_picked = Signal(str, list)  # connected table ("" for none), [(table, column)] it joins on
+    column_picked = Signal(str, str)  # (table, column) picked in the column list; ("", "") clears
 
     _ROLE_TABLE = Qt.UserRole
+    _ROLE_JOIN = Qt.UserRole + 1  # [(table, column), ...] the link joins on
     _ADD_COL = 1
 
     def __init__(self, parent=None):
@@ -81,6 +89,7 @@ class TableInspector(QWidget):
         self._columns.setAccessibleName("Columns of the selected table")
         self._columns.setUniformItemSizes(True)
         self._columns.itemChanged.connect(self._on_column_changed)
+        self._columns.currentItemChanged.connect(self._on_column_current)
         self._links = QTreeWidget()
         self._links.setAccessibleName("Tables connected to the selected table")
         self._links.setColumnCount(2)
@@ -89,11 +98,7 @@ class TableInspector(QWidget):
         self._links.setUniformRowHeights(True)
         self._links.itemClicked.connect(self._on_link_clicked)
         self._links.itemActivated.connect(self._on_link_activated)
-        self._links.currentItemChanged.connect(
-            lambda item, _prev: self.reference_picked.emit(
-                (item.data(0, self._ROLE_TABLE) or "") if item is not None else ""
-            )
-        )
+        self._links.currentItemChanged.connect(self._on_link_current)
         header = self._links.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -179,6 +184,9 @@ class TableInspector(QWidget):
         self._updating = False
 
         self._links.clear()
+        # A new table: no column or reference is picked yet.
+        self.column_picked.emit("", "")
+        self.reference_picked.emit("", [])
         self._add_group("References", [(r.parent_table, r) for r in outgoing])
         self._add_group("Referenced by", [(r.child_table, r) for r in incoming])
 
@@ -206,6 +214,7 @@ class TableInspector(QWidget):
                 parent, [f"{other}  ·  via {rel.label}", "in diagram" if drawn else "Add"]
             )
             row.setData(0, self._ROLE_TABLE, other)
+            row.setData(0, self._ROLE_JOIN, _join_columns(rel))
             row.setToolTip(0, f"{other} (through {rel.label}). Double-click to show it here.")
             row.setToolTip(self._ADD_COL, "" if drawn else f"Tick {other} in the diagram")
             if not drawn:
@@ -213,6 +222,31 @@ class TableInspector(QWidget):
                 font.setUnderline(True)
                 row.setFont(self._ADD_COL, font)
                 row.setForeground(self._ADD_COL, QColor(_link_hex(self)))
+
+    def _on_column_current(self, item, _prev=None):
+        if self._updating:
+            return
+        if item is None or not self._table:
+            self.column_picked.emit("", "")
+        else:
+            self.column_picked.emit(self._table, item.data(Qt.UserRole))
+
+    def _on_link_current(self, item, _prev=None):
+        other = item.data(0, self._ROLE_TABLE) if item is not None else None
+        if not other:
+            self.reference_picked.emit("", [])
+        else:
+            self.reference_picked.emit(other, list(item.data(0, self._ROLE_JOIN) or []))
+
+    def select_column(self, name: str) -> bool:
+        """Make ``name`` the current column (a row clicked in the diagram)."""
+        for i in range(self._columns.count()):
+            item = self._columns.item(i)
+            if item.data(Qt.UserRole).lower() == name.lower():
+                self._columns.setCurrentItem(item)
+                self._columns.scrollToItem(item)
+                return True
+        return False
 
     def _on_column_changed(self, item):
         if self._updating or not self._table:

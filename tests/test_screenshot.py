@@ -2230,6 +2230,42 @@ def test_picking_a_connected_table_marks_it_orange_in_the_diagram(monkeypatch):
     del app
 
 
+def test_rows_are_tinted_for_a_column_a_reference_and_a_clicked_row(monkeypatch):
+    from xsltomermaid.diagram_view import _shell_html
+    from xsltomermaid.excel_to_mermaid import Column, Relationship, Schema, Table
+
+    assert "window.markRows" in _shell_html() and "rect.xrow" in _shell_html()
+    tables = [
+        Table("dbo", "hsl_dayrule", [Column("dbo", "hsl_dayrule", 1, "hsl_dayruleid", "guid", is_primary_key=True),
+                                     Column("dbo", "hsl_dayrule", 2, "grp id", "guid",
+                                            foreign_key_reference="dbo.hsl_dayrulegroup.hsl_dayrulegroupid")]),
+        Table("dbo", "hsl_dayrulegroup", [Column("dbo", "hsl_dayrulegroup", 1, "hsl_dayrulegroupid", "guid",
+                                                 is_primary_key=True)]),
+    ]
+    rels = [Relationship("hsl_dayrulegroup", "hsl_dayrule", "grp id", ("grp id",), ("hsl_dayrulegroupid",))]
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window._apply_loaded("x.xlsx", [], Schema(tables, rels), "")
+    marks = []
+    monkeypatch.setattr(window._diagram_view, "mark_rows", lambda kind, rows: marks.append((kind, rows)))
+    window._focus_table("hsl_dayrule")
+    window._inspector.select_column("grp id")
+    assert marks[-1] == ("xrow", [("hsldayrule", "grp_id")])  # drawn name, DOM key
+    tree = window._inspector._links
+    tree.setCurrentItem(tree.topLevelItem(0).child(0))  # References: hsl_dayrulegroup
+    assert marks[-1] == ("xjoin", [("hsldayrule", "grp_id"), ("hsldayrulegroup", "hsl_dayrulegroupid")])
+    # As the page reports it: the group id, then the row's drawn name.
+    window._diagram_view._on_bridge(
+        "click", "entity-hsldayrulegroup-b3ec03d0-e4d3-5073-9de2-9b9ddd885256|hsl_dayrulegroupid"
+    )
+    assert window._inspector.current_table() == "hsl_dayrulegroup"
+    assert window._inspector._columns.currentItem().data(app_module.Qt.UserRole) == "hsl_dayrulegroupid"
+    window._focus_table("hsl_dayrule")
+    assert ("xrow", []) in marks[-3:] and ("xjoin", []) in marks[-3:]  # a new table clears both
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()

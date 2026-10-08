@@ -109,6 +109,7 @@ from .excel_to_mermaid import (
     Schema,
     filter_columns,
     filter_schema,
+    drawn_column_name,
     generate_mermaid,
     linked_fk_columns,
     related_tables,
@@ -390,6 +391,7 @@ class MainWindow(QMainWindow):
         self._inspector.add_requested.connect(self._add_table_from_inspector)
         self._inspector.select_requested.connect(self._focus_table)
         self._inspector.reference_picked.connect(self._mark_reference)
+        self._inspector.column_picked.connect(self._mark_column)
         tabs.addTab(self._inspector, "Table")
         tabs.setTabToolTip(0, "The selected table: its columns and connected tables")
         tabs.addTab(self._table_stack, "Data")
@@ -490,6 +492,7 @@ class MainWindow(QMainWindow):
         self._diagram_view.render_finished.connect(self._announce_render)
         self._diagram_view.render_error.connect(self._on_render_error)
         self._diagram_view.entity_clicked.connect(self._on_entity_clicked)
+        self._diagram_view.row_clicked.connect(self._on_row_clicked)
         self._entity_to_table: dict[str, str] = {}
         self._diagram_view.render_finished.connect(lambda _ok: self._set_rendering(False))
         diagram_tab = QWidget()
@@ -1179,11 +1182,43 @@ class MainWindow(QMainWindow):
         if action == "draw" and self._options_bar.keys_only_auto():
             self._options_bar._keys_only.setChecked(False)
 
-    def _mark_reference(self, name: str):
+    def _entity_for(self, table: str) -> str:
+        """The drawn table's DOM key ("" if it isn't drawn)."""
+        if not table:
+            return ""
+        return next((e for e, t in self._entity_to_table.items() if t == table), "")
+
+    def _mark_reference(self, name: str, joins: list | None = None):
         """A connected table picked in the Table view: glow it orange in the
-        diagram, beside the blue selection (nothing if it isn't drawn)."""
-        entity = next((e for e, t in self._entity_to_table.items() if t == name), "") if name else ""
-        self._diagram_view.mark_reference(entity)
+        diagram, beside the blue selection, and tint the rows the two tables
+        join on (nothing for tables that aren't drawn)."""
+        self._diagram_view.mark_reference(self._entity_for(name))
+        rows = [
+            (self._entity_for(table), drawn_column_name(column))
+            for table, column in (joins or [])
+            if self._entity_for(table)
+        ]
+        self._diagram_view.mark_rows("xjoin", rows)
+
+    def _mark_column(self, table: str, column: str):
+        """A column picked in the Table view: tint its row in the diagram."""
+        entity = self._entity_for(table)
+        rows = [(entity, drawn_column_name(column))] if entity and column else []
+        self._diagram_view.mark_rows("xrow", rows)
+
+    def _on_row_clicked(self, entity_id: str, drawn_name: str):
+        """A row clicked in the diagram: pick that column in the Table view
+        (which tints the row). The click has already selected the table."""
+        table = self._entity_to_table.get(entity_id)
+        schema_table = next((t for t in self._schema.tables if t.name == table), None) if (
+            table and self._schema is not None) else None
+        if schema_table is None:
+            return
+        column = next(
+            (c.name for c in schema_table.columns if drawn_column_name(c.name) == drawn_name), ""
+        )
+        if column and self._inspector.select_column(column) and not self._tabs.isHidden():
+            self.show_details(self._inspector)
 
     def _focus_table(self, name: str, from_diagram: bool = False, from_map: bool = False):
         """Make ``name`` the selected table everywhere ("" clears)."""

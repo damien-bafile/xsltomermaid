@@ -833,8 +833,13 @@ def _attr_type(column: Column) -> str:
     return token or "unknown"
 
 
+def drawn_column_name(name: str) -> str:
+    """A column's name as the diagram draws it (Mermaid-safe)."""
+    return re.sub(r"[^0-9A-Za-z_]", "_", name) or "column"
+
+
 def _attr_name(column: Column) -> str:
-    return re.sub(r"[^0-9A-Za-z_]", "_", column.name) or "column"
+    return drawn_column_name(column.name)
 
 
 def _quote_comment(text: str) -> str:
