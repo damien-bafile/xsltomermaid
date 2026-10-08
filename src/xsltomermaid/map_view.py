@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -227,6 +227,15 @@ class SchemaMapView(QWidget):
         )
         self._view.double_clicked.connect(lambda n: self.table_activated.emit(n, True))
         self._view.zoomed.connect(self._declutter_labels)
+        # Table names are placed only for what's on screen, so they must be
+        # placed again when the view scrolls (wheel, trackpad, scrollbar,
+        # keyboard). One pass per frame at most, however fast the scroll.
+        self._label_timer = QTimer(self)
+        self._label_timer.setSingleShot(True)
+        self._label_timer.setInterval(16)
+        self._label_timer.timeout.connect(self._declutter_labels)
+        for bar in (self._view.horizontalScrollBar(), self._view.verticalScrollBar()):
+            bar.valueChanged.connect(lambda _value: self._label_timer.start())
         self._view.cluster_clicked.connect(self.select_cluster)
         self._view.key_pressed.connect(self._on_key)
         self._current = ""  # the table keyboard navigation moves from

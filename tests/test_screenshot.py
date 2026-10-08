@@ -2615,6 +2615,37 @@ def test_sorting_the_list_never_fires_tick_changes():
     del app
 
 
+def test_map_table_names_follow_a_scroll():
+    """Names are placed only for tables on screen; scrolling must place them
+    again, or tables scrolled into view stay unnamed."""
+    app, window = _big_window()
+    window.resize(1200, 800)
+    window.show()
+    window.show_map(True)
+    mv = window._map_view
+    view = mv._view
+    view.scale(6, 6)  # well past TABLE_LABEL_ZOOM
+    view.user_zoomed = True
+    app.processEvents()
+    mv._declutter_labels()
+
+    def named():
+        return {n for n, (label, _node, _r) in mv._node_labels.items() if label.isVisible()}
+
+    before = named()
+    bar = view.horizontalScrollBar()
+    bar.setValue(bar.maximum() if bar.value() < bar.maximum() // 2 else bar.minimum())
+    assert mv._label_timer.isActive()  # a scroll schedules a new placement
+    mv._label_timer.stop()
+    mv._label_timer.timeout.emit()  # as the timer would
+    after = named()
+    assert after and after != before  # the names moved with the view
+    visible = view.mapToScene(view.viewport().rect()).boundingRect()
+    assert all(visible.contains(mv._node_labels[n][1].x, mv._node_labels[n][1].y) for n in after)
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()
