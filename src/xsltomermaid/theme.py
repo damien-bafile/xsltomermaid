@@ -39,7 +39,7 @@ _ACCENT_PRESSED = "#1559c2"  # primary button, pressed (6.48:1)
 _ACCENT_RING = "#cfe0ff"  # light focus ring on a filled accent button
 
 
-_ACCENT_WASH = "rgba(47,129,247,0.08)"  # translucent accent fill (drag-hover)
+_ACCENT_WASH = "rgba(47,129,247,0.16)"  # translucent accent fill (drag-hover)
 
 
 _DISABLED_BG = "rgba(128,128,128,0.18)"  # filled button, disabled
@@ -69,7 +69,7 @@ def _apply_primary_button_style(button) -> None:
         "}"
         f"QPushButton:hover:enabled {{ background: {_ACCENT_HOVER}; }}"
         f"QPushButton:pressed:enabled {{ background: {_ACCENT_PRESSED}; }}"
-        f"QPushButton:focus {{ border-color: {_ACCENT_RING}; }}"
+        f"QPushButton:focus {{ border-color: {button.palette().color(QPalette.WindowText).name()}; }}"
         "QPushButton:disabled {"
         f"  background: {_DISABLED_BG};"
         f"  color: {_DISABLED_FG};"
@@ -187,7 +187,7 @@ def _dark_palette() -> QPalette:
     p.setColor(QPalette.Button, window)
     p.setColor(QPalette.ButtonText, text)
     p.setColor(QPalette.BrightText, QColor(0xFF, 0x6B, 0x6B))
-    p.setColor(QPalette.Link, QColor(_ACCENT))
+    p.setColor(QPalette.Link, QColor(_LINK["dark"]))  # 5.6:1
     p.setColor(QPalette.Highlight, QColor(_ACCENT_FILL))
     p.setColor(QPalette.HighlightedText, QColor(0xFF, 0xFF, 0xFF))
     p.setColor(QPalette.PlaceholderText, QColor(0x90, 0x94, 0x9C))  # 5.4:1 on Base

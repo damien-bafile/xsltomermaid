@@ -27,6 +27,8 @@ from .theme import (
     _ACCENT_WASH,
     _line_hex,
     _muted_hex,
+    _ACCENT,
+    _control_border_hex,
 )
 
 
@@ -72,6 +74,7 @@ class DiagramOptionsBar(QWidget):
 
         self._orientation = self._combo(self._ORIENTATIONS)
         self._spacing = self._combo(self._SPACINGS)
+        self._spacing.setToolTip("Spacing: padding around each table.")
         self._theme = self._combo(self._THEMES)
         self._background = self._combo(self._BACKGROUNDS)
         self._orientation.setToolTip("Orientation: which way the diagram flows.")
@@ -83,6 +86,7 @@ class DiagramOptionsBar(QWidget):
         self._font = QSpinBox()
         self._font.setRange(8, 28)
         self._font.setValue(12)
+        self._font.setToolTip("Font size: the diagram's text, before any zoom.")
         self._font.setSuffix(" px")
         self._font.valueChanged.connect(lambda _v: self.changed.emit())
         self._fit_width = QCheckBox("Fit to vie&w")
@@ -157,7 +161,8 @@ class DiagramOptionsBar(QWidget):
             "Keys only was switched on because these tables are wide. Click to "
             "show all columns."
         )
-        self._keys_chip.setAccessibleName("Turn off automatic Keys only")
+        # The name starts with the visible text (WCAG 2.5.3).
+        self._keys_chip.setAccessibleName("Keys only: on for wide tables. Click to turn off")
         self._keys_only.toggled.connect(self._on_keys_toggled)
         self._hide_audit.toggled.connect(lambda _on: self._sync_chips())
         self._sync_chips()
@@ -175,8 +180,11 @@ class DiagramOptionsBar(QWidget):
             "prefix and audit links."
         )
         self._more.setStyleSheet(
-            "QToolButton { border: none; padding: 2px 6px; border-radius: 4px; }"
-            f"QToolButton:hover, QToolButton:focus {{ background: {_ACCENT_WASH}; }}"
+            # A transparent border that turns accent on keyboard focus (3.4:1+);
+            # the wash alone was barely visible.
+            "QToolButton { border: 1px solid transparent; padding: 2px 6px; border-radius: 4px; }"
+            f"QToolButton:hover {{ background: {_ACCENT_WASH}; }}"
+            f"QToolButton:focus {{ background: {_ACCENT_WASH}; border-color: {_ACCENT}; }}"
             "QToolButton:checked { background: transparent; }"
             f"QToolButton:checked:hover {{ background: {_ACCENT_WASH}; }}"
         )
@@ -286,7 +294,7 @@ class DiagramOptionsBar(QWidget):
                 "Click to show them."
             )
             self._audit_chip.setAccessibleName(
-                f"Show audit and system links ({share} of all links, hidden)"
+                f"Audit links hidden ({share}). Click to show them"
             )
         self._audit_chip.setVisible(audit)
         self._keys_chip.setVisible(self._diagram_visible and self.keys_only_auto())
@@ -344,9 +352,10 @@ class DiagramOptionsBar(QWidget):
 
     def retheme(self):
         style = (
-            f"QPushButton {{ border: 1px solid {_line_hex(self)}; border-radius: 10px;"
+            f"QPushButton {{ border: 1px solid {_control_border_hex(self)}; border-radius: 10px;"
             f" padding: 2px 10px; color: {_muted_hex(self)}; background: transparent; }}"
-            f"QPushButton:hover, QPushButton:focus {{ background: {_ACCENT_WASH}; }}"
+            f"QPushButton:hover {{ background: {_ACCENT_WASH}; }}"
+            f"QPushButton:focus {{ background: {_ACCENT_WASH}; border-color: {_ACCENT}; }}"
         )
         for chip in (self._audit_chip, self._keys_chip):
             chip.setStyleSheet(style)

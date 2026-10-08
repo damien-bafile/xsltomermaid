@@ -151,6 +151,7 @@ from .theme import (
     app_icon,
     apply_system_palette,
     system_is_dark,
+    _ACCENT,
 )
 from .widgets import (
     DropArea,
@@ -179,7 +180,7 @@ from .column_selector import (
 from .options_bar import (
     DiagramOptionsBar,
 )
-from .services import SchemaImportService
+from .services import SchemaImportService, describe_load_error
 from .sql_query import generate_select
 from . import __version__
 from .updates import (
@@ -527,12 +528,15 @@ class MainWindow(QMainWindow):
         self._details_btn.setArrowType(Qt.LeftArrow)
         self._details_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._details_btn.setToolTip(
-            "Show or hide the Details panel: extracted data, columns, Mermaid "
-            "source and SQL (Ctrl+I; Ctrl+1–5 open a view)."
+            "Show or hide the Details panel: the selected table, extracted data, "
+            "columns, Mermaid and SQL (Ctrl+I; Ctrl+1–5 open a view)."
         )
         self._details_btn.setStyleSheet(
-            "QToolButton { border: none; padding: 2px 6px; border-radius: 4px; }"
-            f"QToolButton:hover, QToolButton:focus {{ background: {_ACCENT_WASH}; }}"
+            # A transparent border that turns accent on keyboard focus (3.4:1+);
+            # the wash alone was barely visible.
+            "QToolButton { border: 1px solid transparent; padding: 2px 6px; border-radius: 4px; }"
+            f"QToolButton:hover {{ background: {_ACCENT_WASH}; }}"
+            f"QToolButton:focus {{ background: {_ACCENT_WASH}; border-color: {_ACCENT}; }}"
             "QToolButton:checked { background: transparent; font-weight: 600; }"
             f"QToolButton:checked:hover {{ background: {_ACCENT_WASH}; }}"
         )
@@ -677,9 +681,10 @@ class MainWindow(QMainWindow):
         self._mermaid_btn = QPushButton("&Mermaid")
         self._mermaid_btn.setToolTip("Copy or save the diagram's Mermaid source.")
         mermaid_menu = QMenu(self._mermaid_btn)
-        mermaid_menu.addAction("&Copy Mermaid source", self.copy_mermaid)
-        mermaid_menu.addAction("Save as .&mmd…", self.save_mmd)
-        mermaid_menu.addAction("Save as Mark&down (.md)…", self.save_md)
+        # Worded as in the Diagram menu.
+        mermaid_menu.addAction("&Copy Mermaid", self.copy_mermaid)
+        mermaid_menu.addAction("Save Mermaid (.&mmd)…", self.save_mmd)
+        mermaid_menu.addAction("Save Mark&down (.md)…", self.save_md)
         self._mermaid_btn.setMenu(mermaid_menu)
 
         # Table-list presets are about the selection, so they live with it.
@@ -748,7 +753,8 @@ class MainWindow(QMainWindow):
             "Drop an Excel schema file on the bar above, or click it to browse. "
             "New here? Use “try a sample”.\n\n"
             "Once a file loads, the diagram appears here. The Details panel "
-            "(Ctrl+I) shows the extracted rows, columns, Mermaid source and SQL."
+            "(Ctrl+I) shows the selected table, the extracted rows, columns, "
+            "Mermaid and SQL."
         )
         save_options = lambda *_: self._options_bar.save_state(app_settings())  # noqa: E731
         self._options_bar.changed.connect(save_options)
@@ -933,7 +939,7 @@ class MainWindow(QMainWindow):
         self._status.setText(
             "The diagram couldn't be drawn"
             + (f": {first_line}." if first_line else ".")
-            + " Details are in the Rendered diagram tab."
+            + " The details are shown in its place."
         )
 
     def _announce_render(self, ok: bool):
@@ -957,8 +963,9 @@ class MainWindow(QMainWindow):
         count = len(self._selector.selected_tables())
         if count > RENDER_WARN_LIMIT:
             self._auto_render_timer.stop()
+            self._selector.set_draw_pending(True)
             self._render_status.stale(
-                f"Out of date ({count} tables) · press F5 to render"
+                f"Out of date ({count} tables) · press F5 to draw"
             )
         else:
             self._auto_render_timer.start()
@@ -973,7 +980,7 @@ class MainWindow(QMainWindow):
             self._render_selection()
         if self._stale:
             self._status.setText(
-                "The diagram doesn't match your selection yet. Render it first (F5)."
+                "The diagram doesn't match your ticks yet. Draw it first (F5)."
             )
         return not self._stale
 
@@ -987,7 +994,7 @@ class MainWindow(QMainWindow):
         self._diagram_view.cancel_render()
         self._render_status.clear()
         self._set_rendering(False)
-        self._status.setText("Render cancelled.")
+        self._status.setText("Drawing stopped.")
 
     def _style_sample_btn(self):
         link = _link_hex(self)
@@ -1020,6 +1027,7 @@ class MainWindow(QMainWindow):
         self._options_bar.retheme()
         self._render_status.retheme()
         self._style_view_switch()
+        _apply_primary_button_style(self._export_btn)  # its focus ring follows the text colour
         # Views that bake colours into items or pages when they fill.
         self._inspector.retheme()
         self._refresh_inspector()
@@ -1330,7 +1338,8 @@ class MainWindow(QMainWindow):
         try:
             rows, schema, mermaid_text = self._importer.load(path)
         except Exception as exc:  # noqa: BLE001 - surface any parse error to the user
-            QMessageBox.critical(self, "Could not read file", str(exc))
+            self._pending_path = path
+            self._on_load_failed(describe_load_error(exc))
             return
 
         self._apply_loaded(path, rows, schema, mermaid_text)
@@ -1648,7 +1657,7 @@ class MainWindow(QMainWindow):
                     self,
                     "Render a large diagram?",
                     f"You selected {len(names)} tables. A diagram that big can be "
-                    "slow to render and hard to read. Render it anyway?",
+                    "slow to draw and hard to read. Draw it anyway?",
                 )
                 if answer != QMessageBox.Yes:
                     return
@@ -1660,6 +1669,7 @@ class MainWindow(QMainWindow):
         # Committed: whatever is drawn next matches the current selection.
         self._auto_render_timer.stop()
         self._stale = False
+        self._selector.set_draw_pending(False)
 
         # Related tables are ticked explicitly via "Add related tables", so the
         # checked list is the whole selection — no implicit expansion here.
@@ -1853,7 +1863,7 @@ class MainWindow(QMainWindow):
             return
         text = self._sql_view.toPlainText()
         if not text:
-            self._status.setText("Select some tables first; there's no query yet.")
+            self._status.setText("Tick some tables first; there's no query yet.")
             return
         QGuiApplication.clipboard().setText(text)
         self._status.setText("SQL query copied to clipboard.")

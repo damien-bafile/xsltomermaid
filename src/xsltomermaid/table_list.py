@@ -39,6 +39,8 @@ from .theme import (
     _ACCENT_WASH,
     _link_hex,
     _muted_hex,
+    _apply_primary_button_style,
+    _plural,
 )
 
 
@@ -196,7 +198,10 @@ class TableSelector(QWidget):
         self.cluster_provider = None
         self._clusters: dict[str, tuple[int, str]] | None = None
         self._sort.setAccessibleName("Sort tables")
-        self._sort.setToolTip("Order the list by name, or by links (audit and system links not counted)")
+        self._sort.setToolTip(
+            "Order the list by name, by links (audit and system links not "
+            "counted), or by the map's clusters"
+        )
         self._sort.currentIndexChanged.connect(lambda _i: self._resort())
         self._prefix = QComboBox()
         self._prefix.setAccessibleName("Table name prefix")
@@ -205,26 +210,7 @@ class TableSelector(QWidget):
         view_row.addWidget(self._sort, 1)
         view_row.addWidget(self._prefix, 1)
         layout.addLayout(view_row)
-
-        self._list = QListWidget()
-        # Not uniform: cluster header rows are double height. Long names
-        # elide rather than scroll sideways.
-        self._list.setUniformItemSizes(False)
-        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._list.setTextElideMode(Qt.ElideRight)
-        self._list.setItemDelegate(_TableRowDelegate(self._list))
-        self._list.setAccessibleName("Tables in diagram")
-        self._list.itemChanged.connect(self._on_item_changed)
-        self._list.currentItemChanged.connect(
-            lambda item, _prev: self.current_table_changed.emit(item.text() if item else "")
-        )
-        layout.addWidget(self._list, 1)
-
-        # The count gets its own line so the two checkboxes below don't
-        # force the rail wider than the table names need.
-        self._count = QLabel("No tables loaded yet")
-        self._count.setStyleSheet(f"color: {_muted_hex(self)};")
-        layout.addWidget(self._count)
+        # Find: these narrow the list, so they sit with the filter, above it.
         count_row = QHBoxLayout()
         # For big schemas: review what's ticked without scrolling 1,000+ rows.
         self._ticked_only = QCheckBox("Ticked onl&y")
@@ -240,6 +226,28 @@ class TableSelector(QWidget):
         count_row.addStretch(1)
         layout.addLayout(count_row)
 
+        self._list = QListWidget()
+        # Not uniform: cluster header rows are double height. Long names
+        # elide rather than scroll sideways.
+        self._list.setUniformItemSizes(False)
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._list.setTextElideMode(Qt.ElideRight)
+        self._list.setItemDelegate(_TableRowDelegate(self._list))
+        self._list.setAccessibleName("Tables")
+        self._list.itemChanged.connect(self._on_item_changed)
+        self._list.currentItemChanged.connect(
+            lambda item, _prev: self.current_table_changed.emit(item.text() if item else "")
+        )
+        layout.addWidget(self._list, 1)
+
+        # The count gets its own line so the two checkboxes below don't
+        # force the rail wider than the table names need.
+        self._count = QLabel("No tables loaded yet")
+        self._count.setStyleSheet(f"color: {_muted_hex(self)};")
+        layout.addWidget(self._count)
+
+        # Select: build up the ticks.
+        layout.addSpacing(4)
         button_row = QHBoxLayout()
         self._select_shown_btn = QPushButton("Tick &shown")
         self._clear_btn = QPushButton("&Clear")
@@ -254,7 +262,7 @@ class TableSelector(QWidget):
         related_row = QHBoxLayout()
         self._related_btn = QPushButton("&Add related tables")
         self._related_btn.setToolTip(
-            "Tick the tables one foreign-key hop from the ones you've checked. "
+            "Tick the tables one foreign-key hop from the ones already ticked. "
             "Adding a lot at once asks first, and can be undone."
         )
         self._related_btn.clicked.connect(lambda: self.related_requested.emit())
@@ -285,7 +293,7 @@ class TableSelector(QWidget):
             "QToolButton { border: none; font-weight: 600; padding: 2px 4px;"
             "  border-radius: 4px; }"
             f"QToolButton:hover {{ background: {_ACCENT_WASH}; }}"
-            f"QToolButton:focus {{ background: {_ACCENT_WASH}; }}"
+            f"QToolButton:focus {{ background: {_ACCENT_WASH}; border: 1px solid {_ACCENT}; }}"
         )
         self._path_toggle.toggled.connect(self._on_path_toggled)
         layout.addWidget(self._path_toggle)
@@ -382,6 +390,7 @@ class TableSelector(QWidget):
         action_row.addWidget(self._undo_btn)
         layout.addLayout(action_row)
         self._undo_snapshot: list[str] | None = None
+        self._draw_pending = False
 
         # Keyboard accelerators for the frequent loop: jump to the filter, and
         # render without reaching for the mouse (Ctrl+Enter alongside the menu's
@@ -401,6 +410,18 @@ class TableSelector(QWidget):
         if self._filter.isEnabled():
             self._filter.setFocus(Qt.ShortcutFocusReason)
             self._filter.selectAll()
+
+    def set_draw_pending(self, pending: bool):
+        """Give Draw the filled, lead style while ticks wait to be drawn (big
+        selections don't redraw on every tick); quiet when the diagram is
+        up to date."""
+        if pending == self._draw_pending:
+            return
+        self._draw_pending = pending
+        if pending:
+            _apply_primary_button_style(self._render_btn)
+        else:
+            self._render_btn.setStyleSheet("")
 
     def _emit_render_if_ready(self):
         if self._render_btn.isEnabled():
@@ -711,6 +732,10 @@ class TableSelector(QWidget):
             return
         selected = sum(1 for item in self._items() if item.checkState() == Qt.Checked)
         self._count.setText(f"{selected:,} of {total:,} ticked for the diagram")
+        # Draw: name what it commits.
+        self._render_btn.setText(
+            f"D&raw {_plural(selected, 'table')}" if selected else "D&raw ticked"
+        )
         self._title.setText(f"Tables ({total:,})")
 
     # -- path tracing (endpoints + non-destructive apply) ------------------
