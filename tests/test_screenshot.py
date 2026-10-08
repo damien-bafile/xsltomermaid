@@ -2597,6 +2597,24 @@ def test_list_clusters_reuse_the_map_and_follow_its_audit_setting(monkeypatch):
     del app
 
 
+def test_sorting_the_list_never_fires_tick_changes():
+    """Re-sorting writes data to every row; if that reached itemChanged, each
+    row re-ran the selection path over every row (85 s on 1,772 tables)."""
+    app, window = _big_window()
+    sel = window._selector
+    sel.set_ready(True)
+    edits = []
+    sel.selection_changed.connect(lambda: edits.append(1))
+    counts = {name: (i % 3, i % 2) for i, name in enumerate(i.text() for i in sel._items())}
+    sel.set_link_counts(counts)  # resorts
+    for mode in ("links", "cluster", "name"):
+        sel._sort.setCurrentIndex(sel._sort.findData(mode))
+    sel._filter.setText("C1")  # a search resorts too
+    assert edits == []
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()
