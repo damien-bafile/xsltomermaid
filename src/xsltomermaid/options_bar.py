@@ -77,8 +77,8 @@ class DiagramOptionsBar(QWidget):
         self._orientation.setToolTip("Orientation: which way the diagram flows.")
         self._theme.setToolTip("Theme: the diagram's colours.")
         self._background.setToolTip(
-            "Background on screen. Exports use their own background, set from "
-            "the Export button's arrow."
+            "Canvas background: the view only. Exports use their own background "
+            "(shown beside the Export button), set from its arrow."
         )
         self._font = QSpinBox()
         self._font.setRange(8, 28)
@@ -133,7 +133,7 @@ class DiagramOptionsBar(QWidget):
         for label, widget in [
             ("&Orientation:", self._orientation),
             ("&Theme:", self._theme),
-            ("Back&ground:", self._background),
+            ("Canvas back&ground:", self._background),
         ]:
             buddy = self._buddy(label, widget)
             self._row1_labels.append(buddy)

@@ -471,6 +471,7 @@ class MainWindow(QMainWindow):
         self._diagram_view = DiagramView()
         self._options_bar = DiagramOptionsBar()
         self._options_bar.changed.connect(self._render_selection)
+        self._options_bar.changed.connect(self._sync_export_caption)
         self._render_status = RenderStatus()
         # A Stop control that only appears while a diagram is rendering, so a
         # slow/large layout can be abandoned without waiting it out.
@@ -641,7 +642,8 @@ class MainWindow(QMainWindow):
         if self._export_bg_group.checkedAction() is None:
             self._export_bg_group.actions()[0].setChecked(True)
         self._export_bg_group.triggered.connect(
-            lambda a: app_settings().setValue("export/background", a.data())
+            lambda a: (app_settings().setValue("export/background", a.data()),
+                       self._sync_export_caption())
         )
         scale_menu = export_menu.addMenu("PNG &scale")
         self._png_scale_group = QActionGroup(self)
@@ -658,7 +660,8 @@ class MainWindow(QMainWindow):
         if self._png_scale_group.checkedAction() is None:
             self._png_scale_group.actions()[1].setChecked(True)
         self._png_scale_group.triggered.connect(
-            lambda a: app_settings().setValue("export/png_scale", a.data())
+            lambda a: (app_settings().setValue("export/png_scale", a.data()),
+                       self._sync_export_caption())
         )
         self._export_btn.setMenu(export_menu)
         _apply_primary_button_style(self._export_btn)
@@ -686,6 +689,17 @@ class MainWindow(QMainWindow):
         self._presets_btn.setMenu(presets_menu)
         self._selector.add_header_widget(self._presets_btn)
 
+        # What Export will write, said before it's written: the file can look
+        # different from the canvas (a white page, the light theme).
+        self._export_caption = QLabel()
+        self._export_caption.setAccessibleName("Export settings")
+        # The last export stays named (with Show in folder) until the next one,
+        # instead of in the status line the next click overwrites.
+        self._saved_note = QLabel()
+        self._saved_note.setTextFormat(Qt.RichText)
+        self._saved_note.linkActivated.connect(self._on_status_link)
+        self._saved_note.setVisible(False)
+
         self._sync_export_label()
         self._action_buttons = [
             self._export_btn,
@@ -702,12 +716,15 @@ class MainWindow(QMainWindow):
         sep.setFixedHeight(24)
         self._button_seps.append(sep)
         buttons.addWidget(self._export_btn)
+        buttons.addWidget(self._export_caption)
+        buttons.addSpacing(8)
         buttons.addWidget(self._preview_btn)
         buttons.addSpacing(4)
         buttons.addWidget(sep)
         buttons.addSpacing(4)
         buttons.addWidget(self._mermaid_btn)
         buttons.addStretch(1)
+        buttons.addWidget(self._saved_note)
         outer.addLayout(buttons)
 
         self._preview_btn.clicked.connect(self.preview_browser)
@@ -989,6 +1006,7 @@ class MainWindow(QMainWindow):
         muted = f"color: {_muted_hex(self)};"
         self._status.setStyleSheet(muted)
         self._onboard_hint.setStyleSheet(muted)
+        self._export_caption.setStyleSheet(muted)
         line = f"color: {_line_hex(self)};"
         self._divider.setStyleSheet(line)
         for sep in self._button_seps:
@@ -1390,6 +1408,7 @@ class MainWindow(QMainWindow):
         actually show is driven by the table selection (all tables for a small
         schema, or a user-picked subset for a large one).
         """
+        self._saved_note.setVisible(False)  # that export was of the last file
         self._schema = schema
         self._loaded_name = os.path.basename(path)
         self._render_confirmed_sig = None  # new file: forget the prior confirmation
@@ -2136,9 +2155,44 @@ class MainWindow(QMainWindow):
     def _report_saved(self, path: str, note: str = ""):
         """Say where the file went, with a link that opens its folder."""
         self._last_saved = path
-        self._status.setText(
+        text = (
             f"Saved {html.escape(os.path.basename(path))}{html.escape(note)} · "
             f'<a href="show-in-folder" style="color:{_link_hex(self)}">Show in folder</a>'
+        )
+        self._status.setText(text)
+        self._saved_note.setText(text)
+        self._saved_note.setToolTip(path)
+        self._saved_note.setVisible(True)
+
+    def _export_summary(self) -> str:
+        """What the next export writes, e.g. "PNG · 2× · white page · Keys only"."""
+        name = next(
+            (label.split(" (")[0].replace(" image", "") for k, label, *_ in EXPORT_FORMATS
+             if k == self._export_kind),
+            "",
+        )
+        parts = [name]
+        if self._export_kind in ("drawio", "excalidraw"):
+            parts.append("dark shapes" if self._export_style().theme == "dark" else "light shapes")
+        else:
+            if self._export_kind == "png":
+                parts.append(f"{self.png_scale():g}×")
+            parts.append({
+                "white": "white page",
+                "transparent": "transparent",
+                "match": "as on screen",
+            }.get(self.export_background(), "white page"))
+        if self._options_bar.diagram_options().keys_only:
+            parts.append("Keys only")
+        return " · ".join(p for p in parts if p)
+
+    def _sync_export_caption(self):
+        if not hasattr(self, "_export_caption"):
+            return
+        summary = self._export_summary()
+        self._export_caption.setText(summary)
+        self._export_caption.setToolTip(
+            f"The next export: {summary}. Change it from the Export button's arrow."
         )
 
     def _on_status_link(self, href: str):
@@ -2151,7 +2205,8 @@ class MainWindow(QMainWindow):
     def _sync_export_enabled(self):
         """Export/Preview/Mermaid only when there's a selection to output."""
         has_tables = bool(self._drawio_schema is not None and self._drawio_schema.tables)
-        for widget in (self._export_btn, self._preview_btn, self._mermaid_btn):
+        for widget in (self._export_btn, self._preview_btn, self._mermaid_btn,
+                       self._export_caption):
             widget.setEnabled(has_tables)
         self._export_btn.setToolTip(
             "Export the diagram. Use the arrow to pick another format, the "
@@ -2172,6 +2227,7 @@ class MainWindow(QMainWindow):
         self._export_btn.setText(text)
         # The accessible name starts with the visible label (WCAG 2.5.3).
         self._export_btn.setAccessibleName(text.replace("&", ""))
+        self._sync_export_caption()
         for key, action in self._export_actions.items():
             action.setEnabled(True)
             font = action.font()

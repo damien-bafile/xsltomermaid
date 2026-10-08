@@ -2078,6 +2078,26 @@ def test_polish_contrast_names_and_zoom_shortcut(tmp_path):
     del app
 
 
+def test_export_caption_says_what_the_file_will_be_and_saved_note_stays(tmp_path):
+    app, window = _inspector_window(tmp_path)
+    window.set_export_format("png")
+    caption = window._export_caption
+    assert caption.text().startswith("PNG · ")
+    assert "white page" in caption.text() or "transparent" in caption.text() or "as on screen" in caption.text()
+    window._options_bar._keys_only.setChecked(True)
+    assert caption.text().endswith("Keys only")
+    window.set_export_format("drawio")
+    assert caption.text().startswith("Draw.io · ") and "shapes" in caption.text()
+    saved = tmp_path / "x.png"
+    window._report_saved(str(saved))
+    window._status.setText("something else")
+    assert not window._saved_note.isHidden() and "x.png" in window._saved_note.text()
+    window._apply_loaded(str(tmp_path / "s.xlsx"), [], window._schema, "")
+    assert window._saved_note.isHidden()
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()
