@@ -162,6 +162,7 @@ class SchemaMapView(QWidget):
     selection_changed = Signal(list)  # names selected on the map
     draw_requested = Signal(list)  # draw these tables as the ER diagram
     show_diagram_requested = Signal()
+    map_rebuilt = Signal()  # the clusters changed (new schema or audit-link setting)
     export_requested = Signal()  # save the map as an image
 
     # Long side of an exported PNG, in pixels: sharp when zoomed in a viewer,
@@ -233,6 +234,7 @@ class SchemaMapView(QWidget):
         self._labels: list[tuple[QGraphicsSimpleTextItem, object]] = []
         self._edges = None
         self._node_labels: dict = {}  # name -> (label, node, radius)
+        self._drawn = False  # the computed map is in the scene
         layout.addWidget(self._view, 1)
 
         self._unconnected = QLabel()
@@ -318,6 +320,7 @@ class SchemaMapView(QWidget):
         """Point the map at a schema (computed lazily, when first shown)."""
         self._schema = schema
         self._map = None
+        self._drawn = False
         self._scene.clear()
         self._items = {}
         if self.isVisible():
@@ -325,10 +328,30 @@ class SchemaMapView(QWidget):
 
     def showEvent(self, event):  # noqa: N802 (Qt naming)
         super().showEvent(event)
-        if self._map is None and self._schema is not None:
-            self._rebuild()
+        if self._schema is not None and not self._drawn:
+            if self._map is None:
+                self._rebuild()
+            else:  # computed earlier (for the list's cluster sort): just draw it
+                self._present()
 
     def schema_map(self) -> SchemaMap | None:
+        return self._map
+
+    def ensure_drawn(self):
+        """Compute and draw the map now (a headless capture never shows it)."""
+        if self._schema is None or self._drawn:
+            return
+        if self._map is None:
+            self._rebuild()
+        else:
+            self._present()
+
+    def ensure_map(self) -> SchemaMap | None:
+        """The map, computed now if it hasn't been (drawn when first shown)."""
+        if self._map is None and self._schema is not None:
+            hidden = HIDDEN_BY_DEFAULT if self._hide.isChecked() else frozenset()
+            self._map = build_map(self._schema, hidden)
+            self._drawn = False
         return self._map
 
     def _rebuild(self):
@@ -336,7 +359,13 @@ class SchemaMapView(QWidget):
             return
         hidden = HIDDEN_BY_DEFAULT if self._hide.isChecked() else frozenset()
         self._map = build_map(self._schema, hidden)
+        self._present()
+        self.map_rebuilt.emit()
+
+    def _present(self):
+        """Draw the computed map and fit it to the view."""
         self._draw()
+        self._drawn = True
         self._view.user_zoomed = False
         self._view.fit()
         self._declutter_labels()

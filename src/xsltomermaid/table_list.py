@@ -669,6 +669,12 @@ class TableSelector(QWidget):
         # One prefix (or none at all) gives nothing to choose between.
         self._prefix.setVisible(self._prefix.count() > 2)
 
+    def invalidate_clusters(self):
+        """The map's clusters changed: regroup if the list is sorted by them."""
+        self._clusters = None
+        if self._sort.currentData() == "cluster":
+            self._resort()
+
     def set_link_counts(self, counts: dict[str, tuple[int, int]]):
         """Show each table's (out, in) link counts and enable those views."""
         # Data changes fire itemChanged, which is for ticks; with 1,800 rows

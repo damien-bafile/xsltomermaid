@@ -68,8 +68,9 @@ def _norm(value) -> str:
     """
     if value is None:
         return ""
-    text = str(value).strip()
-    if text.lower() in _NULL_TOKENS:
+    text = (value if isinstance(value, str) else str(value)).strip()
+    # Only short text can be a sentinel: skip lowercasing every other cell.
+    if len(text) <= 6 and text.lower() in _NULL_TOKENS:
         return ""
     return text
 
@@ -184,12 +185,13 @@ def _coerce_cell(value):
     otherwise fail the ``_as_bool`` truthy check and drop PK/nullability flags).
     Booleans are left alone (``bool`` is a subclass of ``int``).
     """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, float) and value.is_integer():
+    # Called once per cell (1.3 million on a Dynamics export): test the
+    # exact type, most common first. bool is its own type, so it passes as is.
+    kind = type(value)
+    if kind is str:
+        return value if value else None
+    if kind is float and value.is_integer():
         return int(value)
-    if value == "":
-        return None
     return value
 
 
@@ -270,14 +272,15 @@ def read_rows(path: str, progress: ProgressCallback | None = None) -> list[dict]
         )
 
     headers = [_norm(cell) for cell in grid[header_index]]
+    # Positions of the named headers, worked out once (not per cell).
+    named = [(i, h) for i, h in enumerate(headers) if h]
+    width = len(headers)
     rows: list[dict] = []
     for raw in grid[header_index + 1 :]:
-        record = {
-            headers[i]: raw[i] if i < len(raw) else None
-            for i in range(len(headers))
-            if headers[i]
-        }
-        if any(_norm(v) for v in record.values()):
+        if len(raw) < width:
+            raw = list(raw) + [None] * (width - len(raw))
+        record = {h: raw[i] for i, h in named}
+        if any(v is not None and _norm(v) for v in record.values()):
             rows.append(record)
     return rows
 
@@ -293,14 +296,22 @@ def _find_header_row(grid: list[list]) -> int | None:
 # ---------------------------------------------------------------------------
 # Building the schema model from raw rows
 # ---------------------------------------------------------------------------
-def _build_getter(row: dict):
-    """Return a lookup that matches headers loosely (case/space-insensitive)."""
-    normalised = {_header_key(k): v for k, v in row.items()}
+_FIELDS = (
+    "TableName", "ColumnName", "SchemaName", "ColumnOrder", "DataType", "Length",
+    "Precision", "Scale", "IsNullable", "IsIdentity", "IsComputed", "IsPrimaryKey",
+    "ForeignKeyReference", "DefaultValue", "ComputedDefinition", "Collation",
+    "Description",
+)
 
-    def get(name: str):
-        return normalised.get(_header_key(name))
 
-    return get
+def _field_sources(keys: tuple) -> dict[str, object]:
+    """``{field: the row key holding it}`` for one header layout. Matching is
+    loose (case, spaces and underscores ignored); of several matching headers,
+    the last wins."""
+    by_key: dict[str, object] = {}
+    for key in keys:
+        by_key[_header_key(key)] = key
+    return {name: by_key.get(_header_key(name)) for name in _FIELDS}
 
 
 def build_schema(
@@ -315,10 +326,21 @@ def build_schema(
 
     rows = list(rows)
     total = len(rows)
+    # Rows from one sheet share their headers: match them to the fields once
+    # per layout, not once per cell (1.3 million lookups on a Dynamics export).
+    layouts: dict[tuple, dict[str, object]] = {}
     for index, row in enumerate(rows):
         if progress is not None and total and index % 200 == 0:
             progress(index / total)
-        get = _build_getter(row)
+        keys = tuple(row)
+        sources = layouts.get(keys)
+        if sources is None:
+            sources = layouts[keys] = _field_sources(keys)
+
+        def get(name: str, row=row, sources=sources):
+            key = sources[name]
+            return None if key is None else row[key]
+
         table_name = _norm(get("TableName"))
         column_name = _norm(get("ColumnName"))
         if not table_name or not column_name:

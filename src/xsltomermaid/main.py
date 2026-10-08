@@ -128,7 +128,7 @@ from .make_sample import write_sample
 from .selection_preset import dump_selection_toml, load_selection_toml
 from .map_view import SchemaMapView
 from .schema_map import (
-    cluster_index,
+    clusters_of,
     is_hidden_link,
     link_counts,
 )
@@ -646,6 +646,7 @@ class MainWindow(QMainWindow):
         self._selector.selection_changed.connect(self._on_selection_edited)
         self._selector.current_table_changed.connect(self._on_list_table_changed)
         self._selector.matches_changed.connect(self._map_view.set_matches)
+        self._map_view.map_rebuilt.connect(self._selector.invalidate_clusters)
         self._selector.related_requested.connect(self._add_related_tables)
         self._selector.path_requested.connect(self._find_shortest_path)
         self._selector.undone.connect(self._on_selection_undone)
@@ -1667,7 +1668,11 @@ class MainWindow(QMainWindow):
         self._selector.set_search_index(
             {t.name: [c.name for c in t.columns] for t in schema.tables}
         )
-        self._selector.cluster_provider = lambda s=schema: cluster_index(s)
+        # The map's own clusters (built once, shared), so the list's groups
+        # always match what the map shows.
+        self._selector.cluster_provider = lambda: (
+            clusters_of(m) if (m := self._map_view.ensure_map()) is not None else {}
+        )
         self._auto_hide_audit(schema)
         self._auto_hide_system(schema)
         self._map_view.set_schema(schema if names else None)
@@ -2600,8 +2605,8 @@ class MainWindow(QMainWindow):
         """
         # The map builds itself when first shown; a headless capture never
         # shows the window, so build it here or a big schema grabs a blank map.
-        if self.map_visible() and self._map_view.schema_map() is None:
-            self._map_view._rebuild()
+        if self.map_visible():
+            self._map_view.ensure_drawn()
         app = QApplication.instance()
         if app is not None:
             # Let layout, resizing and painting settle before grabbing.
