@@ -2266,6 +2266,20 @@ def test_rows_are_tinted_for_a_column_a_reference_and_a_clicked_row(monkeypatch)
     del app
 
 
+def test_highlights_differ_by_line_style_and_follow_the_page_brightness():
+    from xsltomermaid import theme
+    from xsltomermaid.diagram_view import _shell_html
+
+    light, dark = _shell_html("#ffffff", False), _shell_html("#1e1f22", True)
+    for colours in theme._HIGHLIGHT.values():
+        for colour in colours.values():
+            assert colour in light
+    assert "stroke-dasharray" in light  # reference/join: dashed, selection: solid
+    assert 'class="darkpage"' in dark and 'class="darkpage"' not in light
+    assert "classList.toggle('darkpage'" in light  # re-marked on every render
+    assert '<html lang="en"' in light
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()

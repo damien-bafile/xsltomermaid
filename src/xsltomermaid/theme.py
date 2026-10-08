@@ -30,9 +30,15 @@ _ACCENT = "#2f81f7"  # blue accent: checkboxes, selection, spinner, rings
 _ACCENT_FILL = "#1f6fe0"  # primary button
 
 
-# The table picked in the Table view's link list, next to the blue selection:
-# an orange glow, clear of the accent and visible on light and dark pages.
-_REFERENCE_GLOW = "#f08a24"
+# Diagram highlights, per page brightness. Blue marks the selection (solid
+# outline), orange a picked reference and its join rows (dashed outline), so
+# the two differ by line style as well as hue. Each clears 3:1 against every
+# Mermaid cell fill on its page: light #fff/#f2f2f2/#ececff, dark
+# #525252/#383838/#1f2020.
+_HIGHLIGHT = {
+    "light": {"select": "#1f6fe0", "reference": "#c25e00"},  # 4.09+ / 3.68+
+    "dark": {"select": "#8ab8ff", "reference": "#ffb066"},  # 3.86+ / 4.34+
+}
 
 
 _ACCENT_HOVER = "#1a64d6"  # primary button, hover (5.47:1 with white)
