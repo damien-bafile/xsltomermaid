@@ -47,6 +47,7 @@ class TableInspector(QWidget):
     column_toggled = Signal(str, str, bool)  # table, column, included
     add_requested = Signal(str)  # tick this table
     select_requested = Signal(str)  # move the view (and selection) here
+    reference_picked = Signal(str)  # a connected table picked in the list ("" for none)
 
     _ROLE_TABLE = Qt.UserRole
     _ADD_COL = 1
@@ -88,6 +89,11 @@ class TableInspector(QWidget):
         self._links.setUniformRowHeights(True)
         self._links.itemClicked.connect(self._on_link_clicked)
         self._links.itemActivated.connect(self._on_link_activated)
+        self._links.currentItemChanged.connect(
+            lambda item, _prev: self.reference_picked.emit(
+                (item.data(0, self._ROLE_TABLE) or "") if item is not None else ""
+            )
+        )
         header = self._links.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Stretch)

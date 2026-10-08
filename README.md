@@ -131,7 +131,7 @@ specific view.
 
 | View | What it shows |
 |---|---|
-| **Table** | The selected table's columns (tick to show them) and every table it references or is referenced by, each with **Add**. Audit links are folded into their own group. Double-click a connected table to move to it. |
+| **Table** | The selected table's columns (tick to show them) and every table it references or is referenced by, each with **Add**. Audit links are folded into their own group. Selecting a connected table glows it orange in the diagram (beside the selected table's blue) when it's drawn; double-click it to move to it. |
 | **Data** | The rows read from the spreadsheet, sortable by column. Before a file loads, it explains the expected format. |
 | **Columns** | Include or leave out columns per table; sort by name or type; *PK, FK first*; **All / None / Keys only**, which can be undone. |
 | **Mermaid** | The generated `erDiagram` source. |

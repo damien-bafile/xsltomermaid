@@ -30,6 +30,11 @@ _ACCENT = "#2f81f7"  # blue accent: checkboxes, selection, spinner, rings
 _ACCENT_FILL = "#1f6fe0"  # primary button
 
 
+# The table picked in the Table view's link list, next to the blue selection:
+# an orange glow, clear of the accent and visible on light and dark pages.
+_REFERENCE_GLOW = "#f08a24"
+
+
 _ACCENT_HOVER = "#1a64d6"  # primary button, hover (5.47:1 with white)
 
 

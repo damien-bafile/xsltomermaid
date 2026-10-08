@@ -389,6 +389,7 @@ class MainWindow(QMainWindow):
         self._inspector.column_toggled.connect(self._columns_set_included)
         self._inspector.add_requested.connect(self._add_table_from_inspector)
         self._inspector.select_requested.connect(self._focus_table)
+        self._inspector.reference_picked.connect(self._mark_reference)
         tabs.addTab(self._inspector, "Table")
         tabs.setTabToolTip(0, "The selected table: its columns and connected tables")
         tabs.addTab(self._table_stack, "Data")
@@ -1177,6 +1178,12 @@ class MainWindow(QMainWindow):
         """Undo draw also undoes the Keys only the draw switched on."""
         if action == "draw" and self._options_bar.keys_only_auto():
             self._options_bar._keys_only.setChecked(False)
+
+    def _mark_reference(self, name: str):
+        """A connected table picked in the Table view: glow it orange in the
+        diagram, beside the blue selection (nothing if it isn't drawn)."""
+        entity = next((e for e, t in self._entity_to_table.items() if t == name), "") if name else ""
+        self._diagram_view.mark_reference(entity)
 
     def _focus_table(self, name: str, from_diagram: bool = False, from_map: bool = False):
         """Make ``name`` the selected table everywhere ("" clears)."""
