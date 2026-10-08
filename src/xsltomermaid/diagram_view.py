@@ -27,6 +27,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
+import weakref
 import xml.etree.ElementTree as ET
 
 
@@ -95,6 +96,30 @@ _BRIDGE_PREFIX = "xsltomermaid:"
 # Mermaid's ER renderer gives each table's group the id
 # "entity-<our entity id>-<uuid>"; our ids are [0-9A-Za-z_] only.
 _ENTITY_GROUP_RE = re.compile(r"^entity-(.+)-[0-9a-f]{8}-[0-9a-f-]{27}$")
+
+
+# Temp folders this app makes start with this; a run removes its own on exit.
+TEMP_PREFIX = "xsltomermaid_"
+# Leftovers older than this (a crash or a killed process) are swept at startup;
+# younger ones may belong to another copy of the app that is still running.
+STALE_TEMP_SECONDS = 2 * 24 * 3600
+
+def sweep_stale_temp_dirs(now: float | None = None) -> int:
+    """Delete this app's temp folders older than :data:`STALE_TEMP_SECONDS`.
+
+    Returns how many were removed. Only folders named ``xsltomermaid_*`` in the
+    system temp folder are touched.
+    """
+    now = time.time() if now is None else now
+    removed = 0
+    for path in Path(tempfile.gettempdir()).glob(TEMP_PREFIX + "*"):
+        try:
+            if path.is_dir() and now - path.stat().st_mtime > STALE_TEMP_SECONDS:
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def entity_id_from_group(group_id: str) -> str | None:
@@ -1226,8 +1251,13 @@ class DiagramView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        self._remove_workdir = None
         if WEBENGINE_AVAILABLE:
-            self._workdir = tempfile.mkdtemp(prefix="xsltomermaid_")
+            self._workdir = tempfile.mkdtemp(prefix=TEMP_PREFIX)
+            # Removed by cleanup(), else when the view is collected, else at exit.
+            self._remove_workdir = weakref.finalize(
+                self, shutil.rmtree, self._workdir, ignore_errors=True
+            )
             shutil.copy(VENDOR_MERMAID, Path(self._workdir) / "mermaid.min.js")
             shell_path = Path(self._workdir) / "shell.html"
             shell_path.write_text(_shell_html(), encoding="utf-8")
@@ -1758,6 +1788,6 @@ class DiagramView(QWidget):
     def cleanup(self):
         if self._view is not None:
             self._zoom_timer.stop()
-        if self._workdir:
-            shutil.rmtree(self._workdir, ignore_errors=True)
-            self._workdir = None
+        if self._remove_workdir is not None:
+            self._remove_workdir()  # runs once; later calls do nothing
+        self._workdir = None

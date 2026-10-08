@@ -14,10 +14,9 @@ import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # Keep remembered settings (export format, …) out of the user's real profile.
-os.environ.setdefault(
-    "XSLTOMERMAID_SETTINGS",
-    os.path.join(__import__("tempfile").mkdtemp(prefix="xsltomermaid_test_"), "settings.ini"),
-)
+_SETTINGS_DIR = __import__("tempfile").mkdtemp(prefix="xsltomermaid_test_")
+__import__("atexit").register(__import__("shutil").rmtree, _SETTINGS_DIR, True)
+os.environ.setdefault("XSLTOMERMAID_SETTINGS", os.path.join(_SETTINGS_DIR, "settings.ini"))
 # Needed for the WebEngine (Chromium) diagram render to run headless / as root.
 os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 os.environ.setdefault(
@@ -2542,6 +2541,36 @@ def test_dynamics_system_columns_are_hidden_from_diagram_table_view_and_sql():
     assert not bar.hide_system_columns()
     assert "importsequencenumber" in window._mermaid_text
     window._diagram_view.cleanup()
+    del app
+
+
+def test_temp_folders_are_removed_on_close_and_stale_ones_swept(tmp_path, monkeypatch):
+    import os
+    import time
+
+    from xsltomermaid import diagram_view
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    workdir = window._diagram_view._workdir
+    if workdir:
+        assert os.path.isdir(workdir)
+    window._preview_dir = tmp_path / "xsltomermaid_preview_x"
+    window._preview_dir.mkdir()
+    window.close()  # closeEvent
+    assert workdir is None or not os.path.exists(workdir)
+    assert not (tmp_path / "xsltomermaid_preview_x").exists()
+
+    # Leftovers from a crash: old ones go, recent ones (another copy) stay.
+    monkeypatch.setattr(diagram_view.tempfile, "gettempdir", lambda: str(tmp_path))
+    old, new, other = (tmp_path / n for n in ("xsltomermaid_old", "xsltomermaid_new", "keepme_old"))
+    for folder in (old, new, other):
+        folder.mkdir()
+    long_ago = time.time() - diagram_view.STALE_TEMP_SECONDS - 60
+    os.utime(old, (long_ago, long_ago))
+    os.utime(other, (long_ago, long_ago))
+    assert diagram_view.sweep_stale_temp_dirs() == 1
+    assert not old.exists() and new.exists() and other.exists()
     del app
 
 
