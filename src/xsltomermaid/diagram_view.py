@@ -168,7 +168,7 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
     diagram is drawn.
     """
     page = """<!DOCTYPE html>
-<html><head><meta charset="utf-8">
+<html lang="en" class="__PAGECLASS__"><head><meta charset="utf-8">
 <style>
   html { height: 100%; background: __CANVAS__; color-scheme: __SCHEME__; }
   /* Flex + auto margins centre a small diagram; a large one simply overflows
@@ -179,13 +179,21 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
   /* The selected table: a glow that doesn't move the layout. Page CSS, so
      exports (which copy only inline attributes) never carry it. */
   #container g[id^="entity-"] { cursor: pointer; }
-  #container g.xsel { filter: drop-shadow(0 0 2px __ACCENT__) drop-shadow(0 0 4px __ACCENT__); }
-  /* A connected table picked in the Table view, beside the selection. */
-  #container g.xref { filter: drop-shadow(0 0 2px __REF__) drop-shadow(0 0 4px __REF__); }
-  /* Rows: a picked column (blue) and the columns a reference joins on
-     (orange). !important beats the fills Mermaid sets on each cell. */
-  #container rect.xrow { fill: __ROWFILL__ !important; }
-  #container rect.xjoin { fill: __JOINFILL__ !important; }
+  /* Highlights: blue for the selection (solid lines), orange for a picked
+     reference and the rows it joins on (dashed lines), so the two differ by
+     more than hue. Colours swap on a dark page (html.darkpage) to keep 3:1
+     against Mermaid's cell fills. !important beats Mermaid's own styles. */
+  :root { --sel: __SEL_L__; --ref: __REF_L__; }
+  html.darkpage { --sel: __SEL_D__; --ref: __REF_D__; }
+  #container g.xsel { filter: drop-shadow(0 0 2px var(--sel)) drop-shadow(0 0 4px var(--sel)); }
+  #container g.xsel > rect.entityBox { stroke: var(--sel) !important; stroke-width: 2px !important; }
+  #container g.xref { filter: drop-shadow(0 0 2px var(--ref)) drop-shadow(0 0 4px var(--ref)); }
+  #container g.xref > rect.entityBox {
+    stroke: var(--ref) !important; stroke-width: 2px !important; stroke-dasharray: 6 3; }
+  #container rect.xrow { fill: __ROWFILL__ !important; stroke: var(--sel) !important;
+    stroke-width: 2px !important; }
+  #container rect.xjoin { fill: __JOINFILL__ !important; stroke: var(--ref) !important;
+    stroke-width: 2px !important; stroke-dasharray: 4 2; }
 </style>
 <script src="mermaid.min.js"></script>
 </head>
@@ -281,7 +289,9 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
     (rows || []).forEach(function (pair) {
       var g = document.querySelector('#container g[id^="entity-' + pair[0] + '-"]');
       var n = g && rowNumber(g, pair[1]);
-      if (n) rowCells(g, n).forEach(function (r) { r.classList.add(cls); });
+      if (!n) return;
+      // Outline only: bold text would overflow the cells Mermaid sized.
+      rowCells(g, n).forEach(function (r) { r.classList.add(cls); });
     });
   };
   // The column of the row under a click, from its cell's text id.
@@ -364,6 +374,7 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
       if (m) {
         var lum = 0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16);
         document.documentElement.style.colorScheme = lum < 128 ? 'dark' : 'light';
+        document.documentElement.classList.toggle('darkpage', lum < 128);
       }
       mermaid.initialize(config);
       mermaid.render('erGraph' + seq, text).then(function (res) {
@@ -384,7 +395,7 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
 </script>
 </body></html>
 """
-    from .theme import _ACCENT, _REFERENCE_GLOW  # here: theme imports this module
+    from .theme import _ACCENT, _HIGHLIGHT  # here: theme imports this module
 
     def tint(hex_colour: str, alpha: float) -> str:
         r, g, b = (int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
@@ -393,10 +404,13 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
     return (
         page.replace("__CANVAS__", canvas)
         .replace("__SCHEME__", "dark" if dark else "light")
-        .replace("__ACCENT__", _ACCENT)
-        .replace("__REF__", _REFERENCE_GLOW)
-        .replace("__ROWFILL__", tint(_ACCENT, 0.38))
-        .replace("__JOINFILL__", tint(_REFERENCE_GLOW, 0.42))
+        .replace("__PAGECLASS__", "darkpage" if dark else "")
+        .replace("__SEL_L__", _HIGHLIGHT["light"]["select"])
+        .replace("__REF_L__", _HIGHLIGHT["light"]["reference"])
+        .replace("__SEL_D__", _HIGHLIGHT["dark"]["select"])
+        .replace("__REF_D__", _HIGHLIGHT["dark"]["reference"])
+        .replace("__ROWFILL__", tint(_ACCENT, 0.30))
+        .replace("__JOINFILL__", tint(_HIGHLIGHT["dark"]["reference"], 0.35))
     )
 
 
@@ -1397,7 +1411,7 @@ class DiagramView(QWidget):
         )
         line = f"rgba({muted.red()},{muted.green()},{muted.blue()},.35)"
         page = (
-            "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
+            "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><style>"
             f"html{{height:100%;background:{base.name()}}}"
             f"body{{margin:0;padding:32px;color:{muted.name()};"
             f"font-family:'{family}',system-ui,sans-serif;"
