@@ -76,7 +76,12 @@ class DiagramOptionsBar(QWidget):
         self._spacing = self._combo(self._SPACINGS)
         self._spacing.setToolTip("Spacing: padding around each table.")
         self._theme = self._combo(self._THEMES)
+        # Theme and background follow the OS's light/dark mode until the user
+        # picks one (signals are blocked when the app sets them).
+        self._follow_system = True
         self._background = self._combo(self._BACKGROUNDS)
+        for combo in (self._theme, self._background):
+            combo.currentIndexChanged.connect(self._stop_following_system)
         self._orientation.setToolTip("Orientation: which way the diagram flows.")
         self._theme.setToolTip("Theme: the diagram's colours.")
         self._background.setToolTip(
@@ -408,8 +413,17 @@ class DiagramOptionsBar(QWidget):
                 widget.blockSignals(False)
         self._on_more_toggled(self._more.isChecked())
 
-    def apply_system_defaults(self, dark: bool):
-        """Default the diagram's own theme + background to match the OS."""
+    def apply_system_defaults(self, dark: bool, notify: bool = False) -> bool:
+        """Default the diagram's own theme + background to match the OS.
+
+        Called at launch and on every light/dark switch, until the user picks a
+        theme or background themselves (for the rest of the session). Returns
+        whether anything changed; ``notify`` then emits :attr:`changed` so the
+        diagram is redrawn in its new colours.
+        """
+        if not self._follow_system:
+            return False
+        before = (self._theme.currentIndex(), self._background.currentIndex())
         blocked = [
             (w, w.blockSignals(True))
             for w in (self._theme, self._background)
@@ -418,3 +432,13 @@ class DiagramOptionsBar(QWidget):
         self._background.setCurrentIndex(2 if dark else 0)  # Dark : White
         for widget, _ in blocked:
             widget.blockSignals(False)
+        changed = before != (self._theme.currentIndex(), self._background.currentIndex())
+        if changed and notify:
+            self.changed.emit()
+        return changed
+
+    def _stop_following_system(self, _index=None):
+        self._follow_system = False
+
+    def follows_system(self) -> bool:
+        return self._follow_system

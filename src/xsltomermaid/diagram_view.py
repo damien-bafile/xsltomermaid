@@ -130,12 +130,29 @@ if WEBENGINE_AVAILABLE:
                 self.bridged.emit(kind, group)
 
 
+# The "default" choice draws with Mermaid's base theme in the app's own
+# neutral blue-greys, instead of Mermaid's stock lavender, so the light canvas
+# matches the window and the blue / orange highlights stand out. Borders are
+# 3.2:1+ against the cells; text 13.9:1 on the header.
+_APP_LIGHT_THEME = {
+    "primaryColor": "#eef1f5",  # table header and box
+    "primaryBorderColor": "#7d8796",
+    "primaryTextColor": "#1f2328",
+    "lineColor": "#6b7280",  # relationship lines: 4.8:1 on white
+    "tertiaryColor": "#ffffff",  # relationship label boxes
+    "attributeBackgroundColorOdd": "#ffffff",
+    "attributeBackgroundColorEven": "#f6f7f9",
+}
+
+
 def _mermaid_config(style: RenderStyle) -> dict:
     """The ``mermaid.initialize`` config for a RenderStyle (theme + er block)."""
+    app_light = style.theme == "default"
     return {
         "startOnLoad": False,
         "securityLevel": "loose",
-        "theme": style.theme,
+        "theme": "base" if app_light else style.theme,
+        **({"themeVariables": dict(_APP_LIGHT_THEME)} if app_light else {}),
         "maxTextSize": 2000000,
         "maxEdges": 10000,
         "er": {
@@ -1368,8 +1385,8 @@ class DiagramView(QWidget):
         )
 
     def retheme(self):
-        """The palette changed: redraw a message page in the new colours (a
-        diagram is redrawn by the window, with the new theme)."""
+        """The palette changed: redraw a message page in the new colours. A
+        diagram is redrawn by the window when its theme follows the system."""
         if self._last_message is not None:
             self.show_message(*self._last_message)
 

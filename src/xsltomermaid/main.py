@@ -1037,6 +1037,11 @@ class MainWindow(QMainWindow):
         self._render_status.retheme()
         self._style_view_switch()
         _apply_primary_button_style(self._export_btn)  # its focus ring follows the text colour
+        # The diagram's own theme and background follow the switch too (unless
+        # the user picked them); changed() redraws it in the new colours.
+        app = QApplication.instance()
+        if app is not None:
+            self._options_bar.apply_system_defaults(system_is_dark(app), notify=True)
         # Views that bake colours into items or pages when they fill.
         self._inspector.retheme()
         self._refresh_inspector()

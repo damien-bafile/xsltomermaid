@@ -1485,7 +1485,7 @@ def test_white_export_of_a_dark_diagram_uses_light_colours(tmp_path, monkeypatch
     window.set_export_format("svg")
     window.export_diagram()
     svg = out.read_text(encoding="utf-8").lower()
-    assert "#ececff" in svg or "rgb(236, 236, 255)" in svg  # default theme's box fill
+    assert "#eef1f5" in svg or "rgb(238, 241, 245)" in svg  # the app's light theme box fill
     assert "Show in folder" in window._status.text()
     assert bar.render_style().theme == "dark"  # the view itself is untouched
     window._diagram_view.cleanup()
@@ -2278,6 +2278,32 @@ def test_highlights_differ_by_line_style_and_follow_the_page_brightness():
     assert 'class="darkpage"' in dark and 'class="darkpage"' not in light
     assert "classList.toggle('darkpage'" in light  # re-marked on every render
     assert '<html lang="en"' in light
+
+
+def test_diagram_theme_follows_a_live_switch_until_the_user_picks_one(monkeypatch):
+    from xsltomermaid import theme
+    from xsltomermaid.diagram_view import RenderStyle, _mermaid_config
+
+    light = _mermaid_config(RenderStyle(theme="default"))
+    assert light["theme"] == "base" and light["themeVariables"]["primaryColor"] == "#eef1f5"
+    assert "themeVariables" not in _mermaid_config(RenderStyle(theme="dark"))
+
+    app = QApplication.instance() or QApplication([])
+    app.setPalette(theme._light_palette(app))
+    window = app_module.MainWindow()
+    bar = window._options_bar
+    monkeypatch.setattr(app_module, "system_is_dark", lambda _app: True)
+    redraws = []
+    bar.changed.connect(lambda: redraws.append(1))
+    window.retheme()
+    assert bar.render_style().theme == "dark" and bar.background_value() == "#16181d"
+    assert redraws  # redrawn in the new colours
+    bar._theme.setCurrentIndex(3)  # the user picks Forest: it stays
+    monkeypatch.setattr(app_module, "system_is_dark", lambda _app: False)
+    window.retheme()
+    assert bar.render_style().theme == "forest" and not bar.follows_system()
+    window._diagram_view.cleanup()
+    del app
 
 
 def test_view_switch_and_wording(tmp_path):
