@@ -180,6 +180,8 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
      exports (which copy only inline attributes) never carry it. */
   #container g[id^="entity-"] { cursor: pointer; }
   #container g.xsel { filter: drop-shadow(0 0 2px __ACCENT__) drop-shadow(0 0 4px __ACCENT__); }
+  /* A connected table picked in the Table view, beside the selection. */
+  #container g.xref { filter: drop-shadow(0 0 2px __REF__) drop-shadow(0 0 4px __REF__); }
 </style>
 <script src="mermaid.min.js"></script>
 </head>
@@ -231,6 +233,17 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
       g.classList.add('xsel');
       if (g.scrollIntoViewIfNeeded) g.scrollIntoViewIfNeeded(true);
     }
+  };
+  // Mark a connected table in orange ("" clears). The view doesn't move: it
+  // shows where the table is when it's on screen.
+  window.markReference = function (entityId) {
+    document.querySelectorAll('#container g.xref').forEach(function (g) {
+      g.classList.remove('xref');
+    });
+    if (!entityId) return false;
+    var g = document.querySelector('#container g[id^="entity-' + entityId + '-"]');
+    if (g) g.classList.add('xref');
+    return !!g;
   };
   window.selectEntityByName = function (entityId) {
     var g = document.querySelector('#container g[id^="entity-' + entityId + '-"]');
@@ -328,12 +341,13 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
 </script>
 </body></html>
 """
-    from .theme import _ACCENT  # here: theme imports this module
+    from .theme import _ACCENT, _REFERENCE_GLOW  # here: theme imports this module
 
     return (
         page.replace("__CANVAS__", canvas)
         .replace("__SCHEME__", "dark" if dark else "light")
         .replace("__ACCENT__", _ACCENT)
+        .replace("__REF__", _REFERENCE_GLOW)
     )
 
 
@@ -1116,6 +1130,16 @@ class DiagramView(QWidget):
             return
         self._view.page().runJavaScript(
             "window.selectEntityByName && window.selectEntityByName({})".format(
+                json.dumps(entity_id or "")
+            )
+        )
+
+    def mark_reference(self, entity_id: str):
+        """Glow a connected table in orange ("" clears), if it's drawn."""
+        if self._view is None or not self._shell_loaded:
+            return
+        self._view.page().runJavaScript(
+            "window.markReference && window.markReference({})".format(
                 json.dumps(entity_id or "")
             )
         )

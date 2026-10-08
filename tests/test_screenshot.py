@@ -2201,6 +2201,35 @@ def test_map_scrolls_sideways_instead_of_zooming_out():
     del app
 
 
+def test_picking_a_connected_table_marks_it_orange_in_the_diagram(monkeypatch):
+    from xsltomermaid.diagram_view import _shell_html
+    from xsltomermaid.excel_to_mermaid import Relationship
+
+    assert "g.xref" in _shell_html() and "window.markReference" in _shell_html()
+    app, window = _window_with_schema(
+        ["hsl_dayrule", "hsl_dayrulegroup", "lonely_table"],
+        [Relationship("hsl_dayrulegroup", "hsl_dayrule", "grp", ("grp",), ("id",)),
+         Relationship("lonely_table", "hsl_dayrule", "lt", ("lt",), ("id",))],
+    )
+    window._selector.set_ready(True)
+    window._selector.check_tables(["hsl_dayrule", "hsl_dayrulegroup"])
+    window._render_selection()
+    marked = []
+    monkeypatch.setattr(window._diagram_view, "mark_reference", marked.append)
+    window._focus_table("hsl_dayrule")
+    tree = window._inspector._links
+    rows = {tree.topLevelItem(0).child(i).data(0, window._inspector._ROLE_TABLE):
+            tree.topLevelItem(0).child(i) for i in range(tree.topLevelItem(0).childCount())}
+    tree.setCurrentItem(rows["hsl_dayrulegroup"])
+    assert marked[-1] == "hsldayrulegroup"  # Mermaid's DOM name: orange
+    tree.setCurrentItem(rows["lonely_table"])
+    assert marked[-1] == ""  # not drawn: nothing to mark
+    window._focus_table("hsl_dayrulegroup")
+    assert marked[-1] == ""  # a new table clears the mark
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()
