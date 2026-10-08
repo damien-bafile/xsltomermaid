@@ -62,8 +62,8 @@ def ident(name: str, quote_all: bool = False) -> str:
 
 def _table_ref(table: Table, q=quote) -> str:
     if table.schema:
-        return f"{q(table.schema)}.{q(table.name)}"
-    return q(table.name)
+        return f"{q(table.schema)}.{q(table.plain_name)}"
+    return q(table.plain_name)
 
 
 def _alias_base(name: str) -> str:
