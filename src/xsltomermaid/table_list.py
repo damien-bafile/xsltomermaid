@@ -718,6 +718,10 @@ class TableSelector(QWidget):
         mode = self._sort.currentData()
         current = self._list.currentItem().text() if self._list.currentItem() else ""
         items = list(self._items())
+        # Every data write below would otherwise fire itemChanged, the "a tick
+        # changed" signal: once per row, each re-running the selection path
+        # over every row. On 1,772 tables that took 85 seconds.
+        self._list.blockSignals(True)
         for item in items:  # headers only in "By cluster" order
             item.setData(_ROLE_GROUP, None)
         if mode == "cluster" and self.cluster_provider is not None:
@@ -763,7 +767,6 @@ class TableSelector(QWidget):
                        if it.text() in self._matches else 1)
         # Rank each row, then let Qt reorder in place (fast, and rows keep
         # their state); filter again in case the move dropped hidden flags.
-        self._list.blockSignals(True)
         for rank, item in enumerate(items):
             item.setData(_ROLE_RANK, rank)
         self._list.sortItems(Qt.AscendingOrder)
