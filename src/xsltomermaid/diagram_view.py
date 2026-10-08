@@ -1640,12 +1640,9 @@ class DiagramView(QWidget):
         pal = self.palette()
         base = pal.color(QPalette.Base)
         text = pal.color(QPalette.WindowText)
-        window = pal.color(QPalette.Window)
-        muted = QColor(
-            round(text.red() * 0.6 + window.red() * 0.4),
-            round(text.green() * 0.6 + window.green() * 0.4),
-            round(text.blue() * 0.6 + window.blue() * 0.4),
-        )
+        from .theme import _muted_hex  # here: theme imports this module
+
+        muted = QColor(_muted_hex(self))  # the app's one secondary-text colour
         # The app's own UI font, so the tab doesn't switch type voice.
         family = self.font().family().replace("'", "")
         paragraphs = "".join(
