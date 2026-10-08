@@ -2098,6 +2098,32 @@ def test_export_caption_says_what_the_file_will_be_and_saved_note_stays(tmp_path
     del app
 
 
+def test_switching_light_to_dark_rethemes_table_view_map_and_shell(tmp_path):
+    from PySide6.QtGui import QPalette
+
+    from xsltomermaid import diagram_view, theme
+
+    app = QApplication.instance() or QApplication([])
+    app.setPalette(theme._light_palette(app))
+    window = app_module.MainWindow()
+    sample = tmp_path / "s.xlsx"
+    _ensure_sample(str(sample))
+    window.load_file(str(sample))
+    window._focus_table("Customer")
+    window.show_map(True)
+    light_meta = window._inspector._meta.styleSheet()
+    app.setPalette(theme._dark_palette())
+    app.processEvents()  # the palette change reaches the window…
+    app.processEvents()  # …which rethemes once its children have it too
+    assert window._inspector._meta.styleSheet() != light_meta
+    base = window.palette().color(QPalette.Base)
+    assert window._map_view._view.backgroundBrush().color() == base
+    shell = diagram_view._shell_html(base.name(), True)
+    assert "color-scheme: dark" in shell and base.name() in shell and "__" not in shell
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()

@@ -135,7 +135,7 @@ def _mermaid_config(style: RenderStyle) -> dict:
     }
 
 
-def _shell_html() -> str:
+def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
     """A page loaded once that keeps mermaid.js resident and re-renders on demand.
 
     ``window.renderDiagram(text, config, background, canvas)`` re-initialises
@@ -148,20 +148,24 @@ def _shell_html() -> str:
     ``background`` goes on ``body`` (exports read it back from there); the page
     behind it (``html``) takes the same colour so the diagram fills the whole
     view, or ``canvas`` (the app's palette) when the background is transparent.
+
+    The page starts in ``canvas`` (and the matching ``color-scheme``, which
+    styles the scrollbars), so a dark app doesn't flash white before the first
+    diagram is drawn.
     """
-    return """<!DOCTYPE html>
+    page = """<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
-  html { height: 100%; background: #ffffff; }
+  html { height: 100%; background: __CANVAS__; color-scheme: __SCHEME__; }
   /* Flex + auto margins centre a small diagram; a large one simply overflows
      right/down and scrolls, without being clipped on the left or top. */
   body { margin: 0; padding: 12px; min-height: 100%; box-sizing: border-box;
-         background: #ffffff; display: flex; }
+         background: __CANVAS__; display: flex; }
   #container { margin: auto; font-family: "Trebuchet MS", Verdana, Arial, sans-serif; }
   /* The selected table: a glow that doesn't move the layout. Page CSS, so
      exports (which copy only inline attributes) never carry it. */
   #container g[id^="entity-"] { cursor: pointer; }
-  #container g.xsel { filter: drop-shadow(0 0 2px #2f81f7) drop-shadow(0 0 4px #2f81f7); }
+  #container g.xsel { filter: drop-shadow(0 0 2px __ACCENT__) drop-shadow(0 0 4px __ACCENT__); }
 </style>
 <script src="mermaid.min.js"></script>
 </head>
@@ -283,8 +287,14 @@ def _shell_html() -> str:
     window._mermaidError = null;
     try {
       document.body.style.background = background;
-      document.documentElement.style.background =
-        background === 'transparent' ? (canvas || '#ffffff') : background;
+      var page = background === 'transparent' ? (canvas || '#ffffff') : background;
+      document.documentElement.style.background = page;
+      // Scrollbars follow the page: light on a light page, dark on a dark one.
+      var m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(page);
+      if (m) {
+        var lum = 0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16);
+        document.documentElement.style.colorScheme = lum < 128 ? 'dark' : 'light';
+      }
       mermaid.initialize(config);
       mermaid.render('erGraph' + seq, text).then(function (res) {
         if (seq !== window._renderSeq) return;   // a newer render superseded us
@@ -304,6 +314,13 @@ def _shell_html() -> str:
 </script>
 </body></html>
 """
+    from .theme import _ACCENT  # here: theme imports this module
+
+    return (
+        page.replace("__CANVAS__", canvas)
+        .replace("__SCHEME__", "dark" if dark else "light")
+        .replace("__ACCENT__", _ACCENT)
+    )
 
 
 # Caps so a huge diagram can't ask for a multi-gigabyte QImage (which freezes
@@ -933,6 +950,7 @@ class DiagramView(QWidget):
         self._loading_shell = False
         self._pending_render: tuple[str, RenderStyle, int] | None = None
         self._focus_entity = ""
+        self._last_message: tuple[str, str] | None = None  # re-themed on a scheme switch
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1120,6 +1138,7 @@ class DiagramView(QWidget):
         self._focus_entity = focus
         style = style or RenderStyle()
         self._font_px = style.font_size
+        self._last_message = None
         self._render_gen += 1
         gen = self._render_gen
         self.render_started.emit()
@@ -1131,6 +1150,7 @@ class DiagramView(QWidget):
             self._pending_render = (mermaid_text, style, gen)
             if not self._loading_shell:
                 self._loading_shell = True
+                self._write_shell()
                 self._view.load(self._shell_url)
 
     def _invoke_render(self, mermaid_text: str, style: RenderStyle, gen: int):
@@ -1220,6 +1240,21 @@ class DiagramView(QWidget):
 
         self._view.page().runJavaScript("window._mermaidDone === true", on_done)
 
+    def _write_shell(self):
+        """(Re)write the shell page in the current palette, before it loads."""
+        if self._workdir is None:
+            return
+        base = self.palette().color(QPalette.Base)
+        (Path(self._workdir) / "shell.html").write_text(
+            _shell_html(base.name(), base.lightness() < 128), encoding="utf-8"
+        )
+
+    def retheme(self):
+        """The palette changed: redraw a message page in the new colours (a
+        diagram is redrawn by the window, with the new theme)."""
+        if self._last_message is not None:
+            self.show_message(*self._last_message)
+
     def show_message(self, message: str, detail: str = ""):
         """Show a plain text message in place of a diagram (e.g. a hint).
 
@@ -1228,6 +1263,7 @@ class DiagramView(QWidget):
         """
         if not self.available or self._view is None or self._workdir is None:
             return
+        self._last_message = (message, detail)
         # Invalidate any in-flight render poll; this isn't a diagram. Navigating
         # to the message page drops the shell, so the next diagram reloads it.
         self._render_gen += 1
