@@ -1675,21 +1675,23 @@ def test_table_view_column_ticks_change_the_diagram_columns(tmp_path):
     del app
 
 
-def test_table_view_folds_audit_and_ownership_links():
+def test_table_view_folds_audit_and_system_links_like_the_map():
     from xsltomermaid.excel_to_mermaid import Column, Relationship, Table
 
     app, window = _window_with_schema(["systemuser", "a", "b"], [
         Relationship("systemuser", "a", "createdby", ("createdby",), ("systemuserid",)),
         Relationship("systemuser", "b", "modifiedby", ("modifiedby",), ("systemuserid",)),
         Relationship("systemuser", "b", "approver", ("approver",), ("systemuserid",)),
+        # A system link: the map, diagram and counts hide it, so it folds too.
+        Relationship("systemuser", "a", "organizationid", ("organizationid",), ("systemuserid",)),
     ])
     window._schema.tables[0].columns.append(Column("", "systemuser", 1, "systemuserid", "guid"))
     window._focus_table("systemuser")
     group = window._inspector._links.topLevelItem(1)  # Referenced by
-    assert group.text(0) == "Referenced by (3)"
+    assert group.text(0) == "Referenced by (4)"
     assert group.child(0).text(0) == "b  ·  via approver"
     folded = group.child(1)
-    assert folded.text(0) == "Audit and ownership links (2)" and not folded.isExpanded()
+    assert folded.text(0) == "Audit and system links (3)" and not folded.isExpanded()
     window._diagram_view.cleanup()
     del app
 

@@ -420,10 +420,9 @@ AUDIT_FK_COLUMNS = frozenset({
 })
 
 
-def is_audit_relationship(rel: "Relationship") -> bool:
-    """Whether every column of ``rel`` is an audit/ownership column."""
-    columns = rel.child_columns or tuple(c.strip() for c in rel.label.split(","))
-    return bool(columns) and all(c.lower() in AUDIT_FK_COLUMNS for c in columns)
+def relationship_columns(rel: "Relationship") -> tuple[str, ...]:
+    """The child columns of ``rel`` (from its label when they weren't recorded)."""
+    return rel.child_columns or tuple(c.strip() for c in rel.label.split(",") if c.strip())
 
 
 def _drop_solution_layering_keys(table: Table) -> None:
@@ -619,34 +618,15 @@ def _derive_relationships(
     return relationships
 
 
-def filter_schema(
-    schema: Schema,
-    selected_names: Iterable[str],
-    include_related: bool = False,
-) -> Schema:
+def filter_schema(schema: Schema, selected_names: Iterable[str]) -> Schema:
     """Return a copy of ``schema`` containing only the selected tables.
 
     ``selected_names`` is matched against table names case-insensitively.
     Relationships are kept only when *both* endpoints are in the result, so the
     filtered diagram never dangles an edge to a table that isn't drawn.
-
-    When ``include_related`` is true, the *direct* foreign-key neighbours of the
-    selected tables (in either direction) are pulled in as well — a single layer
-    out, so a picked table is shown with what it references and what references
-    it, but not those tables' further neighbours.
+    (Neighbours are added by ticking them: see :func:`related_tables`.)
     """
     wanted = {name.strip().lower() for name in selected_names if name.strip()}
-
-    if include_related and wanted:
-        # Match against the frozen original selection so neighbours-of-neighbours
-        # aren't dragged in; this expands by exactly one hop.
-        selected = set(wanted)
-        for rel in schema.relationships:
-            parent = rel.parent_table.lower()
-            child = rel.child_table.lower()
-            if parent in selected or child in selected:
-                wanted.add(parent)
-                wanted.add(child)
 
     tables = [t for t in schema.tables if t.name.lower() in wanted]
     present = {t.name.lower() for t in tables}
@@ -680,54 +660,6 @@ def filter_columns(
         ]
         new_tables.append(Table(schema=table.schema, name=table.name, columns=kept))
     return Schema(tables=new_tables, relationships=schema.relationships)
-
-
-def shortest_path(schema: Schema, start: str, end: str) -> list[str] | None:
-    """Shortest chain of tables linking ``start`` to ``end`` over the FK graph.
-
-    Relationships are treated as undirected edges. Returns the list of table
-    names on a shortest path, including both endpoints (canonical casing), or
-    ``None`` if the two tables aren't connected. Names are matched
-    case-insensitively; an endpoint that isn't a table in the schema yields
-    ``None``.
-    """
-    canon = {t.name.lower(): t.name for t in schema.tables}
-    src = start.strip().lower()
-    dst = end.strip().lower()
-    if src not in canon or dst not in canon:
-        return None
-    if src == dst:
-        return [canon[src]]
-
-    adjacency: dict[str, set[str]] = {}
-    for rel in schema.relationships:
-        parent = rel.parent_table.lower()
-        child = rel.child_table.lower()
-        adjacency.setdefault(parent, set()).add(child)
-        adjacency.setdefault(child, set()).add(parent)
-
-    # Breadth-first search records each node's predecessor for reconstruction.
-    previous: dict[str, str | None] = {src: None}
-    queue: deque[str] = deque([src])
-    while queue:
-        node = queue.popleft()
-        if node == dst:
-            break
-        for neighbour in adjacency.get(node, ()):
-            if neighbour not in previous:
-                previous[neighbour] = node
-                queue.append(neighbour)
-
-    if dst not in previous:
-        return None
-
-    path: list[str] = []
-    node: str | None = dst
-    while node is not None:
-        path.append(canon.get(node, node))
-        node = previous[node]
-    path.reverse()
-    return path
 
 
 # Foreign keys are directed (a child table references a parent), so a "path"
@@ -1028,9 +960,8 @@ def linked_fk_columns(schema: Schema) -> dict[str, set[str]]:
     """
     linked: dict[str, set[str]] = {}
     for rel in schema.relationships:
-        columns = rel.child_columns or tuple(c.strip() for c in rel.label.split(","))
         linked.setdefault(rel.child_table.lower(), set()).update(
-            c.lower() for c in columns if c
+            c.lower() for c in relationship_columns(rel)
         )
     return linked
 

@@ -16,7 +16,6 @@ from xsltomermaid.excel_to_mermaid import (
     generate_mermaid,
     related_tables,
     route_paths,
-    shortest_path,
 )
 
 
@@ -31,30 +30,24 @@ def _chain_schema():
     return Schema(tables=tables, relationships=rels)
 
 
-def test_shortest_path_along_chain():
+def test_all_shortest_paths_along_a_chain_both_ways():
     schema = _chain_schema()
-    assert shortest_path(schema, "A", "D") == ["A", "B", "C", "D"]
-    # Undirected: works the other way too.
-    assert shortest_path(schema, "D", "A") == ["D", "C", "B", "A"]
+    assert all_shortest_paths(schema, "A", "D") == [["A", "B", "C", "D"]]
+    assert all_shortest_paths(schema, "D", "A") == [["D", "C", "B", "A"]]  # undirected
 
 
-def test_shortest_path_picks_shortcut():
+def test_all_shortest_paths_takes_a_shortcut():
     schema = _chain_schema()
-    # Add a direct A-D edge; the shortest path is now just the two endpoints.
     schema.relationships.append(Relationship("A", "D", "ad"))
-    assert shortest_path(schema, "A", "D") == ["A", "D"]
+    assert all_shortest_paths(schema, "A", "D") == [["A", "D"]]
 
 
-def test_shortest_path_disconnected_and_self():
+def test_all_shortest_paths_disconnected_self_and_case():
     schema = _chain_schema()
-    assert shortest_path(schema, "A", "E") is None  # E is isolated
-    assert shortest_path(schema, "A", "Z") is None  # unknown table
-    assert shortest_path(schema, "B", "B") == ["B"]  # same endpoint
-
-
-def test_shortest_path_is_case_insensitive():
-    schema = _chain_schema()
-    assert shortest_path(schema, "a", "c") == ["A", "B", "C"]
+    assert all_shortest_paths(schema, "A", "E") == []  # E is isolated
+    assert all_shortest_paths(schema, "A", "Z") == []  # unknown table
+    assert all_shortest_paths(schema, "B", "B") == [["B"]]  # same endpoint
+    assert all_shortest_paths(schema, "a", "c") == [["A", "B", "C"]]  # any case
 
 
 def _diamond_schema():
@@ -265,32 +258,6 @@ def test_filter_schema_is_case_insensitive():
     assert {t.name for t in filtered.tables} == {"Customer", "Order"}
     assert len(filtered.relationships) == 1
 
-
-def test_filter_schema_include_related_pulls_in_neighbours():
-    schema = build_schema(SAMPLE_ROWS)
-    # Selecting only the child (Order) should pull in the referenced Customer.
-    filtered = filter_schema(schema, ["Order"], include_related=True)
-    assert {t.name for t in filtered.tables} == {"Customer", "Order"}
-    assert len(filtered.relationships) == 1
-
-
-def test_filter_schema_include_related_is_single_layer():
-    # Chain: A -> B -> C. Selecting A with related should pull in B (one hop),
-    # but not C (which is two hops away), regardless of relationship order.
-    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
-
-    schema = Schema(
-        tables=[Table("", "A"), Table("", "B"), Table("", "C")],
-        relationships=[
-            Relationship(parent_table="A", child_table="B", label="a"),
-            Relationship(parent_table="B", child_table="C", label="b"),
-        ],
-    )
-    filtered = filter_schema(schema, ["A"], include_related=True)
-    assert {t.name for t in filtered.tables} == {"A", "B"}
-    # Only the A–B edge survives (C isn't present).
-    assert len(filtered.relationships) == 1
-    assert filtered.relationships[0].child_table == "B"
 
 
 def test_filter_schema_empty_selection():

@@ -25,8 +25,8 @@ from .excel_to_mermaid import (
     DiagramOptions,
     Table,
     drawn_columns,
-    is_audit_relationship,
 )
+from .schema_map import is_hidden_link
 from .theme import (
     _link_hex,
     _muted_hex,
@@ -46,7 +46,7 @@ class TableInspector(QWidget):
     Shows the table picked in the diagram or the list. Column ticks change the
     diagram (shared with the Columns view); each foreign-key neighbour has an
     Add action, and double-clicking one moves the view to it. Dynamics' audit
-    and ownership links are folded into their own collapsed group, since one
+    and system links are folded into their own collapsed group, since one
     table can have thousands of them.
     """
 
@@ -233,14 +233,15 @@ class TableInspector(QWidget):
         self._add_group("Referenced by", [(r.child_table, r) for r in incoming])
 
     def _add_group(self, title: str, pairs):
-        regular = [(t, r) for t, r in pairs if not is_audit_relationship(r)]
-        audit = [(t, r) for t, r in pairs if is_audit_relationship(r)]
+        # The same rule as the map, the diagram and the link counts.
+        regular = [(t, r) for t, r in pairs if not is_hidden_link(r)]
+        audit = [(t, r) for t, r in pairs if is_hidden_link(r)]
         group = QTreeWidgetItem(self._links, [f"{title} ({len(pairs):,})"])
         group.setFirstColumnSpanned(True)
         group.setFlags(group.flags() & ~Qt.ItemIsSelectable)
         self._add_rows(group, regular)
         if audit:
-            folded = QTreeWidgetItem(group, [f"Audit and ownership links ({len(audit):,})"])
+            folded = QTreeWidgetItem(group, [f"Audit and system links ({len(audit):,})"])
             folded.setFirstColumnSpanned(True)
             folded.setFlags(folded.flags() & ~Qt.ItemIsSelectable)
             self._add_rows(folded, audit)

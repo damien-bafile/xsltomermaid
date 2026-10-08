@@ -18,7 +18,7 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from .excel_to_mermaid import AUDIT_FK_COLUMNS, Relationship, Schema
+from .excel_to_mermaid import AUDIT_FK_COLUMNS, Relationship, Schema, relationship_columns
 
 # System-wide references that, like audit links, connect nearly everything.
 SYSTEM_FK_COLUMNS = frozenset({"organizationid", "transactioncurrencyid"})
@@ -75,7 +75,7 @@ def clusters_of(m: SchemaMap) -> dict[str, tuple[int, str]]:
 
 
 def _is_hidden(rel: Relationship, hidden: frozenset[str]) -> bool:
-    columns = rel.child_columns or tuple(c.strip() for c in rel.label.split(","))
+    columns = relationship_columns(rel)
     return bool(columns) and all(c.lower() in hidden for c in columns)
 
 

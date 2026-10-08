@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 
 from .excel_to_mermaid import Schema
 from .schema_map import HIDDEN_BY_DEFAULT, SchemaMap, build_map
-from .theme import _ACCENT
+from .theme import _ACCENT, _muted_hex
 
 # Categorical colours for the largest clusters (Tableau 10); smaller clusters
 # share a neutral grey so colour stays meaningful. Points are non-text marks
@@ -632,13 +632,6 @@ class SchemaMapView(QWidget):
             text += f" (replaces {len(self._ticked):,} ticked)"
         self._draw_btn.setText(text)
 
-    def set_filter(self, text: str):
-        """Highlight tables containing ``text`` (see :meth:`set_matches`)."""
-        needle = text.strip().lower()
-        self.set_matches(
-            {n for n in self._items if needle in n.lower()} if needle else None
-        )
-
     def set_matches(self, names):
         """Highlight these tables (the list's search) and dim the rest; None
         clears the search."""
@@ -693,13 +686,6 @@ class SchemaMapView(QWidget):
     def retheme(self):
         base = self.palette().color(QPalette.Base)
         self._view.setBackgroundBrush(QBrush(base))
-        pal = self.palette()
-        text, window = pal.color(QPalette.WindowText), pal.color(QPalette.Window)
-        muted = QColor(
-            round(text.red() * 0.7 + window.red() * 0.3),
-            round(text.green() * 0.7 + window.green() * 0.3),
-            round(text.blue() * 0.7 + window.blue() * 0.3),
-        )
-        self._unconnected.setStyleSheet(f"color: {muted.name()};")
+        self._unconnected.setStyleSheet(f"color: {_muted_hex(self)};")
         if self._map is not None:
             self._draw()
