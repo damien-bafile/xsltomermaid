@@ -258,7 +258,7 @@ class SchemaMapView(QWidget):
             return
         scale = self.EXPORT_PNG_SIDE / max(rect.width(), rect.height())
         image = QImage(
-            max(1, int(rect.width() * scale)), max(1, int(rect.height() * scale)),
+            max(1, round(rect.width() * scale)), max(1, round(rect.height() * scale)),
             QImage.Format_ARGB32,
         )
         image.fill(background)
