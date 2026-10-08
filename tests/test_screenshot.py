@@ -1625,12 +1625,18 @@ def test_table_view_counts_match_the_diagram_under_keys_only(tmp_path):
     assert ins._meta.text().startswith(f"{total} of {total} columns drawn")
     window._options_bar._keys_only.setChecked(True)  # re-renders
     assert ins._meta.text().startswith(f"1 of {total} columns drawn (Keys only)")
-    hidden = [
-        ins._columns.item(i) for i in range(total)
-        if ins._columns.item(i).text().endswith("hidden by Keys only")
-    ]
-    assert len(hidden) == total - 1
+    # The drawn key first, then a closed "Hidden by Keys only" group.
+    items = [ins._columns.item(i) for i in range(ins._columns.count())]
+    assert items[0].data(app_module.Qt.UserRole) == "CustomerID"
+    fold = items[1]
+    assert fold.data(ins._ROLE_FOLD) and fold.text() == f"▸  Hidden by Keys only ({total - 1})"
+    hidden = items[2:]
+    assert len(hidden) == total - 1 and all(i.isHidden() for i in hidden)
     assert all(i.checkState() == app_module.Qt.Checked for i in hidden)  # still ticked
+    ins._columns.itemClicked.emit(fold)  # open the group
+    assert fold.text().startswith("▾") and not any(i.isHidden() for i in hidden)
+    window._focus_table("Customer")  # refilled: stays open while the app runs
+    assert not ins._columns.item(2).isHidden()
     assert "only key columns are drawn" in window._columns._count.text()
     assert "hidden by Keys only" in window._mermaid_text
     window._diagram_view.cleanup()
@@ -1810,7 +1816,7 @@ def test_a_big_draw_centres_on_the_busiest_table():
 def test_fit_stays_readable_and_small_text_is_flagged():
     from xsltomermaid import diagram_view
 
-    assert "Math.max(force ? 0.05 : 0.75, scale)" in diagram_view._shell_html()
+    assert "Math.max(force ? 0.05 : 0.85, scale)" in diagram_view._shell_html()
     app = QApplication.instance() or QApplication([])
     view = diagram_view.DiagramView()
     if view._view is None:
@@ -1819,7 +1825,7 @@ def test_fit_stays_readable_and_small_text_is_flagged():
     view._fit_scale = 0.5  # the Fit button on a big diagram: 6px text
     view._sync_small_hint()
     assert view.effective_text_px() < view.SMALL_TEXT_PX and not view._small_hint.isHidden()
-    view._fit_scale = 0.75
+    view._fit_scale = 0.85  # the automatic floor: 10px text
     view._sync_small_hint()
     assert view._small_hint.isHidden()
     view.cleanup()
@@ -2330,6 +2336,21 @@ def test_rail_grow_section_legend_undo_menu_and_help(tmp_path, monkeypatch):
     window.show_shortcuts_help()
     assert shown[0][0] == "Spreadsheet format" and "ForeignKeyReference" in shown[0][1]
     assert shown[1][0] == "Keyboard shortcuts" and "Ctrl+Z" in shown[1][1]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_a_map_draw_arrives_on_the_busiest_table(monkeypatch):
+    app, window = _big_window(n=10)
+    window.show()
+    window.show_map(True)
+    monkeypatch.setattr(window._diagram_view, "set_diagram", lambda *a, **k: None)
+    window._draw_from_map(["H", "C3", "C4"])
+    assert window._focus_after_render == "H"  # the hub of the drawn tables
+    window._diagram_view.render_finished.emit(True)
+    assert window._inspector.current_table() == "H"
+    assert window._selector._list.currentItem().text() == "H"  # list scrolled to it
+    assert window._focus_after_render == ""  # once only
     window._diagram_view.cleanup()
     del app
 
