@@ -108,6 +108,13 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
   `transactioncurrencyid`. It's one setting for the map, diagram, SQL and
   exports, and *Keys only* then leaves those columns out too. A chip under
   the diagram says so; click it to show them.
+- **Dynamics system columns are hidden automatically** when they're over 20%
+  of all columns (49% in a typical Dynamics export): bookkeeping columns
+  (`importsequencenumber`, `overriddencreatedon`, time-zone and solution
+  columns), the `…name` / `…yominame` copies of a lookup or choice, and
+  `…_base` currency copies. Keys are always kept. They leave the diagram (each
+  table says "+N system columns hidden"), the Table view (folded) and the SQL;
+  a chip under the diagram, or **More → Hide system columns**, shows them.
 - **Wide tables:** drawing tables that average more than 50 columns switches
   *Keys only* on, with a chip under the diagram to turn it off. **Undo draw**
   turns it off too.

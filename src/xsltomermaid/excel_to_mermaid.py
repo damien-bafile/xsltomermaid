@@ -847,6 +847,52 @@ def _quote_comment(text: str) -> str:
     return text.replace("\\", "/").replace('"', "'").replace("\n", " ").strip()
 
 
+# Dynamics 365 / Dataverse bookkeeping columns: on almost every table, never
+# what a diagram is about. (Keys are never treated as system columns.)
+SYSTEM_COLUMNS = frozenset({
+    "importsequencenumber", "overriddencreatedon", "timezoneruleversionnumber",
+    "utcconversiontimezonecode", "versionnumber", "exchangerate",
+    # Solution layering.
+    "componentstate", "overwritetime", "solutionid", "ismanaged", "componentidunique",
+    # Business process flow bookkeeping.
+    "traversedpath", "processid", "stageid",
+})
+
+
+def system_columns(table: "Table") -> set[str]:
+    """The table's Dynamics system columns (lowercase names).
+
+    The fixed :data:`SYSTEM_COLUMNS`, plus copies of another column in the same
+    table: ``…name`` / ``…yominame`` display copies of a lookup or choice
+    (``createdbyname`` beside ``createdby``) and ``…_base`` currency copies.
+    Primary and foreign keys are never included.
+    """
+    names = {c.name.lower() for c in table.columns}
+    found: set[str] = set()
+    for column in table.columns:
+        if column.is_primary_key or column.foreign_key_reference:
+            continue
+        name = column.name.lower()
+        if (
+            name in SYSTEM_COLUMNS
+            or (name.endswith("yominame") and name[:-8] in names)
+            or (name.endswith("name") and len(name) > 4 and name[:-4] in names)
+            or (name.endswith("_base") and name[:-5] in names)
+        ):
+            found.add(name)
+    return found
+
+
+def without_system_columns(schema: "Schema") -> "Schema":
+    """``schema`` with every table's system columns left out."""
+    tables = []
+    for table in schema.tables:
+        system = system_columns(table)
+        tables.append(Table(table.schema, table.name,
+                            [c for c in table.columns if c.name.lower() not in system]))
+    return Schema(tables=tables, relationships=list(schema.relationships))
+
+
 @dataclass
 class DiagramOptions:
     """Content toggles that change the generated Mermaid *text*.
@@ -865,6 +911,8 @@ class DiagramOptions:
     # Under Keys only, end each table with a "+N hidden" row so a reduced
     # table doesn't pass for the whole thing.
     note_hidden: bool = True
+    # Leave out Dynamics system columns (see system_columns).
+    hide_system: bool = False
 
 
 # Under Keys only, a table with more key rows than this keeps its primary key
@@ -878,8 +926,9 @@ class DrawnColumns:
     """Which of a table's columns a diagram draws, and what it leaves out."""
 
     columns: list[Column]
-    hidden: int = 0  # left out by Keys only (including collapsed FKs)
+    hidden: int = 0  # left out (Keys only, collapsed FKs, system columns)
     collapsed_fk: int = 0  # FKs left out because their table isn't drawn
+    system: int = 0  # of the hidden, how many are system columns
 
 
 def linked_fk_columns(schema: Schema) -> dict[str, set[str]]:
@@ -906,10 +955,12 @@ def drawn_columns(
     :func:`linked_fk_columns`); without it a long table isn't trimmed.
     """
     opts = options or DiagramOptions()
+    system = system_columns(table) if opts.hide_system else set()
+    kept = [c for c in table.columns if c.name.lower() not in system]
     if not opts.keys_only:
-        return DrawnColumns(list(table.columns))
+        return DrawnColumns(kept, len(table.columns) - len(kept), 0, len(system))
     keys = [
-        c for c in table.columns
+        c for c in kept
         if c.is_primary_key
         or (c.foreign_key_reference and c.name.lower() not in opts.hide_columns)
     ]
@@ -918,7 +969,7 @@ def drawn_columns(
         kept = [c for c in keys if c.is_primary_key or c.name.lower() in linked]
         collapsed = len(keys) - len(kept)
         keys = kept
-    return DrawnColumns(keys, len(table.columns) - len(keys), collapsed)
+    return DrawnColumns(keys, len(table.columns) - len(keys), collapsed, len(system))
 
 
 def mermaid_entity_ids(schema: Schema, options: DiagramOptions | None = None) -> dict[str, str]:
@@ -990,7 +1041,11 @@ def generate_mermaid(schema: Schema, options: DiagramOptions | None = None) -> s
                 f"        {_attr_type(column)} {_attr_name(column)}{key_part}{comment_part}"
             )
         if drawn.hidden and opts.note_hidden:
-            note = f"+{drawn.hidden:,} hidden by Keys only"
+            note = (
+                f"+{drawn.hidden:,} hidden by Keys only"
+                if opts.keys_only
+                else f"+{drawn.hidden:,} system columns hidden"
+            )
             if drawn.collapsed_fk:
                 note += f", {drawn.collapsed_fk:,} of them FK"
             lines.append(f'        more columns "{note}"')
