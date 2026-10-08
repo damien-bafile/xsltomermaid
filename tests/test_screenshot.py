@@ -2167,6 +2167,40 @@ def test_clicking_a_table_with_underscores_opens_it():
     del app
 
 
+def test_map_scrolls_sideways_instead_of_zooming_out():
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+
+    app, window = _big_window()
+    window.resize(1200, 800)
+    window.show()
+    window.show_map(True)
+    view = window._map_view._view
+    view.scale(4, 4)  # zoomed in, so there's room to scroll
+    view.user_zoomed = True  # as a wheel zoom does, so a resize won't re-fit
+    app.processEvents()
+    bar = view.horizontalScrollBar()
+    bar.setValue((bar.minimum() + bar.maximum()) // 2)
+
+    def wheel(dx, dy, mods=app_module.Qt.NoModifier):
+        centre = QPointF(view.viewport().rect().center())
+        event = QWheelEvent(centre, view.viewport().mapToGlobal(centre), QPoint(0, 0),
+                            QPoint(dx, dy), app_module.Qt.NoButton, mods,
+                            app_module.Qt.NoScrollPhase, False)
+        view.wheelEvent(event)
+
+    zoom, start = view.transform().m11(), bar.value()
+    wheel(-120, 0)  # tilt wheel / trackpad: right
+    assert bar.value() > start and view.transform().m11() == zoom
+    moved = bar.value()
+    wheel(0, 120, app_module.Qt.ShiftModifier)  # Shift+wheel up: left
+    assert bar.value() < moved and view.transform().m11() == zoom
+    wheel(0, 120)  # the plain wheel still zooms
+    assert view.transform().m11() > zoom
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()

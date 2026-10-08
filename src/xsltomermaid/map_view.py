@@ -62,7 +62,8 @@ def _node_radius(degree: int) -> float:
 
 
 class _MapGraphicsView(QGraphicsView):
-    """Wheel zooms (no modifier needed on a map); drag draws a selection box."""
+    """Wheel zooms (no modifier needed on a map) and sideways scrolling pans;
+    drag draws a selection box."""
 
     double_clicked = Signal(str)
     zoomed = Signal()
@@ -92,7 +93,25 @@ class _MapGraphicsView(QGraphicsView):
             super().keyPressEvent(event)
 
     def wheelEvent(self, event):  # noqa: N802 (Qt naming)
-        factor = 1.2 if event.angleDelta().y() > 0 else 1 / 1.2
+        """The wheel zooms; sideways scrolling (a trackpad, a tilt wheel, or
+        Shift+wheel) pans left and right instead of being read as a zoom out."""
+        angle, pixels = event.angleDelta(), event.pixelDelta()
+        sideways = abs(angle.x()) > abs(angle.y())
+        if sideways or event.modifiers() & Qt.ShiftModifier:
+            # Some platforms report Shift+wheel on y, others already on x.
+            if not pixels.isNull():
+                delta = pixels.x() if sideways else pixels.y()
+            else:
+                steps = (angle.x() if sideways else angle.y()) / 120
+                delta = round(steps * self.horizontalScrollBar().singleStep() * 3)
+            bar = self.horizontalScrollBar()
+            bar.setValue(bar.value() - delta)
+            event.accept()
+            return
+        if angle.y() == 0:
+            event.ignore()
+            return
+        factor = 1.2 if angle.y() > 0 else 1 / 1.2
         self.scale(factor, factor)
         self.user_zoomed = True
         self.zoomed.emit()
