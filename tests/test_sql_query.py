@@ -10,7 +10,7 @@ from xsltomermaid.excel_to_mermaid import (
     build_schema,
     filter_columns,
 )
-from xsltomermaid.sql_query import generate_select, quote
+from xsltomermaid.sql_query import generate_select, ident, quote
 
 from test_excel_to_mermaid import COMPOSITE_ROWS, SAMPLE_ROWS
 
@@ -34,7 +34,7 @@ def test_bare_table_reference_joins_on_a_single_primary_key():
 
 
 def test_simple_join():
-    sql = generate_select(build_schema(SAMPLE_ROWS))
+    sql = generate_select(build_schema(SAMPLE_ROWS), quote_all=True)
     assert "FROM [dbo].[Customer] AS [c]" in sql
     assert "INNER JOIN [dbo].[Order] AS [o]\n    ON [o].[CustomerID] = [c].[CustomerID]" in sql
     # A column name in two tables is aliased so the result has unique names.
@@ -43,7 +43,8 @@ def test_simple_join():
 
 
 def test_composite_join_left_and_top():
-    sql = generate_select(build_schema(COMPOSITE_ROWS), root="Shipment", join="LEFT", top=50)
+    sql = generate_select(build_schema(COMPOSITE_ROWS), root="Shipment", join="LEFT", top=50,
+                          quote_all=True)
     assert sql.startswith("SELECT TOP (50)")
     assert "FROM [dbo].[Shipment] AS [s]" in sql
     assert ("LEFT JOIN [dbo].[OrderLine] AS [ol]\n"
@@ -75,8 +76,21 @@ def test_self_reference_is_noted():
 
 def test_excluded_columns_are_left_out_of_the_select_list():
     schema = filter_columns(build_schema(SAMPLE_ROWS), {("customer", "name")})
-    sql = generate_select(schema)
+    sql = generate_select(schema, quote_all=True)
     assert "[c].[Name]" not in sql and "[c].[CustomerID]" in sql
+
+
+def test_names_are_bracketed_only_where_tsql_needs_it():
+    assert ident("bookableresourcebooking") == "bookableresourcebooking"
+    assert ident("hsl_dayrule") == "hsl_dayrule" and ident("_x$1") == "_x$1"
+    assert ident("Order") == "[Order]" and ident("user") == "[user]"  # reserved
+    assert ident("Order Line") == "[Order Line]" and ident("Amount($)") == "[Amount($)]"
+    assert ident("2024_Sales") == "[2024_Sales]" and ident("#temp") == "[#temp]"
+    assert ident("anything", quote_all=True) == "[anything]"
+    sql = generate_select(build_schema(SAMPLE_ROWS))
+    assert "FROM dbo.Customer AS c" in sql
+    assert "INNER JOIN dbo.[Order] AS o\n    ON o.CustomerID = c.CustomerID" in sql
+    assert "o.CustomerID AS Order_CustomerID" in sql
 
 
 def test_quoting_escapes_brackets():

@@ -20,10 +20,50 @@ def quote(name: str) -> str:
     return "[" + name.replace("]", "]]") + "]"
 
 
-def _table_ref(table: Table) -> str:
+# SQL Server's reserved keywords: as names they must be bracketed.
+_RESERVED = frozenset("""
+ADD ALL ALTER AND ANY AS ASC AUTHORIZATION BACKUP BEGIN BETWEEN BREAK BROWSE BULK
+BY CASCADE CASE CHECK CHECKPOINT CLOSE CLUSTERED COALESCE COLLATE COLUMN COMMIT
+COMPUTE CONSTRAINT CONTAINS CONTAINSTABLE CONTINUE CONVERT CREATE CROSS CURRENT
+CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR DATABASE DBCC
+DEALLOCATE DECLARE DEFAULT DELETE DENY DESC DISK DISTINCT DISTRIBUTED DOUBLE DROP
+DUMP ELSE END ERRLVL ESCAPE EXCEPT EXEC EXECUTE EXISTS EXIT EXTERNAL FETCH FILE
+FILLFACTOR FOR FOREIGN FREETEXT FREETEXTTABLE FROM FULL FUNCTION GOTO GRANT GROUP
+HAVING HOLDLOCK IDENTITY IDENTITY_INSERT IDENTITYCOL IF IN INDEX INNER INSERT
+INTERSECT INTO IS JOIN KEY KILL LEFT LIKE LINENO LOAD MERGE NATIONAL NOCHECK
+NONCLUSTERED NOT NULL NULLIF OF OFF OFFSETS ON OPEN OPENDATASOURCE OPENQUERY
+OPENROWSET OPENXML OPTION OR ORDER OUTER OVER PERCENT PIVOT PLAN PRECISION PRIMARY
+PRINT PROC PROCEDURE PUBLIC RAISERROR READ READTEXT RECONFIGURE REFERENCES
+REPLICATION RESTORE RESTRICT RETURN REVERT REVOKE RIGHT ROLLBACK ROWCOUNT
+ROWGUIDCOL RULE SAVE SCHEMA SECURITYAUDIT SELECT SEMANTICKEYPHRASETABLE
+SEMANTICSIMILARITYDETAILSTABLE SEMANTICSIMILARITYTABLE SESSION_USER SET SETUSER
+SHUTDOWN SOME STATISTICS SYSTEM_USER TABLE TABLESAMPLE TEXTSIZE THEN TO TOP TRAN
+TRANSACTION TRIGGER TRUNCATE TRY_CONVERT TSEQUAL UNION UNIQUE UNPIVOT UPDATE
+UPDATETEXT USE USER VALUES VARYING VIEW WAITFOR WHEN WHERE WHILE WITH
+WITHIN WRITETEXT
+""".split())
+
+# A regular T-SQL identifier: a letter or _ first, then letters, digits, _, @,
+# # or $. (A leading @ or # would mean a variable or temp table: bracket it.)
+_REGULAR = re.compile(r"[A-Za-z_][A-Za-z0-9_@#$]*")
+
+
+def ident(name: str, quote_all: bool = False) -> str:
+    """``name`` as T-SQL needs it: bare when that's safe, else ``[name]``.
+
+    Brackets go on reserved words (``Order``, ``User``), names with spaces or
+    symbols, and names starting with a digit; ``quote_all`` brackets every
+    name, for a query that runs whatever the names are.
+    """
+    if quote_all or not _REGULAR.fullmatch(name) or name.upper() in _RESERVED:
+        return quote(name)
+    return name
+
+
+def _table_ref(table: Table, q=quote) -> str:
     if table.schema:
-        return f"{quote(table.schema)}.{quote(table.name)}"
-    return quote(table.name)
+        return f"{q(table.schema)}.{q(table.name)}"
+    return q(table.name)
 
 
 def _alias_base(name: str) -> str:
@@ -58,14 +98,14 @@ def _aliases(tables: list[Table]) -> dict[str, str]:
     return result
 
 
-def _on_clause(rel: Relationship, aliases: dict[str, str]) -> str | None:
-    """``[c].[x] = [p].[y] AND …``, or None when the columns aren't known."""
+def _on_clause(rel: Relationship, aliases: dict[str, str], q=quote) -> str | None:
+    """``c.x = p.y AND …``, or None when the columns aren't known."""
     if not rel.child_columns or len(rel.child_columns) != len(rel.parent_columns):
         return None
     child = aliases[rel.child_table.lower()]
     parent = aliases[rel.parent_table.lower()]
     return " AND ".join(
-        f"{quote(child)}.{quote(c)} = {quote(parent)}.{quote(p)}"
+        f"{q(child)}.{q(c)} = {q(parent)}.{q(p)}"
         for c, p in zip(rel.child_columns, rel.parent_columns)
     )
 
@@ -75,6 +115,7 @@ def generate_select(
     root: str | None = None,
     join: str = "INNER",
     top: int = 0,
+    quote_all: bool = False,
 ) -> str:
     """A ``SELECT`` over ``schema.tables``, joined along ``schema.relationships``.
 
@@ -84,7 +125,14 @@ def generate_select(
     it's visible rather than silently dropped: a second foreign key between two
     tables already joined, a self-reference, unknown join columns, and tables
     with no foreign-key path to the root.
+
+    Names are bracketed only where T-SQL needs it (see :func:`ident`);
+    ``quote_all`` brackets every name.
     """
+
+    def q(name: str) -> str:
+        return ident(name, quote_all)
+
     tables = list(schema.tables)
     if not tables:
         return "-- No tables selected.\n"
@@ -122,15 +170,15 @@ def generate_select(
     notes: list[str] = []
 
     # SELECT list: every chosen column, in the Columns tab's order. A name
-    # that appears in more than one table gets an "AS [Table_Column]" so the
+    # that appears in more than one table gets an "AS Table_Column" so the
     # result can feed a view or SELECT INTO (which reject duplicate names).
     picked = [(name, column.name) for name in joined for column in by_name[name].columns]
     counts: dict[str, int] = {}
     for _name, col in picked:
         counts[col.lower()] = counts.get(col.lower(), 0) + 1
     select_cols = [
-        f"{quote(aliases[name])}.{quote(col)}"
-        + (f" AS {quote(by_name[name].name + '_' + col)}" if counts[col.lower()] > 1 else "")
+        f"{q(aliases[name])}.{q(col)}"
+        + (f" AS {q(by_name[name].name + '_' + col)}" if counts[col.lower()] > 1 else "")
         for name, col in picked
     ]
     head = "SELECT" + (f" TOP ({int(top)})" if top and top > 0 else "")
@@ -143,12 +191,12 @@ def generate_select(
     else:
         lines.append(f"{head} *  -- every column was left out in the Columns tab")
 
-    lines.append(f"FROM {_table_ref(root_table)} AS {quote(aliases[root_table.name.lower()])}")
+    lines.append(f"FROM {_table_ref(root_table, q)} AS {q(aliases[root_table.name.lower()])}")
     keyword = "INNER JOIN" if join == "INNER" else "LEFT JOIN"
     for rel, new in tree:
         table = by_name[new]
-        lines.append(f"{keyword} {_table_ref(table)} AS {quote(aliases[new])}")
-        on = _on_clause(rel, aliases)
+        lines.append(f"{keyword} {_table_ref(table, q)} AS {q(aliases[new])}")
+        on = _on_clause(rel, aliases, q)
         if on is None:
             lines.append(
                 f"    ON 1 = 1  -- TODO: join columns unknown for "
@@ -164,7 +212,7 @@ def generate_select(
         parent, child = rel.parent_table.lower(), rel.child_table.lower()
         if parent not in by_name or child not in by_name:
             continue
-        on = _on_clause(rel, aliases)
+        on = _on_clause(rel, aliases, q)
         if parent == child:
             notes.append(
                 f"{rel.child_table} references itself through {rel.label or '?'}; "
@@ -181,8 +229,9 @@ def generate_select(
     if missing:
         notes.append(
             "Not joined (no foreign-key path to "
-            f"{root_table.name}): {', '.join(missing)}. Use “Trace path between "
-            "tables” or “Add related tables” to bring in the tables that connect them."
+            f"{root_table.name}): {', '.join(missing)}. Use “Grow selection” in the "
+            "table list (Add related tables, or trace a path) to bring in the tables "
+            "that connect them."
         )
 
     text = "\n".join(lines) + ";\n"

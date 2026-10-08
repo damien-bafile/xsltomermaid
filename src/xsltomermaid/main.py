@@ -70,6 +70,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QMenu,
     QApplication,
+    QCheckBox,
     QComboBox,
     QDockWidget,
     QFileDialog,
@@ -456,10 +457,18 @@ class MainWindow(QMainWindow):
             widget.setAccessibleName(text.replace("&", "").rstrip(":"))
             sql_grid.addWidget(label, r, 0)
             sql_grid.addWidget(widget, r, 1, 1, 2 if widget is self._sql_root else 1)
+        # Brackets only where T-SQL needs them; this puts them on every name.
+        self._sql_quote_all = QCheckBox("Quote all names")
+        self._sql_quote_all.setToolTip(
+            "Bracket every name ([dbo].[Order]). Off: only reserved words, names "
+            "with spaces or symbols, and names starting with a digit are bracketed."
+        )
+        self._sql_quote_all.toggled.connect(lambda _on: self._refresh_sql())
         self._copy_sql_btn = QPushButton("Copy S&QL")
         self._copy_sql_btn.setToolTip("Copy the query to the clipboard (Ctrl+Shift+Q).")
         self._copy_sql_btn.clicked.connect(self.copy_sql)
         sql_grid.addWidget(self._copy_sql_btn, 2, 2, Qt.AlignRight)
+        sql_grid.addWidget(self._sql_quote_all, 3, 1, 1, 2)
         sql_grid.setColumnStretch(2, 1)
         sql_layout.addLayout(sql_grid)
         self._sql_view = QPlainTextEdit()
@@ -2037,6 +2046,7 @@ class MainWindow(QMainWindow):
                 root=self._sql_root.currentText() or None,
                 join=self._sql_join.currentData(),
                 top=self._sql_top.value(),
+                quote_all=self._sql_quote_all.isChecked(),
             )
         )
 
