@@ -1330,19 +1330,19 @@ def test_sql_tab_follows_the_diagram_and_its_options(tmp_path, monkeypatch):
     sample = tmp_path / "s.xlsx"
     _ensure_sample(str(sample))
     window.load_file(str(sample))
-    sql = window._sql_view.toPlainText()
+    sql = window._sql_tab.text()
     assert sql.startswith("SELECT TOP (100)") and "JOIN" in sql
     tabs = [window._tabs.tabText(i) for i in range(window._tabs.count())]
     assert tabs == ["Table", "Columns", "Mermaid", "SQL", "Data"]  # raw rows last
 
-    window._sql_root.setCurrentText("OrderLine")
-    window._sql_join.setCurrentIndex(window._sql_join.findData("LEFT"))
-    window._sql_top.setValue(0)
-    sql = window._sql_view.toPlainText()
+    window._sql_tab.root.setCurrentText("OrderLine")
+    window._sql_tab.join.setCurrentIndex(window._sql_tab.join.findData("LEFT"))
+    window._sql_tab.top.setValue(0)
+    sql = window._sql_tab.text()
     assert sql.startswith("SELECT\n") and "FROM dbo.OrderLine" in sql and "LEFT JOIN" in sql
-    window._sql_quote_all.setChecked(True)  # every name bracketed
-    assert "FROM [dbo].[OrderLine]" in window._sql_view.toPlainText()
-    window._sql_quote_all.setChecked(False)
+    window._sql_tab.quote_all.setChecked(True)  # every name bracketed
+    assert "FROM [dbo].[OrderLine]" in window._sql_tab.text()
+    window._sql_tab.quote_all.setChecked(False)
 
     copied = []
     monkeypatch.setattr(app_module.QGuiApplication.clipboard(), "setText", copied.append)
@@ -1945,7 +1945,7 @@ def test_hide_audit_links_option_drops_them_from_diagram_and_sql(monkeypatch):
     window._options_bar._hide_audit.setChecked(True)  # re-renders via `changed`
     assert [r.label for r in window._drawio_schema.relationships] == ["assignee"]
     assert '"createdby"' not in window._mermaid_text
-    assert "createdby]" not in window._sql_view.toPlainText().split(";")[0].split("FROM")[1]
+    assert "createdby]" not in window._sql_tab.text().split(";")[0].split("FROM")[1]
     window._diagram_view.cleanup()
     del app
 
@@ -2337,8 +2337,8 @@ def test_rail_grow_section_legend_undo_menu_and_help(tmp_path, monkeypatch):
     shown = []
     monkeypatch.setattr(app_module.QMessageBox, "information",
                         lambda _parent, title, text: shown.append((title, text)))
-    window.show_format_help()
-    window.show_shortcuts_help()
+    app_module.show_format_help(window)
+    app_module.show_shortcuts_help(window)
     assert shown[0][0] == "Spreadsheet format" and "ForeignKeyReference" in shown[0][1]
     assert shown[1][0] == "Keyboard shortcuts" and "Ctrl+Z" in shown[1][1]
     window._diagram_view.cleanup()
@@ -2534,8 +2534,8 @@ def test_dynamics_system_columns_are_hidden_from_diagram_table_view_and_sql():
     window._selector.check_tables(["account", "systemuser"])
     window._render_selection()
     assert "importsequencenumber" not in window._mermaid_text
-    assert "acc.importsequencenumber" not in window._sql_view.toPlainText()
-    assert "acc.revenue" in window._sql_view.toPlainText()
+    assert "acc.importsequencenumber" not in window._sql_tab.text()
+    assert "acc.revenue" in window._sql_tab.text()
     window._focus_table("account")
     ins = window._inspector
     assert ins._fold is not None and ins._fold.text().endswith("Hidden system columns (5)")
