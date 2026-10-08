@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -59,6 +59,19 @@ _LABEL_MIN_MEMBERS = 8  # clusters this big get their hub's name drawn
 
 def _node_radius(degree: int) -> float:
     return 3.0 + 1.6 * math.sqrt(degree)
+
+
+class _TableLabel(QGraphicsSimpleTextItem):
+    """A table's name on the map, on a soft backing in the canvas colour so
+    it stays readable over dots and links."""
+
+    backing = QColor(0, 0, 0, 0)
+
+    def paint(self, painter, option, widget=None):  # noqa: D401 (Qt naming)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self.backing)
+        painter.drawRoundedRect(self.boundingRect().adjusted(-3, -1, 3, 1), 3, 3)
+        super().paint(painter, option, widget)
 
 
 class _MapGraphicsView(QGraphicsView):
@@ -129,10 +142,17 @@ class _MapGraphicsView(QGraphicsView):
             self.fit()
         self.zoomed.emit()
 
+    fit_scale = 1.0  # the scale fit() chose: zoom is measured from it
+
     def fit(self):
         rect = self.scene().itemsBoundingRect()
         if not rect.isEmpty():
             self.fitInView(rect.adjusted(-30, -30, 30, 30), Qt.KeepAspectRatio)
+            self.fit_scale = self.transform().m11() or 1.0
+
+    def zoom_level(self) -> float:
+        """How far in from the whole-map fit (1.0 = fitted)."""
+        return self.transform().m11() / (self.fit_scale or 1.0)
 
 
 class SchemaMapView(QWidget):
@@ -211,6 +231,7 @@ class SchemaMapView(QWidget):
         # (label, cluster) pairs, biggest cluster first.
         self._labels: list[tuple[QGraphicsSimpleTextItem, object]] = []
         self._edges = None
+        self._node_labels: dict = {}  # name -> (label, node, radius)
         layout.addWidget(self._view, 1)
 
         self._unconnected = QLabel()
@@ -242,6 +263,8 @@ class SchemaMapView(QWidget):
         """Size cluster names to the whole map rather than the screen (a
         constant screen size is unreadable in a 4,000 px image), then show
         as many as fit without overlapping, biggest cluster first."""
+        for name_label, _node, _r in self._node_labels.values():
+            name_label.setVisible(False)
         taken = []
         target = extent / 90  # text height, in scene units
         for label, comm in self._labels:
@@ -365,6 +388,25 @@ class SchemaMapView(QWidget):
             scene.addItem(item)
             self._items[node.name] = item
 
+        # A name beside each table, shown once zoomed in far enough to read
+        # them (placed by _declutter_labels; clicks pass through to the map).
+        self._node_labels = {}
+        name_font = QFont(self.font())
+        name_font.setPointSizeF(name_font.pointSizeF() * 0.92)
+        backing = QColor(self.palette().color(QPalette.Base))
+        backing.setAlphaF(0.78)
+        _TableLabel.backing = backing
+        for node in m.nodes.values():
+            name_label = _TableLabel(node.name)
+            name_label.setFont(name_font)
+            name_label.setBrush(QBrush(text))
+            name_label.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+            name_label.setAcceptedMouseButtons(Qt.NoButton)
+            name_label.setZValue(1.5)
+            name_label.setVisible(False)
+            scene.addItem(name_label)
+            self._node_labels[node.name] = (name_label, node, _node_radius(node.degree))
+
         self._labels = []
         font = QFont(self.font())
         font.setPointSizeF(font.pointSizeF() * 1.05)
@@ -422,6 +464,57 @@ class SchemaMapView(QWidget):
                     placed = True
                     break
             label.setVisible(placed)
+        self._place_table_labels(taken, transform)
+
+    # Zoomed in this far from the whole-map fit, tables get their names.
+    TABLE_LABEL_ZOOM = 2.5
+
+    def _place_table_labels(self, taken, transform):
+        """Name the tables on screen once zoomed in, without overlaps.
+
+        Selected, current and ticked tables come first (and are named at any
+        zoom), then filter matches, then the most connected. A label that
+        would cover another (or a cluster name) is left out, so zooming in
+        further names more of them.
+        """
+        labels = self._node_labels
+        if not labels:
+            return
+        zoomed = self._view.zoom_level() >= self.TABLE_LABEL_ZOOM
+        visible = self._view.mapToScene(self._view.viewport().rect()).boundingRect()
+        scale = transform.m11()
+
+        def rank(name):
+            item = self._items[name]
+            node = labels[name][1]
+            return (
+                not (item.isSelected() or name == self._current),
+                name not in self._ticked,
+                not (self._filter and self._filter in name.lower()),
+                -node.degree,
+                name,
+            )
+
+        for label, _node, _r in labels.values():
+            label.setVisible(False)
+        for name in sorted(labels, key=rank):
+            label, node, r = labels[name]
+            item = self._items[name]
+            marked = item.isSelected() or name == self._current or name in self._ticked
+            if not (zoomed or marked) or not visible.contains(node.x, node.y):
+                continue
+            if self._filter and self._filter not in name.lower() and not item.isSelected():
+                continue  # dimmed tables stay unnamed while filtering
+            w, h = label.boundingRect().width(), label.boundingRect().height()
+            offset = r * scale + 4  # just right of the dot, in screen pixels
+            centre = transform.map(QPointF(node.x, node.y))
+            rect = QRectF(centre.x() + offset, centre.y() - h / 2, w, h).adjusted(-2, -1, 2, 1)
+            if any(rect.intersects(other) for other in taken):
+                continue
+            taken.append(rect)
+            label.setPos(node.x, node.y)
+            label.setTransform(QTransform.fromTranslate(offset, -h / 2))
+            label.setVisible(True)
 
     # -- selection, ticks and filter highlights ---------------------------------
     def selected(self) -> list[str]:
@@ -551,6 +644,8 @@ class SchemaMapView(QWidget):
         if self._edges is not None:
             # Links would drown the matches while filtering.
             self._edges.setOpacity(0.35 if self._filter else 1.0)
+        if self._labels or self._node_labels:
+            self._declutter_labels()
 
     def retheme(self):
         base = self.palette().color(QPalette.Base)

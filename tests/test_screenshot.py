@@ -2383,6 +2383,34 @@ def test_relationship_labels_can_be_moved_rotated_kept_and_reset(tmp_path, monke
     del app
 
 
+def test_map_names_tables_once_zoomed_in_and_selected_ones_always(tmp_path):
+    app, window = _big_window()
+    window.resize(1200, 800)
+    window.show()
+    window.show_map(True)
+    mv = window._map_view
+    view = mv._view
+    app.processEvents()
+
+    def named():
+        return {n for n, (label, _node, _r) in mv._node_labels.items() if label.isVisible()}
+
+    assert len(mv._node_labels) == len(mv._items)
+    assert named() == set()  # the whole-map view: cluster names only
+    mv.select(["C7"])
+    mv._on_selection_changed(emit=False)
+    assert named() == {"C7"}  # a selected table is named at any zoom
+    view.scale(3, 3)  # past TABLE_LABEL_ZOOM (2.5x the fit)
+    view.user_zoomed = True
+    mv._declutter_labels()
+    assert view.zoom_level() >= mv.TABLE_LABEL_ZOOM
+    assert "C7" in named() and len(named()) > 1
+    mv.export_image(str(tmp_path / "m.png"))  # names are for the screen
+    assert "C7" in named()  # and come back after the export
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()
