@@ -3,7 +3,7 @@
 A Windows/Linux/macOS desktop app (Qt / PySide6): **drag in a spreadsheet that
 describes a database, get an entity-relationship diagram of it.** It renders
 offline with a bundled Mermaid, copes with very large schemas (a 1,772-table
-Dynamics 365 export opens on a map of clusters), and exports to Draw.io,
+Dynamics 365 export can be explored as a map of clusters), and exports to Draw.io,
 Excalidraw, PDF, PNG, SVG, Mermaid and T-SQL.
 
 ## Download
@@ -39,8 +39,8 @@ this export.
 
 1. **Drop** an `.xlsx` / `.xlsm` file on the window (or click to browse).
 2. **Pick tables** in the list on the left. Small schemas are drawn straight
-   away (up to 25 tables); bigger ones open on the
-   [schema map](#big-schemas-the-schema-map).
+   away (up to 25 tables); for bigger ones, tick a few or open the
+   [schema map](#big-schemas-the-schema-map) (Ctrl+M) and draw a cluster.
 3. **Read the diagram** in the centre. It redraws a moment after you tick or
    untick tables or columns.
 4. **Check the details** in the panel on the right: the selected table, the
@@ -71,8 +71,8 @@ this export.
 
 ### Big schemas: the schema map
 
-Schemas over 25 tables open on the **map**, and the **Diagram | Map** switch
-(Ctrl+M) changes view.
+Every file opens on the diagram. For schemas over 25 tables the canvas points
+at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
 
 - **Every table is a point**, sized by its links and grouped into **clusters**
   of closely linked tables, each named after its most-connected table. On a
@@ -202,7 +202,7 @@ The app can also screenshot itself without a display (Qt's offscreen platform),
 which is handy for CI:
 
 ```bash
-# the whole window (a big schema captures its map)
+# the whole window
 uv run xsltomermaid sample_schema.xlsx --screenshot window.png
 # just the rendered ER diagram, as PNG or SVG by extension
 uv run xsltomermaid sample_schema.xlsx --screenshot-diagram diagram.svg

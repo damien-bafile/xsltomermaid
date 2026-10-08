@@ -152,6 +152,7 @@ from .theme import (
     apply_system_palette,
     system_is_dark,
     _ACCENT,
+    _DISABLED_FG,
 )
 from .widgets import (
     DropArea,
@@ -1016,7 +1017,10 @@ class MainWindow(QMainWindow):
         muted = f"color: {_muted_hex(self)};"
         self._status.setStyleSheet(muted)
         self._onboard_hint.setStyleSheet(muted)
-        self._export_caption.setStyleSheet(muted)
+        # Greys out with Export (a stylesheet colour would otherwise win).
+        self._export_caption.setStyleSheet(
+            f"QLabel {{ {muted} }} QLabel:disabled {{ color: {_DISABLED_FG}; }}"
+        )
         line = f"color: {_line_hex(self)};"
         self._divider.setStyleSheet(line)
         for sep in self._button_seps:
@@ -1470,12 +1474,12 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Small schemas render in full; large ones open on the map, where the
-        # shape of the schema shows and a region can be picked to draw.
+        # Small schemas render in full. Every file opens on the diagram; for a
+        # large one the canvas points at the map (Ctrl+M), where the shape of
+        # the schema shows and a region can be picked to draw.
         if len(names) <= AUTO_RENDER_LIMIT:
             self._selector.check_all()
-        # The map first, so the status written by the render can point at it.
-        self.show_map(len(names) > AUTO_RENDER_LIMIT)
+        self.show_map(False)  # before the render, whose status names the way in
         self._render_selection()
 
         # Foreign keys pointing at tables not in this sheet draw no relationship;
@@ -1708,11 +1712,19 @@ class MainWindow(QMainWindow):
             self._render_status.clear()
             self._diagram_view.show_message(
                 (
-                    "No tables selected.\n\n"
+                    "No tables ticked yet.\n\n"
                     "Tick tables on the left; the diagram updates as you go."
+                    + (
+                        " Or open the Map (Ctrl+M) to see the whole schema and "
+                        "draw a cluster."
+                        if total > AUTO_RENDER_LIMIT
+                        else ""
+                    )
                     if total <= RENDER_WARN_LIMIT
                     else f"{total:,} tables is too many to draw at once.\n\n"
-                    "Filter the list on the left and tick a starting table, then use "
+                    "Open the Map (Ctrl+M) to see the whole schema, then select a "
+                    "cluster or region and draw it.\n\n"
+                    "Or filter the list on the left and tick a starting table, then use "
                     "“Add related tables” to grow the diagram around it, or open "
                     "“Trace path between tables” to connect two tables. Saved "
                     "selections load from the Table list menu."
@@ -1723,6 +1735,8 @@ class MainWindow(QMainWindow):
                 + (
                     "Pick a cluster on the map, or tick tables on the left."
                     if self.map_visible()
+                    else "Tick tables on the left, or open the Map (Ctrl+M) to pick a cluster."
+                    if total > AUTO_RENDER_LIMIT
                     else "Tick tables on the left to draw a diagram."
                 )
             )
