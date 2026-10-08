@@ -183,6 +183,7 @@ from .column_selector import (
 from .options_bar import (
     DiagramOptionsBar,
 )
+from .highlight import MermaidHighlighter, SqlHighlighter
 from .services import SchemaImportService, describe_load_error
 from .sql_query import generate_select
 from . import __version__
@@ -409,6 +410,9 @@ class MainWindow(QMainWindow):
         self._mermaid_view.setPlaceholderText(
             "The generated Mermaid erDiagram will appear here."
         )
+        self._mermaid_highlighter = MermaidHighlighter(
+            self._mermaid_view.document(), self._mermaid_view
+        )
         tabs.addTab(self._mermaid_view, "Mermaid")
 
         # SQL query: a T-SQL SELECT over the diagram's tables, joined on their
@@ -463,6 +467,7 @@ class MainWindow(QMainWindow):
         self._sql_view.setFont(QFont("Menlo, Consolas, monospace"))
         self._sql_view.setLineWrapMode(QPlainTextEdit.NoWrap)
         self._sql_view.setAccessibleName("SQL query")
+        self._sql_highlighter = SqlHighlighter(self._sql_view.document(), self._sql_view)
         self._sql_view.setPlaceholderText(
             "A SELECT joining the diagram's tables on their foreign keys "
             "appears here once tables are selected."
@@ -994,6 +999,9 @@ class MainWindow(QMainWindow):
         self._sql_query_view.setFont(QFont("Menlo, Consolas, monospace"))
         self._sql_query_view.setLineWrapMode(QPlainTextEdit.NoWrap)
         self._sql_query_view.setPlainText(SQL_SERVER_SCHEMA_QUERY)
+        self._sql_query_highlighter = SqlHighlighter(
+            self._sql_query_view.document(), self._sql_query_view
+        )
         layout.addWidget(self._sql_query_view, 1)
 
         # No mnemonic: every letter is taken while this panel is open
@@ -1122,6 +1130,11 @@ class MainWindow(QMainWindow):
         self._options_bar.retheme()
         self._render_status.retheme()
         self._style_view_switch()
+        # Syntax colours follow the scheme too.
+        for name in ("_sql_highlighter", "_sql_query_highlighter", "_mermaid_highlighter"):
+            highlighter = getattr(self, name, None)
+            if highlighter is not None:
+                highlighter.retheme()
         _apply_primary_button_style(self._export_btn)  # its focus ring follows the text colour
         # The diagram's own theme and background follow the switch too (unless
         # the user picked them); changed() redraws it in the new colours.
