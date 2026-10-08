@@ -71,12 +71,9 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QMenu,
     QApplication,
-    QCheckBox,
-    QComboBox,
     QDockWidget,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -85,7 +82,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QSpinBox,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
@@ -116,7 +112,6 @@ from .excel_to_mermaid import (
     drawn_column_name,
     generate_mermaid,
     system_columns,
-    without_system_columns,
     linked_fk_columns,
     related_tables,
     route_paths,
@@ -189,9 +184,10 @@ from .column_selector import (
 from .options_bar import (
     DiagramOptionsBar,
 )
+from .help_dialogs import show_format_help, show_shortcuts_help
 from .highlight import MermaidHighlighter, SqlHighlighter
+from .sql_tab import SqlTab
 from .services import SchemaImportService, describe_load_error
-from .sql_query import generate_select
 from . import __version__
 from .updates import (
     RELEASES_PAGE,
@@ -420,94 +416,9 @@ class MainWindow(QMainWindow):
         )
         tabs.addTab(self._mermaid_view, "Mermaid")
 
-        # SQL query: a T-SQL SELECT over the diagram's tables, joined on their
-        # foreign keys, listing the columns chosen in the Columns tab.
-        sql_tab = QWidget()
-        sql_layout = QVBoxLayout(sql_tab)
-        sql_layout.setContentsMargins(8, 8, 8, 8)
-        sql_layout.setSpacing(6)
-        self._sql_root = QComboBox()
-        self._sql_root.setToolTip("The table in FROM; joins branch out from it.")
-        self._sql_join = QComboBox()
-        self._sql_join.addItem("INNER JOIN", "INNER")
-        self._sql_join.addItem("LEFT JOIN", "LEFT")
-        self._sql_join.setToolTip(
-            "INNER keeps only rows that match in every table; LEFT keeps every "
-            "row of the start table."
-        )
-        self._sql_top = QSpinBox()
-        self._sql_top.setRange(0, 1_000_000)
-        self._sql_top.setValue(100)
-        self._sql_top.setSpecialValueText("No limit")
-        self._sql_top.setToolTip("SELECT TOP (n). 0 means no limit.")
-        # Size to their longest value so the narrow panel never clips them.
-        self._sql_join.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self._sql_join.setMinimumWidth(
-            self._sql_join.fontMetrics().horizontalAdvance("INNER JOIN") + 44
-        )
-        self._sql_top.setMinimumWidth(self._sql_top.fontMetrics().horizontalAdvance("1000000") + 48)
-        # A grid, one control per row, so the labels line up and nothing
-        # collides or clips in the narrow Details panel.
-        sql_grid = QGridLayout()
-        sql_grid.setHorizontalSpacing(8)
-        sql_grid.setVerticalSpacing(6)
-        for r, (text, widget) in enumerate((
-            ("Start table:", self._sql_root),
-            ("&Join:", self._sql_join),
-            ("Row limit:", self._sql_top),
-        )):
-            label = QLabel(text)
-            label.setBuddy(widget)
-            widget.setAccessibleName(text.replace("&", "").rstrip(":"))
-            sql_grid.addWidget(label, r, 0)
-            sql_grid.addWidget(widget, r, 1, 1, 2 if widget is self._sql_root else 1)
-        # Brackets only where T-SQL needs them; this puts them on every name.
-        self._sql_quote_all = QCheckBox("Quote all names")
-        self._sql_quote_all.setToolTip(
-            "Bracket every name ([dbo].[Order]). Off: only reserved words, names "
-            "with spaces or symbols, and names starting with a digit are bracketed."
-        )
-        self._sql_quote_all.toggled.connect(lambda _on: self._refresh_sql())
-        # Dynamics data: an append-only copy keeps every version of a row.
-        self._sql_latest = QCheckBox("Latest version only")
-        self._sql_latest.setToolTip(
-            "For a Dynamics copy made by Azure Synapse Link or Fabric, where every "
-            "change adds a row: keep each record's newest row (highest "
-            "versionnumber per primary key) and leave out deleted ones "
-            "(IsDelete). Those copies add both columns to every table."
-        )
-        self._sql_active = QCheckBox("Active records only")
-        self._sql_active.setToolTip(
-            "Keep rows with statecode = 0 (active) in every table that has a "
-            "statecode column."
-        )
-        for box in (self._sql_latest, self._sql_active):
-            box.toggled.connect(lambda _on: self._refresh_sql())
-        self._copy_sql_btn = QPushButton("Copy S&QL")
-        self._copy_sql_btn.setToolTip("Copy the query to the clipboard (Ctrl+Shift+Q).")
-        self._copy_sql_btn.clicked.connect(self.copy_sql)
-        sql_grid.addWidget(self._copy_sql_btn, 2, 2, Qt.AlignRight)
-        sql_grid.addWidget(self._sql_quote_all, 3, 1, 1, 2)
-        sql_grid.addWidget(self._sql_latest, 4, 1, 1, 2)
-        sql_grid.addWidget(self._sql_active, 5, 1, 1, 2)
-        sql_grid.setColumnStretch(2, 1)
-        sql_layout.addLayout(sql_grid)
-        self._sql_view = QPlainTextEdit()
-        self._sql_view.setReadOnly(True)
-        self._sql_view.setFont(QFont("Menlo, Consolas, monospace"))
-        self._sql_view.setLineWrapMode(QPlainTextEdit.NoWrap)
-        self._sql_view.setAccessibleName("SQL query")
-        self._sql_highlighter = SqlHighlighter(self._sql_view.document(), self._sql_view)
-        self._sql_view.setPlaceholderText(
-            "A SELECT joining the diagram's tables on their foreign keys "
-            "appears here once tables are selected."
-        )
-        sql_layout.addWidget(self._sql_view, 1)
-        self._sql_tab = sql_tab  # added after the diagram tab, below
-        self._sql_schema: Schema | None = None
-        self._sql_root.currentIndexChanged.connect(lambda _i: self._refresh_sql())
-        self._sql_join.currentIndexChanged.connect(lambda _i: self._refresh_sql())
-        self._sql_top.valueChanged.connect(lambda _v: self._refresh_sql())
+        # SQL query: a T-SQL SELECT over the diagram's tables (sql_tab.py).
+        self._sql_tab = SqlTab()
+        self._sql_tab.copy_requested.connect(self.copy_sql)
 
         # Rendered diagram tab = an options bar above the actual diagram view.
         self._diagram_view = DiagramView()
@@ -947,9 +858,9 @@ class MainWindow(QMainWindow):
         )
 
         help_menu = bar.addMenu("&Help")
-        help_menu.addAction(act("&Spreadsheet format", self.show_format_help,
+        help_menu.addAction(act("&Spreadsheet format", lambda: show_format_help(self),
                                 QKeySequence.StandardKey.HelpContents))
-        help_menu.addAction(act("&Keyboard shortcuts", self.show_shortcuts_help))
+        help_menu.addAction(act("&Keyboard shortcuts", lambda: show_shortcuts_help(self)))
         help_menu.addSeparator()
         self._update_action = act("Check for &updates…", self.check_for_updates)
         help_menu.addAction(self._update_action)
@@ -962,53 +873,6 @@ class MainWindow(QMainWindow):
         self._undo_action.setEnabled(
             self._schema is not None and self._selector._undo_snapshot is not None
         )
-
-    def show_format_help(self):
-        """Help › Spreadsheet format: the input the app reads."""
-        headers = ", ".join(f"<code>{h}</code>" for h in EXPECTED_HEADERS)
-        QMessageBox.information(
-            self,
-            "Spreadsheet format",
-            "<p><b>One row per database column.</b> The first sheet needs a header "
-            "row with at least <code>TableName</code> and <code>ColumnName</code>; "
-            "headers can be in any order, case or spacing, and extra columns are "
-            "ignored.</p>"
-            f"<p>Recognised headers: {headers}.</p>"
-            "<p><b>Foreign keys</b> come from <code>ForeignKeyReference</code>, in any "
-            "of these forms: <code>dbo.Customer.CustomerID</code>, "
-            "<code>Customer.CustomerID</code>, <code>Customer(CustomerID)</code> or "
-            "just <code>Customer</code>. Repeat a reference on several columns for a "
-            "composite key.</p>"
-            "<p><b>From SQL Server:</b> View › T-SQL statement shows a query that "
-            "produces this sheet; run it, then paste or export the result to Excel.</p>",
-        )
-
-    def show_shortcuts_help(self):
-        """Help › Keyboard shortcuts, in one place."""
-        rows = [
-            ("Ctrl+O", "Open a spreadsheet"),
-            ("Ctrl+M", "Switch between the diagram and the map"),
-            ("Ctrl+I / Ctrl+1–5", "Show the Details panel / one of its views"),
-            ("Ctrl+F", "Find tables by name or column (fuzzy)"),
-            ("F5 or Ctrl+Enter", "Draw the ticked tables"),
-            ("Esc", "Stop drawing; in the diagram or map, clear the selection"),
-            ("Ctrl+Z", "Undo the last change to the ticks"),
-            ("Alt+K", "Keys only"),
-            ("Ctrl+E", "Export"),
-            ("Ctrl+Shift+C / Ctrl+Shift+Q", "Copy the Mermaid / the SQL query"),
-            ("Ctrl+= / Ctrl+- / Ctrl+0", "Zoom in / out / 100%"),
-            ("Diagram: arrows, Enter", "Move between tables, open one"),
-            ("Map: drag, Ctrl+click", "Select a region, add or remove a table"),
-            ("Map: arrows, Space, Enter, Ctrl+A", "Move, select, open, select the cluster"),
-            ("Table view: Space", "Tick the highlighted connected table"),
-            ("Diagram: drag a relationship label", "Move it; drag its dot to rotate "
-             "(Shift: 15° steps); double-click to reset"),
-        ]
-        table = "".join(
-            f"<tr><td style='padding:2px 16px 2px 0'><b>{keys}</b></td><td>{what}</td></tr>"
-            for keys, what in rows
-        )
-        QMessageBox.information(self, "Keyboard shortcuts", f"<table>{table}</table>")
 
     def _build_sql_dock(self):
         """Create the fixed right-side panel with the SQL Server export query."""
@@ -1165,10 +1029,12 @@ class MainWindow(QMainWindow):
         self._render_status.retheme()
         self._style_view_switch()
         # Syntax colours follow the scheme too.
-        for name in ("_sql_highlighter", "_sql_query_highlighter", "_mermaid_highlighter"):
+        for name in ("_sql_query_highlighter", "_mermaid_highlighter"):
             highlighter = getattr(self, name, None)
             if highlighter is not None:
                 highlighter.retheme()
+        if hasattr(self, "_sql_tab"):
+            self._sql_tab.retheme()
         _apply_primary_button_style(self._export_btn)  # its focus ring follows the text colour
         # The diagram's own theme and background follow the switch too (unless
         # the user picked them); changed() redraws it in the new colours.
@@ -1912,7 +1778,7 @@ class MainWindow(QMainWindow):
             )
         self._drawio_schema = final
         self._columns.set_keys_only(self._options_bar.diagram_options().keys_only)
-        self._set_sql_schema(final)
+        self._sql_tab.set_schema(final, self._schema, self._options_bar.hide_system_columns())
         self._refresh_inspector()
         self._map_view.set_ticked(self._selector.selected_tables())
         self._selector.set_drawn(
@@ -2076,42 +1942,10 @@ class MainWindow(QMainWindow):
         return "".join(ch for ch in str(text).lower() if ch.isalnum())
 
     # -- actions -----------------------------------------------------------
-    def _set_sql_schema(self, schema: Schema):
-        """New tables for the SQL tab: refill Start from, keeping the choice."""
-        if self._options_bar.hide_system_columns():
-            schema = without_system_columns(schema)  # out of the SELECT list too
-        self._sql_schema = schema
-        current = self._sql_root.currentText()
-        names = [t.name for t in schema.tables]
-        self._sql_root.blockSignals(True)
-        self._sql_root.clear()
-        self._sql_root.addItems(names)
-        if current in names:
-            self._sql_root.setCurrentText(current)
-        self._sql_root.blockSignals(False)
-        self._refresh_sql()
-
-    def _refresh_sql(self):
-        if self._sql_schema is None or not self._sql_schema.tables:
-            self._sql_view.setPlainText("")
-            return
-        self._sql_view.setPlainText(
-            generate_select(
-                self._sql_schema,
-                root=self._sql_root.currentText() or None,
-                join=self._sql_join.currentData(),
-                top=self._sql_top.value(),
-                quote_all=self._sql_quote_all.isChecked(),
-                latest_only=self._sql_latest.isChecked(),
-                active_only=self._sql_active.isChecked(),
-                full_schema=self._schema,
-            )
-        )
-
     def copy_sql(self):
         if not self._ensure_current():
             return
-        text = self._sql_view.toPlainText()
+        text = self._sql_tab.text()
         if not text:
             self._status.setText("Tick some tables first; there's no query yet.")
             return
