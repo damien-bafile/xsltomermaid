@@ -59,7 +59,8 @@ this export.
   Table view goes back to a readable size centred on it.
 - **Relationship labels can be moved and rotated** to clear tables they
   overlap: click one, drag it to move it, drag its round handle to rotate it
-  around its centre (Shift snaps to 15°), double-click to reset. Changes are
+  around its centre (Shift snaps to 15°; the text never reads upside down,
+  so vertical labels read bottom-to-top), double-click to reset. Changes are
   kept while the app runs, survive redraws, go into PNG/SVG/PDF exports, and
   **Diagram → Reset label layout** puts them all back.
 - **Click a table** to select it: it's highlighted, and the table list scrolls
