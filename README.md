@@ -89,6 +89,9 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
   selects, **Enter** opens and **Ctrl+A** selects the cluster.
 - **Draw N tables** turns the selection into the ER diagram. It replaces the
   ticks and can be undone.
+- **Zoom in** (about 2.5× or more) and tables get their names beside them,
+  busiest first and never overlapping; selected and ticked tables are named at
+  any zoom.
 - The table filter highlights matches on the map, ticked tables show as dashed
   rings, and tables with no links at all are listed underneath.
 - **Save map image…** saves the whole map as a PNG (4,000 px on the long side)
