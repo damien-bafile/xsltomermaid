@@ -398,8 +398,6 @@ class MainWindow(QMainWindow):
         self._inspector.column_picked.connect(self._mark_column)
         tabs.addTab(self._inspector, "Table")
         tabs.setTabToolTip(0, "The selected table: its columns and connected tables")
-        tabs.addTab(self._table_stack, "Data")
-        tabs.setTabToolTip(1, "The rows read from the spreadsheet")
 
         self._columns = ColumnSelector()
         self._columns.changed.connect(self._on_selection_edited)
@@ -556,6 +554,9 @@ class MainWindow(QMainWindow):
         self._canvas.addWidget(self._map_view)
         diagram_layout.addWidget(self._canvas, 1)
         tabs.addTab(self._sql_tab, "SQL")
+        # The raw rows are a reference, not where work happens: last.
+        tabs.addTab(self._table_stack, "Data")
+        tabs.setTabToolTip(tabs.indexOf(self._table_stack), "The rows read from the spreadsheet")
         tabs.setUsesScrollButtons(False)
 
         # Diagram-first: the diagram is the centre of the window, always in
@@ -886,10 +887,10 @@ class MainWindow(QMainWindow):
         for number, (label, widget) in enumerate(
             [
                 ("&Table", self._inspector),
-                ("E&xtracted data", self._table_stack),
                 ("&Columns", self._columns),
                 ("&Mermaid source", self._mermaid_view),
                 ("&SQL query", self._sql_tab),
+                ("E&xtracted data", self._table_stack),
             ],
             start=1,
         ):
