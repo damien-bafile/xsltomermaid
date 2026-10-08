@@ -63,7 +63,11 @@ def cluster_index(schema: Schema) -> dict[str, tuple[int, str]]:
 
     Unconnected tables are left out. Used to sort the table list by cluster.
     """
-    m = build_map(schema)
+    return clusters_of(build_map(schema))
+
+
+def clusters_of(m: SchemaMap) -> dict[str, tuple[int, str]]:
+    """``{table: (cluster number, hub)}`` for a map already built."""
     return {
         name: (node.community, m.communities[node.community].hub)
         for name, node in m.nodes.items()

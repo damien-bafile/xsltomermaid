@@ -2574,6 +2574,27 @@ def test_temp_folders_are_removed_on_close_and_stale_ones_swept(tmp_path, monkey
     del app
 
 
+def test_list_clusters_reuse_the_map_and_follow_its_audit_setting(monkeypatch):
+    from xsltomermaid import map_view as map_module
+
+    app, window = _big_window()
+    window._apply_loaded("big.xlsx", [], window._schema, "")  # as a real load wires it
+    builds = []
+    real = map_module.build_map
+    monkeypatch.setattr(map_module, "build_map", lambda *a, **k: builds.append(1) or real(*a, **k))
+    sel = window._selector
+    sel.set_ready(True)
+    sel._sort.setCurrentIndex(sel._sort.findData("cluster"))  # list first
+    assert len(builds) == 1 and sel._clusters
+    window.show()
+    window.show_map(True)  # the map draws the clustering already computed
+    assert len(builds) == 1 and window._map_view._drawn
+    window._map_view._hide.setChecked(False)  # a new clustering for both
+    assert len(builds) == 2 and sel._clusters is not None
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()
