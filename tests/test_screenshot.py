@@ -1107,7 +1107,7 @@ def test_help_menu_update_check_reports_both_outcomes(monkeypatch):
         a.menu() for a in window.menuBar().actions() if a.text() == "&Help"
     )
     labels = [a.text() for a in help_menu.actions()]
-    assert labels == ["Check for &updates…", "&About"]
+    assert labels == ["&Spreadsheet format", "&Keyboard shortcuts", "", "Check for &updates…", "&About"]
 
     shown: list[str] = []
     opened: list[str] = []
@@ -1721,10 +1721,10 @@ def test_map_words_say_tick_and_show_a_selection_the_filter_hides():
     btn = window._map_view._draw_btn
     window._map_view.select(["C3", "C4"])
     window._map_view._on_selection_changed()
-    assert btn.text() == "Draw these 2"
+    assert btn.text() == "Draw 2 tables"
     window._selector.check_tables(["C1"])
     window._map_view.set_ticked(window._selector.selected_tables())
-    assert btn.text() == "Draw these 2 (replaces 1 ticked)"
+    assert btn.text() == "Draw 2 tables (replaces 1 ticked)"
     note = window._selector._mapsel_note
     assert note.isHidden()
     window._selector._filter.setText("C1")
@@ -2302,6 +2302,34 @@ def test_diagram_theme_follows_a_live_switch_until_the_user_picks_one(monkeypatc
     monkeypatch.setattr(app_module, "system_is_dark", lambda _app: False)
     window.retheme()
     assert bar.render_style().theme == "forest" and not bar.follows_system()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_rail_grow_section_legend_undo_menu_and_help(tmp_path, monkeypatch):
+    app, window = _inspector_window(tmp_path)
+    sel = window._selector
+    # Add related lives in the Grow selection disclosure, with the path tracer.
+    assert sel._path_toggle.text() == "Grow selection"
+    assert sel._related_btn.parent() is sel._path_box
+    assert not sel._legend.isHidden() and "↗ references" in sel._legend.text()
+    # Ctrl+Z (Diagram › Undo) undoes the last change to the ticks.
+    before = sel.selected_tables()
+    sel.snapshot_for_undo("clear")
+    sel.clear_selection()
+    window._sync_undo_action()
+    assert window._undo_action.text() == "&Undo clear" and window._undo_action.isEnabled()
+    assert window._undo_action.shortcut().toString() == "Ctrl+Z"
+    window._undo_action.trigger()
+    assert sel.selected_tables() == before
+    # Help: the format and the shortcuts, in one place each.
+    shown = []
+    monkeypatch.setattr(app_module.QMessageBox, "information",
+                        lambda _parent, title, text: shown.append((title, text)))
+    window.show_format_help()
+    window.show_shortcuts_help()
+    assert shown[0][0] == "Spreadsheet format" and "ForeignKeyReference" in shown[0][1]
+    assert shown[1][0] == "Keyboard shortcuts" and "Ctrl+Z" in shown[1][1]
     window._diagram_view.cleanup()
     del app
 

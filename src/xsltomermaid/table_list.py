@@ -245,6 +245,14 @@ class TableSelector(QWidget):
         self._count = QLabel("No tables loaded yet")
         self._count.setStyleSheet(f"color: {_muted_hex(self)};")
         layout.addWidget(self._count)
+        # What the painted marks on each row mean (shown once counts exist).
+        self._legend = QLabel("↗ references  ·  ↙ referenced by  ·  ● in the diagram")
+        self._legend.setAccessibleName(
+            "Legend: up-right arrow, tables referenced; down-left arrow, tables "
+            "referencing this one; dot, in the diagram"
+        )
+        self._legend.setVisible(False)
+        layout.addWidget(self._legend)
 
         # Select: build up the ticks.
         layout.addSpacing(4)
@@ -275,18 +283,21 @@ class TableSelector(QWidget):
         )
         related_row.addWidget(self._related_btn, 1)
         related_row.addWidget(self._related_direction)
-        layout.addLayout(related_row)
 
-        # Path tracing is a power tool, not the main loop, so it lives behind a
-        # disclosure: the header is one quiet line until opened, keeping the rail
-        # focused on "pick tables → render".
+        # Growing the selection (its neighbours, or a path between two tables)
+        # is a power tool, not the main loop, so it lives behind one
+        # disclosure: a quiet line until opened, keeping the rail focused on
+        # "find tables → tick → draw".
         self._path_toggle = QToolButton()
-        self._path_toggle.setText("Trace path between tables")
+        self._path_toggle.setText("Grow selection")
         self._path_toggle.setCheckable(True)
         self._path_toggle.setChecked(False)
         self._path_toggle.setArrowType(Qt.RightArrow)
         self._path_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self._path_toggle.setToolTip("Find the shortest FK path between two tables.")
+        self._path_toggle.setToolTip(
+            "Add the tables next to the ticked ones, or trace the shortest "
+            "foreign-key path between two tables."
+        )
         # A borderless header, but keyboard focus and hover must still show — a
         # background wash gives both without shifting the layout.
         self._path_toggle.setStyleSheet(
@@ -298,11 +309,16 @@ class TableSelector(QWidget):
         self._path_toggle.toggled.connect(self._on_path_toggled)
         layout.addWidget(self._path_toggle)
 
-        # Everything the path tracer needs, hidden until the disclosure is open.
+        # Everything for growing the selection, hidden until the disclosure is
+        # open: neighbours first, then the path tracer.
         self._path_box = QWidget()
         path_box = QVBoxLayout(self._path_box)
         path_box.setContentsMargins(0, 0, 0, 4)
         path_box.setSpacing(6)
+        path_box.addLayout(related_row)
+        self._path_heading = QLabel("Or trace the shortest path between two tables:")
+        self._path_heading.setWordWrap(True)
+        path_box.addWidget(self._path_heading)
 
         endpoints_row = QHBoxLayout()
         self._path_from = QComboBox()
@@ -354,7 +370,7 @@ class TableSelector(QWidget):
         self._path_btn = QPushButton("Trace path")
         self._path_btn.setToolTip(
             "Trace the shortest foreign-key path between the two chosen tables "
-            "(through the optional Via stop) and render it."
+            "(through the optional Via stop) and draw it."
         )
         self._path_btn.clicked.connect(lambda: self.path_requested.emit())
         self._path_replace = QCheckBox("Replace selection")
@@ -578,6 +594,7 @@ class TableSelector(QWidget):
             )
             item.setData(Qt.AccessibleDescriptionRole, f"{out} out, {in_} in")
         self._list.blockSignals(False)
+        self._legend.setVisible(bool(counts))
         self._resort()
         self._apply_filters()
 
@@ -795,4 +812,6 @@ class TableSelector(QWidget):
     def retheme(self):
         muted = _muted_hex(self)
         self._count.setStyleSheet(f"color: {muted};")
+        self._legend.setStyleSheet(f"color: {muted};")
+        self._path_heading.setStyleSheet(f"color: {muted};")
         self._path_hint.setStyleSheet(f"color: {muted}; font-size: 11px;")

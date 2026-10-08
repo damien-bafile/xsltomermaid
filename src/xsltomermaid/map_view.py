@@ -174,7 +174,7 @@ class SchemaMapView(QWidget):
         self._diagram_btn = QPushButton("Diagram")
         self._diagram_btn.setToolTip("Back to the ER diagram of the ticked tables")
         self._diagram_btn.clicked.connect(self.show_diagram_requested.emit)
-        self._draw_btn = QPushButton("Draw selection")
+        self._draw_btn = QPushButton("Draw tables")
         self._draw_btn.setToolTip(
             "Tick the tables selected on the map (replacing the current ticks) "
             "and draw them as an ER diagram. Drag on the map to select a region; "
@@ -502,9 +502,9 @@ class SchemaMapView(QWidget):
     def _update_draw_button(self, names):
         """Name what drawing does: it replaces the ticked tables."""
         if not names:
-            self._draw_btn.setText("Draw selection")
+            self._draw_btn.setText("Draw tables")
             return
-        text = f"Draw these {len(names):,}"
+        text = f"Draw {len(names):,} table{'' if len(names) == 1 else 's'}"
         if self._ticked and self._ticked != set(names):
             text += f" (replaces {len(self._ticked):,} ticked)"
         self._draw_btn.setText(text)
