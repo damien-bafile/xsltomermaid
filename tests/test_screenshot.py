@@ -1798,6 +1798,50 @@ def test_a_big_draw_centres_on_the_busiest_table():
     del app
 
 
+def test_fit_stays_readable_and_small_text_is_flagged():
+    from xsltomermaid import diagram_view
+
+    assert "Math.max(force ? 0.05 : 0.75, scale)" in diagram_view._shell_html()
+    app = QApplication.instance() or QApplication([])
+    view = diagram_view.DiagramView()
+    if view._view is None:
+        return  # no WebEngine
+    view._shell_loaded = True
+    view._fit_scale = 0.5  # the Fit button on a big diagram: 6px text
+    view._sync_small_hint()
+    assert view.effective_text_px() < view.SMALL_TEXT_PX and not view._small_hint.isHidden()
+    view._fit_scale = 0.75
+    view._sync_small_hint()
+    assert view._small_hint.isHidden()
+    view.cleanup()
+    del app
+
+
+def test_map_export_sizes_labels_to_the_image_then_restores_them(tmp_path):
+    from PySide6.QtWidgets import QGraphicsItem
+
+    app, window = _big_window()
+    window.show()
+    window.show_map(True)
+    labels = [label for label, _comm in window._map_view._labels]
+    assert labels
+    seen = {}
+    real = window._map_view._write_image
+
+    def spy(path, rect, background):
+        seen["scale"] = labels[0].scale()
+        seen["ignores"] = bool(labels[0].flags() & QGraphicsItem.ItemIgnoresTransformations)
+        real(path, rect, background)
+
+    window._map_view._write_image = spy
+    window._map_view.export_image(str(tmp_path / "m.png"))
+    assert seen["scale"] != 1.0 and not seen["ignores"]  # sized to the image
+    assert labels[0].scale() == 1.0
+    assert labels[0].flags() & QGraphicsItem.ItemIgnoresTransformations  # back on screen
+    window._diagram_view.cleanup()
+    del app
+
+
 # -- smarter table list ---------------------------------------------------------
 def _list_window():
     from xsltomermaid.excel_to_mermaid import Relationship

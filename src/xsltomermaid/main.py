@@ -1042,6 +1042,7 @@ class MainWindow(QMainWindow):
         if not name:
             return
         if double:
+            self._diagram_view.focus_entity(entity_id)  # readable, if it wasn't
             self.show_details(self._inspector)
         else:
             self._status.setText(
@@ -1135,8 +1136,13 @@ class MainWindow(QMainWindow):
         self._selector.focus_table(name)
         self._columns.focus_table(name)
         if not from_diagram:
+            # Picked from the list, map or Table view: zoom to it if the
+            # diagram is drawn too small to read.
             entity = next((e for e, t in self._entity_to_table.items() if t == name), "")
-            self._diagram_view.highlight_entity(entity)
+            if entity:
+                self._diagram_view.focus_entity(entity)
+            else:
+                self._diagram_view.highlight_entity("")
         if not from_map and self.map_visible() and name:
             self._map_view.select([name])
         self._refresh_inspector(name)

@@ -211,6 +211,38 @@ class SchemaMapView(QWidget):
         if rect.isEmpty():
             raise ValueError("The map is empty; load a schema first.")
         background = self._view.backgroundBrush().color()
+        self._labels_for_export(max(rect.width(), rect.height()))
+        # The bigger labels can reach past the clusters at the edges.
+        rect = self._scene.itemsBoundingRect().adjusted(-30, -30, 30, 30)
+        try:
+            self._write_image(path, rect, background)
+        finally:
+            self._declutter_labels()  # back to the on-screen labels
+
+    def _labels_for_export(self, extent: float):
+        """Size cluster names to the whole map rather than the screen (a
+        constant screen size is unreadable in a 4,000 px image), then show
+        as many as fit without overlapping, biggest cluster first."""
+        taken = []
+        target = extent / 90  # text height, in scene units
+        for label, comm in self._labels:
+            label.setTransform(QTransform())
+            h = label.boundingRect().height() or 1
+            k = target / h
+            w = label.boundingRect().width() * k
+            placed = False
+            for y in (comm.y - comm.radius - target - 4, comm.y + comm.radius + 4):
+                box = QRectF(comm.x - w / 2, y, w, target).adjusted(-6, -3, 6, 3)
+                if not any(box.intersects(other) for other in taken):
+                    taken.append(box)
+                    label.setFlag(QGraphicsItem.ItemIgnoresTransformations, False)
+                    label.setScale(k)
+                    label.setPos(comm.x - w / 2, y)
+                    placed = True
+                    break
+            label.setVisible(placed)
+
+    def _write_image(self, path: str, rect: QRectF, background) -> None:
         if path.lower().endswith(".svg"):
             from PySide6.QtSvg import QSvgGenerator
 
@@ -226,7 +258,7 @@ class SchemaMapView(QWidget):
             return
         scale = self.EXPORT_PNG_SIDE / max(rect.width(), rect.height())
         image = QImage(
-            max(1, int(rect.width() * scale)), max(1, int(rect.height() * scale)),
+            max(1, round(rect.width() * scale)), max(1, round(rect.height() * scale)),
             QImage.Format_ARGB32,
         )
         image.fill(background)
@@ -355,6 +387,8 @@ class SchemaMapView(QWidget):
         taken = []
         transform = self._view.viewportTransform()
         for label, comm in self._labels:
+            label.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+            label.setScale(1.0)
             w, h = label.boundingRect().width(), label.boundingRect().height()
             placed = False
             # Centred above the cluster, else centred below it. The offset is
