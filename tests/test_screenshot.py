@@ -1758,20 +1758,23 @@ def test_map_single_selection_focuses_the_table_and_filter_dims_others():
     del app
 
 
-def test_big_schema_opens_on_the_map(tmp_path):
-    from xsltomermaid.excel_to_mermaid import Schema
-
+def test_big_schema_opens_on_the_diagram_pointing_at_the_map(tmp_path):
     app, window = _big_window()
+    window.show_map(True)  # left on the map from the last file
     window._apply_loaded(str(tmp_path / "big.xlsx"), [], window._schema, "")
-    assert window.map_visible()
+    assert not window.map_visible()
+    assert "Ctrl+M" in window._status.text()
     window._diagram_view.cleanup()
     del app
 
 
-def test_medium_schema_opens_on_the_map_instead_of_an_empty_canvas(tmp_path):
+def test_medium_schema_opens_on_the_diagram_pointing_at_the_map(tmp_path):
     app, window = _big_window(n=40)  # over the auto-draw limit, under the warning one
     window._apply_loaded(str(tmp_path / "mid.xlsx"), [], window._schema, "")
-    assert window.map_visible()
+    assert not window.map_visible()
+    assert "open the Map (Ctrl+M)" in window._status.text()
+    window.show_map(True)
+    window._render_selection()
     assert "Pick a cluster on the map" in window._status.text()
     window._diagram_view.cleanup()
     del app
@@ -1989,6 +1992,7 @@ def test_table_list_sorts_by_cluster():
 def test_headless_capture_of_a_big_schema_includes_the_map(tmp_path):
     app, window = _big_window()
     window._apply_loaded(str(tmp_path / "big.xlsx"), [], window._schema, "")
+    window.show_map(True)
     assert window.map_visible() and window._map_view.schema_map() is None  # never shown
     window.capture(str(tmp_path / "w.png"))
     assert window._map_view.schema_map() is not None
@@ -2144,6 +2148,8 @@ def test_load_errors_are_explained_in_plain_language():
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()
+    assert not window.map_visible() and window._diagram_view_btn.isChecked()  # the default
+    window._map_btn.click()
     assert window.map_visible() and window._map_btn.isChecked()
     assert not window._options_bar._orientation.isVisible()  # diagram-only, hidden on the map
     window._diagram_view_btn.click()
@@ -2164,6 +2170,7 @@ def test_map_cluster_click_keyboard_and_light_colours(tmp_path):
 
     app, window = _audit_heavy_window(tmp_path)
     window.show()
+    window.show_map(True)
     mv = window._map_view
     m = mv.schema_map()
     biggest = m.communities[0]
