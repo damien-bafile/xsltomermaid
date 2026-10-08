@@ -182,6 +182,10 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
   #container g.xsel { filter: drop-shadow(0 0 2px __ACCENT__) drop-shadow(0 0 4px __ACCENT__); }
   /* A connected table picked in the Table view, beside the selection. */
   #container g.xref { filter: drop-shadow(0 0 2px __REF__) drop-shadow(0 0 4px __REF__); }
+  /* Rows: a picked column (blue) and the columns a reference joins on
+     (orange). !important beats the fills Mermaid sets on each cell. */
+  #container rect.xrow { fill: __ROWFILL__ !important; }
+  #container rect.xjoin { fill: __JOINFILL__ !important; }
 </style>
 <script src="mermaid.min.js"></script>
 </head>
@@ -250,10 +254,49 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
     window.selectEntity(g ? g.id : '');
     return !!g;
   };
+  // A table's rows: Mermaid ids each cell's text "...-attr-<n>-<part>", the
+  // cell's rect just before it. Row n is found by its name cell's text.
+  function rowNumber(g, name) {
+    var texts = g.querySelectorAll('text[id$="-name"]');
+    for (var i = 0; i < texts.length; i++) {
+      var m = /-attr-([0-9]+)-name$/.exec(texts[i].id);
+      if (m && texts[i].textContent === name) return m[1];
+    }
+    return null;
+  }
+  function rowCells(g, n) {
+    var cells = [];
+    g.querySelectorAll('text[id*="-attr-' + n + '-"]').forEach(function (t) {
+      var r = t.previousElementSibling;
+      if (r && r.tagName === 'rect') cells.push(r);
+    });
+    return cells;
+  }
+  // Tint rows: cls is "xrow" or "xjoin"; rows is [[entityId, column], ...].
+  // Rows not drawn (another table, or left out by Keys only) are skipped.
+  window.markRows = function (cls, rows) {
+    document.querySelectorAll('#container rect.' + cls).forEach(function (r) {
+      r.classList.remove(cls);
+    });
+    (rows || []).forEach(function (pair) {
+      var g = document.querySelector('#container g[id^="entity-' + pair[0] + '-"]');
+      var n = g && rowNumber(g, pair[1]);
+      if (n) rowCells(g, n).forEach(function (r) { r.classList.add(cls); });
+    });
+  };
+  // The column of the row under a click, from its cell's text id.
+  function clickedRow(target, g) {
+    var el = target.tagName === 'rect' ? target.nextElementSibling : target;
+    var m = el && el.id && /-attr-([0-9]+)-[a-z]+$/.exec(el.id);
+    if (!m) return '';
+    var name = g.querySelector('text[id$="-attr-' + m[1] + '-name"]');
+    return name ? name.textContent : '';
+  }
   function report(kind, event) {
     var g = event.target.closest && event.target.closest('#container g[id^="entity-"]');
     window.selectEntity(g ? g.id : '');
-    console.log('xsltomermaid:' + kind + ':' + (g ? g.id : ''));
+    var row = g ? clickedRow(event.target, g) : '';
+    console.log('xsltomermaid:' + kind + ':' + (g ? g.id : '') + (row ? '|' + row : ''));
   }
   document.addEventListener('click', function (e) { report('click', e); });
   document.addEventListener('dblclick', function (e) { report('dblclick', e); });
@@ -343,11 +386,17 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
 """
     from .theme import _ACCENT, _REFERENCE_GLOW  # here: theme imports this module
 
+    def tint(hex_colour: str, alpha: float) -> str:
+        r, g, b = (int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
+        return f"rgba({r},{g},{b},{alpha})"
+
     return (
         page.replace("__CANVAS__", canvas)
         .replace("__SCHEME__", "dark" if dark else "light")
         .replace("__ACCENT__", _ACCENT)
         .replace("__REF__", _REFERENCE_GLOW)
+        .replace("__ROWFILL__", tint(_ACCENT, 0.38))
+        .replace("__JOINFILL__", tint(_REFERENCE_GLOW, 0.42))
     )
 
 
@@ -962,6 +1011,7 @@ class DiagramView(QWidget):
     # A table in the diagram was clicked (entity id, or "" for empty canvas);
     # the bool is True for a double-click.
     entity_clicked = Signal(str, bool)
+    row_clicked = Signal(str, str)  # entity id (DOM key), column name in the diagram
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1119,10 +1169,26 @@ class DiagramView(QWidget):
         self._update_zoom_label()
         self._view.page().runJavaScript("window.fitDiagram && window.fitDiagram(true)")
 
-    def _on_bridge(self, kind: str, group_id: str):
+    def _on_bridge(self, kind: str, payload: str):
         if kind not in ("click", "dblclick"):
             return
-        self.entity_clicked.emit(entity_id_from_group(group_id) or "", kind == "dblclick")
+        group_id, _, row = payload.partition("|")
+        entity = entity_id_from_group(group_id) or ""
+        self.entity_clicked.emit(entity, kind == "dblclick")
+        if entity and row:
+            self.row_clicked.emit(entity, row)
+
+    def mark_rows(self, kind: str, rows: list[tuple[str, str]]):
+        """Tint rows in the drawn diagram: ``kind`` "xrow" (a picked column,
+        blue) or "xjoin" (a reference's join columns, orange); ``rows`` is
+        ``[(entity DOM key, column name as drawn), ...]``; [] clears."""
+        if self._view is None or not self._shell_loaded:
+            return
+        self._view.page().runJavaScript(
+            "window.markRows && window.markRows({}, {})".format(
+                json.dumps(kind), json.dumps([list(r) for r in rows])
+            )
+        )
 
     def highlight_entity(self, entity_id: str):
         """Highlight one table in the drawn diagram ("" clears)."""
