@@ -11,6 +11,7 @@ import os
 import shutil
 import sys
 import tempfile
+import weakref
 import webbrowser
 from pathlib import Path
 
@@ -97,8 +98,10 @@ from PySide6.QtWidgets import (
 )
 
 from .diagram_view import (
+    TEMP_PREFIX,
     VENDOR_MERMAID,
     DiagramView,
+    sweep_stale_temp_dirs,
     RenderStyle,
     dom_entity_key,
     schema_to_drawio,
@@ -266,6 +269,7 @@ ORDER BY s.name, t.name, c.column_id;
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        self._preview_dir: Path | None = None  # one per session, removed on close
         self.setWindowTitle("Excel Schema → Mermaid ER Diagram")
         self.setWindowIcon(app_icon())
         self.resize(1450, 760)
@@ -1521,6 +1525,11 @@ class MainWindow(QMainWindow):
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/splitter3", self._body.saveState())
         settings.setValue("window/details_tab", self._tabs.currentIndex())
+        # The view's temp folder (a copy of mermaid.js) and the preview's.
+        self._diagram_view.cleanup()
+        if self._preview_dir is not None:
+            shutil.rmtree(self._preview_dir, ignore_errors=True)
+            self._preview_dir = None
         super().closeEvent(event)
 
     # -- loading -----------------------------------------------------------
@@ -2235,10 +2244,16 @@ class MainWindow(QMainWindow):
         # Ship the bundled mermaid.js beside the page so the preview works
         # offline, like the in-app render; fall back to the CDN only if the
         # vendored copy is somehow missing.
-        folder = Path(tempfile.mkdtemp(prefix="xsltomermaid_preview_"))
+        # One folder per session (removed on close), not one per preview.
+        if self._preview_dir is None or not self._preview_dir.is_dir():
+            self._preview_dir = Path(tempfile.mkdtemp(prefix=TEMP_PREFIX + "preview_"))
+            # Gone on close, else when the window is collected, else at exit.
+            weakref.finalize(self, shutil.rmtree, self._preview_dir, ignore_errors=True)
+        folder = self._preview_dir
         script_src = MERMAID_CDN
         try:
-            shutil.copy(VENDOR_MERMAID, folder / "mermaid.min.js")
+            if not (folder / "mermaid.min.js").exists():
+                shutil.copy(VENDOR_MERMAID, folder / "mermaid.min.js")
             script_src = "mermaid.min.js"
         except OSError:
             pass
@@ -2641,6 +2656,8 @@ def main(argv: list[str] | None = None):
     args = parser.parse_args(normalized_argv)
 
     _configure_headless_env(normalized_argv)
+    # Folders left by a crash or a killed process; a clean exit removes its own.
+    sweep_stale_temp_dirs()
 
     app = QApplication(sys.argv[:1])
     app.setWindowIcon(app_icon())
