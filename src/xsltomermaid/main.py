@@ -483,7 +483,7 @@ class MainWindow(QMainWindow):
         # A Stop control that only appears while a diagram is rendering, so a
         # slow/large layout can be abandoned without waiting it out.
         self._stop_btn = QPushButton("Stop")
-        self._stop_btn.setToolTip("Stop the current render.")
+        self._stop_btn.setToolTip("Stop drawing the diagram (Esc).")
         self._stop_btn.setVisible(False)
         self._stop_btn.clicked.connect(self.cancel_render)
         self._diagram_view.render_started.connect(self._render_status.start)
@@ -812,8 +812,15 @@ class MainWindow(QMainWindow):
         file_menu.addAction(
             act("Save &table list…", self.save_table_selection_toml, schema_only=True)
         )
+        file_menu.addAction(
+            act("Save map &image…", self.export_map, schema_only=True)
+        )
         file_menu.addSeparator()
-        file_menu.addAction(act("E&xit", self.close, QKeySequence.StandardKey.Quit))
+        file_menu.addAction(
+            act("E&xit", self.close,
+                QKeySequence.keyBindings(QKeySequence.StandardKey.Quit) + [QKeySequence("Ctrl+Q")])
+        )
+
 
         view_menu = bar.addMenu("&View")
         view_menu.addAction(
@@ -857,12 +864,19 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._sql_dock.toggleViewAction())
 
         diagram_menu = bar.addMenu("&Diagram")
+        # Undo the last change to the ticks (clear, add, path, draw). Here
+        # rather than an Edit menu, whose Alt+E would take Export's.
+        self._undo_action = act("&Undo", self._selector.undo_last_change,
+                                QKeySequence.StandardKey.Undo, schema_only=True)
+        diagram_menu.addAction(self._undo_action)
+        diagram_menu.aboutToShow.connect(self._sync_undo_action)
+        diagram_menu.addSeparator()
         diagram_menu.addAction(
             act("&Draw ticked", self._render_selection,
                 QKeySequence("F5"), schema_only=True)
         )
         # Enabled only while a render is in flight (see _set_rendering).
-        self._stop_action = act("&Stop rendering", self.cancel_render, QKeySequence("Esc"))
+        self._stop_action = act("&Stop drawing", self.cancel_render, QKeySequence("Esc"))
         self._stop_action.setEnabled(False)
         diagram_menu.addAction(self._stop_action)
         diagram_menu.addSeparator()
@@ -883,9 +897,66 @@ class MainWindow(QMainWindow):
         )
 
         help_menu = bar.addMenu("&Help")
+        help_menu.addAction(act("&Spreadsheet format", self.show_format_help,
+                                QKeySequence.StandardKey.HelpContents))
+        help_menu.addAction(act("&Keyboard shortcuts", self.show_shortcuts_help))
+        help_menu.addSeparator()
         self._update_action = act("Check for &updates…", self.check_for_updates)
         help_menu.addAction(self._update_action)
         help_menu.addAction(act("&About", self.show_about))
+
+    def _sync_undo_action(self):
+        """Name the Edit › Undo item after the change it undoes."""
+        label = self._selector._undo_btn.text().replace("&Undo", "").strip()
+        self._undo_action.setText(f"&Undo {label}" if label else "&Undo")
+        self._undo_action.setEnabled(
+            self._schema is not None and self._selector._undo_snapshot is not None
+        )
+
+    def show_format_help(self):
+        """Help › Spreadsheet format: the input the app reads."""
+        headers = ", ".join(f"<code>{h}</code>" for h in EXPECTED_HEADERS)
+        QMessageBox.information(
+            self,
+            "Spreadsheet format",
+            "<p><b>One row per database column.</b> The first sheet needs a header "
+            "row with at least <code>TableName</code> and <code>ColumnName</code>; "
+            "headers can be in any order, case or spacing, and extra columns are "
+            "ignored.</p>"
+            f"<p>Recognised headers: {headers}.</p>"
+            "<p><b>Foreign keys</b> come from <code>ForeignKeyReference</code>, in any "
+            "of these forms: <code>dbo.Customer.CustomerID</code>, "
+            "<code>Customer.CustomerID</code>, <code>Customer(CustomerID)</code> or "
+            "just <code>Customer</code>. Repeat a reference on several columns for a "
+            "composite key.</p>"
+            "<p><b>From SQL Server:</b> View › T-SQL statement shows a query that "
+            "produces this sheet; run it, then paste or export the result to Excel.</p>",
+        )
+
+    def show_shortcuts_help(self):
+        """Help › Keyboard shortcuts, in one place."""
+        rows = [
+            ("Ctrl+O", "Open a spreadsheet"),
+            ("Ctrl+M", "Switch between the diagram and the map"),
+            ("Ctrl+I / Ctrl+1–5", "Show the Details panel / one of its views"),
+            ("Ctrl+F", "Filter the table list"),
+            ("F5 or Ctrl+Enter", "Draw the ticked tables"),
+            ("Esc", "Stop drawing; in the diagram or map, clear the selection"),
+            ("Ctrl+Z", "Undo the last change to the ticks"),
+            ("Alt+K", "Keys only"),
+            ("Ctrl+E", "Export"),
+            ("Ctrl+Shift+C / Ctrl+Shift+Q", "Copy the Mermaid / the SQL query"),
+            ("Ctrl+= / Ctrl+- / Ctrl+0", "Zoom in / out / 100%"),
+            ("Diagram: arrows, Enter", "Move between tables, open one"),
+            ("Map: drag, Ctrl+click", "Select a region, add or remove a table"),
+            ("Map: arrows, Space, Enter, Ctrl+A", "Move, select, open, select the cluster"),
+            ("Table view: Space", "Tick the highlighted connected table"),
+        ]
+        table = "".join(
+            f"<tr><td style='padding:2px 16px 2px 0'><b>{keys}</b></td><td>{what}</td></tr>"
+            for keys, what in rows
+        )
+        QMessageBox.information(self, "Keyboard shortcuts", f"<table>{table}</table>")
 
     def _build_sql_dock(self):
         """Create the fixed right-side panel with the SQL Server export query."""
@@ -912,7 +983,9 @@ class MainWindow(QMainWindow):
         self._sql_query_view.setPlainText(SQL_SERVER_SCHEMA_QUERY)
         layout.addWidget(self._sql_query_view, 1)
 
-        copy_button = QPushButton("&Copy T-SQL")
+        # No mnemonic: every letter is taken while this panel is open
+        # (Alt+C is Clear in the table list).
+        copy_button = QPushButton("Copy T-SQL")
         copy_button.setToolTip("Copy this query, to run against your database.")
         copy_button.clicked.connect(self.copy_sql_query)
         layout.addWidget(copy_button)
@@ -950,7 +1023,7 @@ class MainWindow(QMainWindow):
 
     def _announce_render(self, ok: bool):
         """Tell a screen reader when a render finishes (the tick is visual only)."""
-        announce(self, "Diagram rendered" if ok else "Diagram render failed")
+        announce(self, "Diagram drawn" if ok else "The diagram couldn't be drawn")
 
     def _on_selection_edited(self):
         self._map_view.set_ticked(self._selector.selected_tables())
@@ -1559,7 +1632,7 @@ class MainWindow(QMainWindow):
             return
         names = self._selector.selected_tables()
         if not names:
-            self._status.setText("Check at least one table first, then add related.")
+            self._status.setText("Tick at least one table first, then add related.")
             return
 
         direction = self._selector.related_direction()
@@ -1707,7 +1780,7 @@ class MainWindow(QMainWindow):
             if sig != self._render_confirmed_sig:
                 answer = QMessageBox.question(
                     self,
-                    "Render a large diagram?",
+                    "Draw a large diagram?",
                     f"You selected {len(names)} tables. A diagram that big can be "
                     "slow to draw and hard to read. Draw it anyway?",
                 )
@@ -1779,10 +1852,10 @@ class MainWindow(QMainWindow):
                     else f"{total:,} tables is too many to draw at once.\n\n"
                     "Open the Map (Ctrl+M) to see the whole schema, then select a "
                     "cluster or region and draw it.\n\n"
-                    "Or filter the list on the left and tick a starting table, then use "
-                    "“Add related tables” to grow the diagram around it, or open "
-                    "“Trace path between tables” to connect two tables. Saved "
-                    "selections load from the Table list menu."
+                    "Or filter the list on the left and tick a starting table, then "
+                    "open “Grow selection” to add the tables around it or to trace a "
+                    "path between two tables. Saved selections load from the Table "
+                    "list menu."
                 )
             )
             self._status.setText(
@@ -1812,7 +1885,7 @@ class MainWindow(QMainWindow):
             self._diagram_rendered = False
             self._render_status.clear()
             self._diagram_view.show_message(
-                f"This selection is too large to render as a diagram "
+                f"This selection is too large to draw as a diagram "
                 f"({_plural(shown, 'table')}, {_plural(col_count, 'column')} — about "
                 f"{len(mermaid_text) // 1000:,} KB of Mermaid).\n\n"
                 "Narrow it down with the filter and tick fewer tables, then click "
@@ -1821,7 +1894,7 @@ class MainWindow(QMainWindow):
             )
             self._status.setText(
                 f"Loaded {self._loaded_name} — {tables_phrase} selected, "
-                f"{_plural(col_count, 'column')}: too large to render "
+                f"{_plural(col_count, 'column')}: too large to draw "
                 "(tick fewer tables)."
             )
             return
@@ -1833,7 +1906,7 @@ class MainWindow(QMainWindow):
             self._status.setText(
                 f"Loaded {self._loaded_name} — showing {tables_phrase}, "
                 f"{_plural(col_count, 'column')}, {_plural(rel_count, 'relationship')}. "
-                "Rendered exports require PySide6 WebEngine."
+                "Image exports need PySide6 WebEngine."
             )
             return
         self._diagram_view.set_diagram(
@@ -2157,9 +2230,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Nothing to export",
-                "There's no rendered diagram to export yet. It's empty or too "
-                "large to render. Pick some tables (and, for very large schemas, "
-                "fewer tables/columns) so the diagram renders, then try again.",
+                "There's no drawn diagram to export yet. It's empty or too "
+                "large to draw. Tick some tables (and, for very large schemas, "
+                "fewer tables or columns) so it can be drawn, then try again.",
             )
             return True
         return False

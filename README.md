@@ -81,7 +81,7 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
 - **Select** a cluster by clicking its name, a region by dragging, or single
   tables with Ctrl+click. The keyboard works too: arrows move, **Space**
   selects, **Enter** opens and **Ctrl+A** selects the cluster.
-- **Draw these N** turns the selection into the ER diagram. It replaces the
+- **Draw N tables** turns the selection into the ER diagram. It replaces the
   ticks and can be undone.
 - The table filter highlights matches on the map, ticked tables show as dashed
   rings, and tables with no links at all are listed underneath.
@@ -118,11 +118,14 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
   with a header for each).
 - **Filter** by text (Ctrl+F) or by publisher **prefix** (`msdyn_`, `hsl_`, …),
   or use **Ticked only** and **Hide unconnected**.
-- **Add related tables** ticks the neighbours of the ticked tables (choose the
-  foreign-key direction). **Trace path between tables** finds the shortest
-  foreign-key route between two tables, optionally via a third.
-- **Clear** and the bulk actions can be undone. The **Table list** menu saves
-  and loads the ticked tables as `.toml` presets.
+- **Grow selection** (under the list) holds **Add related tables**, which ticks
+  the neighbours of the ticked tables (choose the foreign-key direction), and
+  the path tracer, which finds the shortest foreign-key route between two
+  tables, optionally via a third.
+- Under the list, **↗ / ↙** count each table's references and the tables
+  referencing it, and **●** marks a table in the diagram.
+- **Clear** and the bulk actions can be undone (**Undo**, or Ctrl+Z). The
+  **Table list** menu saves and loads the ticked tables as `.toml` presets.
 
 ### The Details panel
 
@@ -153,6 +156,8 @@ specific view.
 - **File → Open Recent** lists the last 8 spreadsheets. The window layout,
   Details panel and diagram options come back next launch. Theme and
   background follow the OS light/dark mode.
+- **Help → Spreadsheet format** (F1) describes the input, and **Help →
+  Keyboard shortcuts** lists every key.
 - **Help → Check for updates** asks GitHub for the latest release. The app
   makes no network calls unless you choose this.
 
@@ -162,8 +167,10 @@ specific view.
 |---|---|
 | Ctrl+O | Open a spreadsheet |
 | Ctrl+F | Filter the table list |
-| F5 · Ctrl+Enter | Render the selection now |
-| Esc | Stop rendering · clear the diagram selection |
+| F5 · Ctrl+Enter | Draw the ticked tables now |
+| Esc | Stop drawing · clear the diagram selection |
+| Ctrl+Z | Undo the last change to the ticks |
+| F1 | The spreadsheet format |
 | Ctrl+M | Switch between diagram and map |
 | Ctrl+I | Show or hide the Details panel |
 | Ctrl+1 … Ctrl+5 | Details: Table · Data · Columns · Mermaid · SQL |
@@ -172,6 +179,7 @@ specific view.
 | Ctrl+E | Export the diagram |
 | Ctrl+Shift+C · Ctrl+Shift+Q | Copy Mermaid · copy SQL |
 | Ctrl+S · Ctrl+L | Save as `.mmd` · load a table list |
+| Ctrl+Q | Exit |
 
 Most controls also have an Alt+letter mnemonic, shown underlined.
 
