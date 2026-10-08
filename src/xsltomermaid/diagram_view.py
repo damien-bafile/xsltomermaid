@@ -405,11 +405,21 @@ def _shell_html(canvas: str = "#ffffff", dark: bool = False) -> str:
     var b = t.getBBox();  // untransformed: the label's own centre
     return { x: b.x + b.width / 2, y: b.y + b.height / 2, w: b.width };
   }
+  // The text never reads upside down: past 90 degrees either way it turns
+  // half a turn, so it reads left-to-right or bottom-to-top. The handle keeps
+  // the angle as dragged, so rotating feels continuous.
+  function upright(a) {
+    a = ((a || 0) % 360 + 540) % 360 - 180;  // -180 .. 180
+    if (a >= 90) a -= 180;  // vertical text reads bottom-to-top
+    else if (a < -90) a += 180;
+    return a;
+  }
+  window.uprightAngle = upright;
   function applyLabel(t, e) {
     var c = labelCentre(t);
     var on = e && (e.a || e.dx || e.dy);
     var tf = on ? 'translate(' + (e.dx || 0) + ',' + (e.dy || 0) + ') rotate(' +
-      (e.a || 0) + ',' + c.x + ',' + c.y + ')' : '';
+      upright(e.a) + ',' + c.x + ',' + c.y + ')' : '';
     labelParts(t).forEach(function (el) {
       if (on) el.setAttribute('transform', tf); else el.removeAttribute('transform');
     });

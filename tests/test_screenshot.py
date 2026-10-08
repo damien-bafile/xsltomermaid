@@ -2359,7 +2359,8 @@ def test_relationship_labels_can_be_moved_rotated_kept_and_reset(tmp_path, monke
     from xsltomermaid.diagram_view import _shell_html
 
     page = _shell_html()
-    for name in ("window.setLabelEdits", "xlabelhandle", "window.clearLabelSelection"):
+    for name in ("window.setLabelEdits", "xlabelhandle", "window.clearLabelSelection",
+                 "window.uprightAngle", "upright(e.a)"):  # text never upside down
         assert name in page
     app, window = _inspector_window(tmp_path)
     view = window._diagram_view
