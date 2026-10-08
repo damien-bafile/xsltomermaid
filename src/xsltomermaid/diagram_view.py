@@ -1175,7 +1175,7 @@ class DiagramView(QWidget):
         if not self.available or self._view is None or self._workdir is None:
             return
         self.show_message(
-            "Render cancelled.\n\n"
+            "Drawing stopped.\n\n"
             "Adjust the tables, columns, or options, then click “Draw ticked”."
         )
 

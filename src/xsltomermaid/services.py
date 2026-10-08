@@ -9,6 +9,27 @@ from .excel_to_mermaid import Schema, build_schema, generate_mermaid, read_rows
 ProgressReporter = Callable[[str, int], None]
 
 
+def describe_load_error(exc: BaseException) -> str:
+    """A plain-language reason a workbook couldn't be read, with the next step."""
+    import zipfile
+
+    if isinstance(exc, PermissionError):
+        return (
+            "The file is locked, usually because it's open in Excel, or you "
+            "don't have permission to read it. Close it and try again."
+        )
+    if isinstance(exc, FileNotFoundError):
+        return "The file isn't there any more: it was moved, renamed or deleted."
+    if isinstance(exc, zipfile.BadZipFile) or type(exc).__name__ == "InvalidFileException":
+        return (
+            "This isn't a readable .xlsx or .xlsm workbook. It may be an older "
+            ".xls file, a CSV renamed to .xlsx, or damaged. Save it from Excel as "
+            ".xlsx and try again."
+        )
+    message = str(exc).strip()
+    return message or f"The workbook couldn't be read ({type(exc).__name__})."
+
+
 class SchemaImportService:
     """Load a workbook and produce its parsed schema and Mermaid source."""
 

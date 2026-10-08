@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from .config import _ACCEPTED_SUFFIXES
-from .services import SchemaImportService
+from .services import SchemaImportService, describe_load_error
 from .theme import (
     _ACCENT,
     _ACCENT_WASH,
@@ -33,6 +33,7 @@ from .theme import (
     _warn_hex,
     announce,
     status_icon,
+    _control_border_hex,
 )
 from .updates import (
     fetch_latest_release,
@@ -146,7 +147,7 @@ class DropArea(QLabel):
         if self._compact:
             self.setStyleSheet(
                 "#dropArea {"
-                f"  border: 1px solid {_line_hex(self)};"
+                f"  border: 1px solid {_control_border_hex(self)};"
                 "  border-radius: 8px;"
                 f"  color: {_muted_hex(self)};"
                 "  font-size: 13px;"
@@ -218,7 +219,7 @@ class LoadWorker(QThread):
             )
             self.loaded.emit(rows, schema, mermaid_text)
         except Exception as exc:  # noqa: BLE001 - surface any parse error to the UI
-            self.failed.emit(str(exc))
+            self.failed.emit(describe_load_error(exc))
 
 
 class UpdateCheckWorker(QThread):
@@ -267,7 +268,7 @@ class RenderStatus(QWidget):
         self.setToolTip("")  # a previous failure's reason no longer applies
         self._frame = 0
         self._icon.setPixmap(status_icon("spin", _ACCENT))
-        self._text.setText("Rendering…")
+        self._text.setText("Drawing…")
         self.setVisible(True)
         self._timer.start()
 
@@ -275,10 +276,10 @@ class RenderStatus(QWidget):
         self._timer.stop()
         if ok:
             self._icon.setPixmap(status_icon("ok", _ok_hex(self)))
-            self._text.setText("Rendered")
+            self._text.setText("Drawn")
         else:
             self._icon.setPixmap(status_icon("warn", _warn_hex(self)))
-            self._text.setText("Render failed")
+            self._text.setText("Couldn't draw")
         self.setVisible(True)
 
     def stale(self, text: str):

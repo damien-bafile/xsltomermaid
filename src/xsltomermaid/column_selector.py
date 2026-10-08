@@ -66,6 +66,7 @@ class ColumnSelector(QWidget):
         self._scope = QComboBox()
         scope_label = QLabel("Show:")
         scope_label.setBuddy(self._scope)
+        self._scope.setToolTip("Show every ticked table's columns, or one table's.")
         self._scope.setAccessibleName("Show columns for")
         scope_row.addWidget(scope_label)
         self._scope.currentIndexChanged.connect(lambda _i: self._rebuild_view())
@@ -73,7 +74,7 @@ class ColumnSelector(QWidget):
         layout.addLayout(scope_row)
 
         self._hint = QLabel(
-            "Select tables at left, then refine which of their columns to "
+            "Tick tables at left, then refine which of their columns to "
             "include here."
         )
         self._hint.setWordWrap(True)
@@ -93,6 +94,7 @@ class ColumnSelector(QWidget):
         sort_label = QLabel("Sort columns:")
         sort_label.setBuddy(self._sort)
         self._sort.setAccessibleName("Sort columns")
+        self._sort.setToolTip("The order columns are listed and drawn in.")
         sort_row.addWidget(sort_label)
         for label, value in (
             ("Original order", "order"),
@@ -228,7 +230,7 @@ class ColumnSelector(QWidget):
             self._tree.setVisible(False)
             self._filter.setVisible(False)
             self._hint.setText(
-                "Select tables at left, then refine which of their columns to "
+                "Tick tables at left, then refine which of their columns to "
                 "include here."
             )
             self._hint.setVisible(True)
@@ -237,7 +239,7 @@ class ColumnSelector(QWidget):
 
         n = len(self._tables)
         self._header.setText(
-            f"Columns for the {n} table{'' if n == 1 else 's'} selected at left. "
+            f"Columns for the {n} table{'' if n == 1 else 's'} ticked at left. "
             "Untick a column to leave it out; the diagram updates as you go."
         )
         self._header.setVisible(True)

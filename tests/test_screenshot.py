@@ -1174,7 +1174,7 @@ def test_export_and_copy_refuse_a_stale_diagram_the_user_declined(monkeypatch):
     )
     window.copy_mermaid()
     assert copied == []
-    assert "doesn't match your selection" in window._status.text()
+    assert "doesn't match your ticks" in window._status.text()
     window._diagram_view.cleanup()
     del app
 
@@ -1732,6 +1732,12 @@ def test_map_words_say_tick_and_show_a_selection_the_filter_hides():
     note.linkActivated.emit("show")
     assert window._selector._filter.text() == "" and note.isHidden()
     assert window._selector._select_shown_btn.text() == "Tick &shown"
+    assert window._selector._render_btn.text() == "D&raw 1 table"  # names the commit
+    window._selector.set_draw_pending(True)
+    assert "background" in window._selector._render_btn.styleSheet()  # the lead action
+    window._selector.set_draw_pending(False)
+    assert window._selector._render_btn.styleSheet() == ""
+    window._selector.clear_selection()
     assert window._selector._render_btn.text() == "D&raw ticked"
     window._diagram_view.cleanup()
     del app
@@ -2122,6 +2128,17 @@ def test_switching_light_to_dark_rethemes_table_view_map_and_shell(tmp_path):
     assert "color-scheme: dark" in shell and base.name() in shell and "__" not in shell
     window._diagram_view.cleanup()
     del app
+
+
+def test_load_errors_are_explained_in_plain_language():
+    import zipfile
+
+    from xsltomermaid.services import describe_load_error
+
+    assert "open in Excel" in describe_load_error(PermissionError("denied"))
+    assert "older .xls" in describe_load_error(zipfile.BadZipFile("bad"))
+    assert "moved" in describe_load_error(FileNotFoundError("x"))
+    assert describe_load_error(ValueError("no header")) == "no header"
 
 
 def test_view_switch_and_wording(tmp_path):
