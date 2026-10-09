@@ -1106,9 +1106,18 @@ class MainWindow(QMainWindow):
             )
 
     def _on_list_table_changed(self, name: str):
-        """A row was highlighted in the list: highlight that table if drawn."""
+        """A row was highlighted in the list: highlight that table if drawn,
+        and on the map select it and bring it into view."""
         entity = next((e for e, t in self._entity_to_table.items() if t == name), "")
         self._diagram_view.highlight_entity(entity)
+        if self.map_visible() and name:
+            self._map_view.select([name])  # centres on it (no signal back)
+            shown = self._map_view.schema_map()
+            if shown is not None and name not in shown.nodes:
+                self._status.setText(
+                    f"{html.escape(name)} isn't on the map: it has no links there "
+                    "(it's listed under Unconnected)."
+                )
         self._columns.focus_table(name)
         self._refresh_inspector(name)
 

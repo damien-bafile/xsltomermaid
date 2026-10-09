@@ -2646,6 +2646,32 @@ def test_map_table_names_follow_a_scroll():
     del app
 
 
+def test_picking_a_table_in_the_list_selects_it_on_the_map():
+    app, window = _big_window()
+    window.resize(1200, 800)
+    window.show()
+    window.show_map(True)
+    sel, mv = window._selector, window._map_view
+    view = mv._view
+    view.scale(6, 6)
+    view.user_zoomed = True
+    row = next(i for i in sel._items() if i.text() == "C40")
+    sel._list.setCurrentItem(row)  # as a click in the list does
+    assert mv.selected() == ["C40"]
+    centre = view.mapToScene(view.viewport().rect().center())
+    node = mv.schema_map().nodes["C40"]
+    assert abs(centre.x() - node.x) < 5 and abs(centre.y() - node.y) < 5  # in view
+    lonely = next((i for i in sel._items() if i.text() not in mv.schema_map().nodes), None)
+    if lonely is not None:  # a table with no links isn't drawn: say so
+        sel._list.setCurrentItem(lonely)
+        assert "isn't on the map" in window._status.text()
+    window.show_map(False)
+    sel._list.setCurrentItem(next(i for i in sel._items() if i.text() == "C41"))
+    assert mv.selected() == ["C40"]  # the map is left alone while hidden
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_view_switch_and_wording(tmp_path):
     app, window = _audit_heavy_window(tmp_path)
     window.show()
