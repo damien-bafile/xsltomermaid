@@ -80,3 +80,34 @@ def test_cluster_index_and_hidden_links():
     assert "lonely" not in index
     assert is_hidden_link(Relationship("systemuser", "a", "createdby", ("createdby",), ("id",)))
     assert not is_hidden_link(Relationship("x", "a", "x_ref", ("x_ref",), ("id",)))
+
+
+def test_cluster_layout_keeps_linked_tables_together_without_overlaps():
+    """Tables are placed by their links (not a fixed spiral): two groups that
+    only meet at the hub sit on their own sides, and no dots overlap."""
+    import math
+
+    from xsltomermaid.excel_to_mermaid import Relationship, Schema, Table
+    from xsltomermaid.schema_map import build_map, node_radius
+
+    a = [f"a{i}" for i in range(8)]
+    b = [f"b{i}" for i in range(8)]
+    rels = [Relationship("hub", x, "h", ("h",), ("id",)) for x in a[:2] + b[:2]]
+    for group in (a, b):  # each group a ring: dense inside, linked to the hub once
+        rels += [Relationship(group[i], group[(i + 1) % len(group)], "n", ("n",), ("id",))
+                 for i in range(len(group))]
+    schema = Schema([Table("", n) for n in ["hub"] + a + b], rels)
+    m = build_map(schema, frozenset())
+    assert len(m.communities) >= 1
+    pos = {n: (node.x, node.y) for n, node in m.nodes.items()}
+
+    def dist(p, q):
+        return math.hypot(pos[p][0] - pos[q][0], pos[p][1] - pos[q][1])
+
+    names = list(pos)
+    for i, p in enumerate(names):
+        for q in names[i + 1:]:
+            assert dist(p, q) >= node_radius(m.nodes[p].degree) + node_radius(m.nodes[q].degree)
+    within = [dist(p, q) for g in (a, b) for i, p in enumerate(g) for q in g[i + 1:]]
+    across = [dist(p, q) for p in a for q in b]
+    assert sum(within) / len(within) < sum(across) / len(across)
