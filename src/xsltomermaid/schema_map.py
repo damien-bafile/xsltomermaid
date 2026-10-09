@@ -177,16 +177,73 @@ def _communities(names: list[str], edges: list[tuple[str, str]]) -> list[list[st
 # Layout
 # ---------------------------------------------------------------------------
 _GOLDEN_ANGLE = math.pi * (3 - math.sqrt(5))
-_SPACING = 14.0  # distance scale between neighbouring points
+_GAP = 4.0  # clear space between two tables' dots
+_DISC_PAD = 8.0  # between the outermost dot and the cluster's disc edge
 
 
-def _place_members(comm: Community, nodes: dict[str, MapNode]):
-    """Sunflower spiral, most connected first: the hub sits in the middle."""
-    ranked = sorted(comm.members, key=lambda n: (-nodes[n].degree, n))
-    for i, name in enumerate(ranked):
-        r = _SPACING * math.sqrt(i)
-        nodes[name].x = comm.x + r * math.cos(i * _GOLDEN_ANGLE)
-        nodes[name].y = comm.y + r * math.sin(i * _GOLDEN_ANGLE)
+def node_radius(degree: int) -> float:
+    """A table's dot size on the map: bigger for more links."""
+    return 3.0 + 1.6 * math.sqrt(degree)
+
+
+def _layout_members(
+    comm: Community, nodes: dict[str, MapNode], adjacency: dict[str, set[str]]
+) -> dict[str, tuple[float, float]]:
+    """Positions for a cluster's tables around (0, 0), grown from the hub.
+
+    The hub goes in the middle. Then, repeatedly, the table with the most
+    links to tables already placed goes as close as it fits to where those
+    neighbours are (their average position), on a spiral of candidate spots
+    around it, never overlapping a placed dot. Linked tables end up next to
+    each other, so the cluster's sub-groups show, and its links stay short.
+    Deterministic. (A sunflower spiral sorted by link count ignored who links
+    to whom: links crossed the whole disc, and big dots overlapped.)
+    """
+    members = comm.members
+    inside = {n: adjacency.get(n, set()) & set(members) for n in members}
+    radius = {n: node_radius(nodes[n].degree) for n in members}
+    cell = 2 * max(radius.values()) + _GAP  # grid for the overlap checks
+    grid: dict[tuple[int, int], list[str]] = defaultdict(list)
+    pos: dict[str, tuple[float, float]] = {}
+    links_to_placed = {n: 0 for n in members}
+    # Ties go to the alphabetically first name: ranked once, not per pick.
+    name_rank = {n: -i for i, n in enumerate(sorted(members))}
+    degree = {n: nodes[n].degree for n in members}
+    unplaced = set(members)
+
+    def fits(name: str, x: float, y: float) -> bool:
+        cx, cy = int(math.floor(x / cell)), int(math.floor(y / cell))
+        for gx in (cx - 1, cx, cx + 1):
+            for gy in (cy - 1, cy, cy + 1):
+                for other in grid.get((gx, gy), ()):
+                    ox, oy = pos[other]
+                    if math.hypot(x - ox, y - oy) < radius[name] + radius[other] + _GAP:
+                        return False
+        return True
+
+    def place(name: str, x: float, y: float):
+        pos[name] = (x, y)
+        grid[(int(math.floor(x / cell)), int(math.floor(y / cell)))].append(name)
+        unplaced.discard(name)
+        for nbr in inside[name]:
+            if nbr not in pos:
+                links_to_placed[nbr] += 1
+
+    place(comm.hub, 0.0, 0.0)
+    while unplaced:
+        name = max(unplaced, key=lambda n: (links_to_placed[n], degree[n], name_rank[n]))
+        placed = [pos[p] for p in inside[name] if p in pos] or [(0.0, 0.0)]
+        tx = sum(x for x, _ in placed) / len(placed)
+        ty = sum(y for _, y in placed) / len(placed)
+        step = radius[name] + 2.0  # candidate spots about one dot apart
+        for k in range(100000):
+            dist = step * math.sqrt(k)
+            x = tx + dist * math.cos(k * _GOLDEN_ANGLE)
+            y = ty + dist * math.sin(k * _GOLDEN_ANGLE)
+            if fits(name, x, y):
+                place(name, x, y)
+                break
+    return pos
 
 
 def _place_communities(comms: list[Community], weights: dict[tuple[int, int], float]):
@@ -216,14 +273,20 @@ def _place_communities(comms: list[Community], weights: dict[tuple[int, int], fl
         )
         ax, ay = (comms[anchor_index].x, comms[anchor_index].y) if anchor_index is not None else (0.0, 0.0)
         base = (comms[anchor_index].radius if anchor_index is not None else 0.0) + comm.radius + margin
+        # Spiral steps scale with the disc: fixed steps crawled for big discs.
+        step = max(10.0, comm.radius * 0.15)
+        def clashes(p: int, x: float, y: float) -> bool:
+            return math.hypot(x - comms[p].x, y - comms[p].y) < comm.radius + comms[p].radius + margin
+
+        blocker = None  # the disc that blocked the last spot usually blocks the next
         for k in range(200000):
-            r = base + 10.0 * math.sqrt(k)
+            r = base + step * math.sqrt(k)
             x = ax + r * math.cos(k * _GOLDEN_ANGLE)
             y = ay + r * math.sin(k * _GOLDEN_ANGLE)
-            if all(
-                math.hypot(x - comms[p].x, y - comms[p].y) >= comm.radius + comms[p].radius + margin
-                for p in placed
-            ):
+            if blocker is not None and clashes(blocker, x, y):
+                continue
+            blocker = next((p for p in placed if clashes(p, x, y)), None)
+            if blocker is None:
                 comm.x, comm.y = x, y
                 break
         placed.append(i)
@@ -252,15 +315,25 @@ def build_map(schema: Schema, hidden_columns: frozenset[str] = HIDDEN_BY_DEFAULT
     connected = [n for n in names if degree[n] > 0]
     result.unconnected = [n for n in names if degree[n] == 0]
 
+    adjacency: dict[str, set[str]] = defaultdict(set)
+    for a, b in edges:
+        adjacency[a].add(b)
+        adjacency[b].add(a)
+
+    relative: list[dict[str, tuple[float, float]]] = []
     for index, members in enumerate(_communities(connected, edges)):
-        # Same ordering as _place_members, so the named hub is the one drawn
-        # at the centre even when two tables tie on links.
+        # The most-connected table names the cluster and sits at its centre.
         hub = min(members, key=lambda n: (-degree[n], n))
         comm = Community(hub=hub, members=members)
-        comm.radius = _SPACING * math.sqrt(len(members)) + 6.0
         result.communities.append(comm)
         for name in members:
             result.nodes[name] = MapNode(name=name, degree=degree[name], community=index)
+        # Lay the cluster out first: its disc is sized to what it holds.
+        layout = _layout_members(comm, result.nodes, adjacency)
+        relative.append(layout)
+        comm.radius = max(
+            math.hypot(x, y) + node_radius(degree[n]) for n, (x, y) in layout.items()
+        ) + _DISC_PAD
 
     weights: dict[tuple[int, int], float] = defaultdict(float)
     for a, b in edges:
@@ -268,6 +341,8 @@ def build_map(schema: Schema, hidden_columns: frozenset[str] = HIDDEN_BY_DEFAULT
         if ca != cb:
             weights[(min(ca, cb), max(ca, cb))] += 1.0
     _place_communities(result.communities, weights)
-    for comm in result.communities:
-        _place_members(comm, result.nodes)
+    for comm, layout in zip(result.communities, relative):
+        for name, (x, y) in layout.items():
+            result.nodes[name].x = comm.x + x
+            result.nodes[name].y = comm.y + y
     return result

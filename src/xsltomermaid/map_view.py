@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from .excel_to_mermaid import Schema
 from .schema_map import HIDDEN_BY_DEFAULT, SchemaMap, build_map
+from .schema_map import node_radius as _node_radius
 from .theme import _ACCENT, _muted_hex
 
 # Categorical colours for the largest clusters (Tableau 10); smaller clusters
@@ -55,10 +56,6 @@ _CLUSTER_COLOURS = {
 }
 _OTHER = {"dark": "#8c95a3", "light": "#8992a1"}
 _LABEL_MIN_MEMBERS = 8  # clusters this big get their hub's name drawn
-
-
-def _node_radius(degree: int) -> float:
-    return 3.0 + 1.6 * math.sqrt(degree)
 
 
 class _TableLabel(QGraphicsSimpleTextItem):
