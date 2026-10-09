@@ -164,8 +164,8 @@ class TableInspector(QWidget):
         else:
             count = f"{len(included):,} of {total} ticked · not in the diagram"
         self._meta.setText(
-            f"{count} · references {_plural(len(outgoing), 'table')} · "
-            f"referenced by {len(incoming):,}"
+            f"{count} · has foreign keys to {_plural(len(outgoing), 'table')} · "
+            f"targeted by foreign keys from {len(incoming):,}"
         )
 
         self._updating = True
@@ -229,8 +229,8 @@ class TableInspector(QWidget):
         # A new table: no column or reference is picked yet.
         self.column_picked.emit("", "")
         self.reference_picked.emit("", [])
-        self._add_group("References", [(r.parent_table, r) for r in outgoing])
-        self._add_group("Referenced by", [(r.child_table, r) for r in incoming])
+        self._add_group("Has foreign keys to", [(r.parent_table, r) for r in outgoing])
+        self._add_group("Targeted by foreign keys from", [(r.child_table, r) for r in incoming])
 
     def _add_group(self, title: str, pairs):
         # The same rule as the map, the diagram and the link counts.

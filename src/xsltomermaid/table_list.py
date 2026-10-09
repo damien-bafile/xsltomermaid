@@ -297,7 +297,7 @@ class TableSelector(QWidget):
         self._count.setStyleSheet(f"color: {_muted_hex(self)};")
         layout.addWidget(self._count)
         # What the painted marks on each row mean (shown once counts exist).
-        self._legend = QLabel("↗ references  ·  ↙ referenced by  ·  ● in the diagram")
+        self._legend = QLabel("↗ foreign keys to  ·  ↙ foreign keys from  ·  ● in the diagram")
         self._legend.setAccessibleName(
             "Legend: up-right arrow, tables referenced; down-left arrow, tables "
             "referencing this one; dot, in the diagram"

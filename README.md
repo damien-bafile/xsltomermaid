@@ -143,8 +143,8 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
   the neighbours of the ticked tables (choose the foreign-key direction), and
   the path tracer, which finds the shortest foreign-key route between two
   tables, optionally via a third.
-- Under the list, **↗ / ↙** count each table's references and the tables
-  referencing it, and **●** marks a table in the diagram.
+- Under the list, **↗ / ↙** count the tables each table has foreign keys to and the tables
+  with foreign keys to it, and **●** marks a table in the diagram.
 - **Clear** and the bulk actions can be undone (**Undo**, or Ctrl+Z). The
   **Table list** menu saves and loads the ticked tables as `.toml` presets.
 
@@ -155,7 +155,7 @@ specific view.
 
 | View | What it shows |
 |---|---|
-| **Table** | The selected table's columns (tick to show them) and every table it references or is referenced by, each with **Add**. Audit and system links are folded into their own group, matching the map and the link counts. Selecting a connected table glows it orange in the diagram (beside the selected table's blue) when it's drawn, and tints the rows the two tables join on; double-click it to move to it. Selecting a column tints its row blue, and clicking a row in the diagram selects that column here. |
+| **Table** | The selected table's columns (tick to show them) and every table it has foreign keys to or is targeted by foreign keys from, each with **Add**. Audit and system links are folded into their own group, matching the map and the link counts. Selecting a connected table glows it orange in the diagram (beside the selected table's blue) when it's drawn, and tints the rows the two tables join on; double-click it to move to it. Selecting a column tints its row blue, and clicking a row in the diagram selects that column here. |
 | **Columns** | Include or leave out columns per table; sort by name or type; *PK, FK first*; **All / None / Keys only**, which can be undone. |
 | **Mermaid** | The generated `erDiagram` source, syntax-coloured. |
 | **SQL** | A syntax-coloured T-SQL `SELECT` over the diagram's tables, joined on their foreign keys (composite keys included). Choose the start table, `INNER` or `LEFT` joins and a `TOP (n)` limit. Names are bracketed only where T-SQL needs it (**Quote all names** brackets every one). For Dynamics data, **Latest version only** keeps each record's newest row in a Synapse Link or Fabric copy (by `versionnumber`, without `IsDelete` rows), and **Active records only** keeps `statecode = 0`, each applied per table where it fits. Anything that can't be a clean join (a second foreign key between the same tables, a self-reference, a table with no path) is written as a `--` comment. |
