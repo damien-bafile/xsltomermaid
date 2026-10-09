@@ -1608,7 +1608,7 @@ def test_table_view_shows_columns_and_both_directions_of_links(tmp_path):
     assert ins.current_table() == "Order"
     assert ins._columns.count() == 4
     groups = [ins._links.topLevelItem(i) for i in range(ins._links.topLevelItemCount())]
-    assert [g.text(0) for g in groups] == ["References (1)", "Referenced by (1)"]
+    assert [g.text(0) for g in groups] == ["Has foreign keys to (1)", "Targeted by foreign keys from (1)"]
     out_row, in_row = groups[0].child(0), groups[1].child(0)
     assert (out_row.text(0), out_row.text(1)) == ("Customer  ·  via CustomerID", "Add")
     assert out_row.data(0, app_module.Qt.UserRole) == "Customer"
@@ -1687,8 +1687,8 @@ def test_table_view_folds_audit_and_system_links_like_the_map():
     ])
     window._schema.tables[0].columns.append(Column("", "systemuser", 1, "systemuserid", "guid"))
     window._focus_table("systemuser")
-    group = window._inspector._links.topLevelItem(1)  # Referenced by
-    assert group.text(0) == "Referenced by (4)"
+    group = window._inspector._links.topLevelItem(1)  # Targeted by foreign keys from
+    assert group.text(0) == "Targeted by foreign keys from (4)"
     assert group.child(0).text(0) == "b  ·  via approver"
     folded = group.child(1)
     assert folded.text(0) == "Audit and system links (3)" and not folded.isExpanded()
@@ -2263,7 +2263,7 @@ def test_rows_are_tinted_for_a_column_a_reference_and_a_clicked_row(monkeypatch)
     window._inspector.select_column("grp id")
     assert marks[-1] == ("xrow", [("hsldayrule", "grp_id")])  # drawn name, DOM key
     tree = window._inspector._links
-    tree.setCurrentItem(tree.topLevelItem(0).child(0))  # References: hsl_dayrulegroup
+    tree.setCurrentItem(tree.topLevelItem(0).child(0))  # Has foreign keys to: the first parent
     assert marks[-1] == ("xjoin", [("hsldayrule", "grp_id"), ("hsldayrulegroup", "hsl_dayrulegroupid")])
     # As the page reports it: the group id, then the row's drawn name.
     window._diagram_view._on_bridge(
@@ -2323,7 +2323,7 @@ def test_rail_grow_section_legend_undo_menu_and_help(tmp_path, monkeypatch):
     # Add related lives in the Grow selection disclosure, with the path tracer.
     assert sel._path_toggle.text() == "Grow selection"
     assert sel._related_btn.parent() is sel._path_box
-    assert not sel._legend.isHidden() and "↗ references" in sel._legend.text()
+    assert not sel._legend.isHidden() and "↗ foreign keys to" in sel._legend.text()
     # Ctrl+Z (Diagram › Undo) undoes the last change to the ticks.
     before = sel.selected_tables()
     sel.snapshot_for_undo("clear")
