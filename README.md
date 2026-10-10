@@ -147,7 +147,9 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
 - Under the list, **↗ / ↙** count the tables each table has foreign keys to and the tables
   with foreign keys to it, and **●** marks a table in the diagram.
 - **Clear** and the bulk actions can be undone (**Undo**, or Ctrl+Z). The
-  **Table list** menu saves and loads the ticked tables as `.toml` presets.
+  **Table list** menu saves and loads the ticked tables as `.toml` presets, with
+  the column choices (left-out columns, dragged orders, the sort) and moved
+  relationship labels. Older presets still load; they leave those as they are.
 
 ### The Details panel
 

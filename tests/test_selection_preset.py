@@ -60,3 +60,52 @@ def test_selection_preset_allows_extra_keys():
     filename, selected = load_selection_toml(text)
     assert filename == "sample_schema.xlsx"
     assert selected == ["Customer"]
+
+
+def test_preset_keeps_column_choices_and_label_layout():
+    from xsltomermaid import selection_preset
+    from xsltomermaid.selection_preset import Preset, dump_preset, load_preset
+
+    preset = Preset(
+        "dynamics.xlsx", ["account", "contact"],
+        hidden_columns={("account", "traversedpath"), ("contact", "fax")},
+        column_order={"account": ["name", "accountid"]},
+        column_sort="name", keys_first=True,
+        label_layout={"contact|account|0": [90.0, 28.0, -19.5]},
+    )
+    text = dump_preset(preset)
+    assert load_preset(text) == preset
+    # The Python 3.10 fallback reads it too: one line of JSON per key.
+    real = selection_preset.tomllib
+    try:
+        selection_preset.tomllib = None
+        assert load_preset(text) == preset
+    finally:
+        selection_preset.tomllib = real
+
+
+def test_an_older_preset_leaves_column_choices_alone():
+    from xsltomermaid.selection_preset import load_preset
+
+    preset = load_preset('filename = "x.xlsx"\nselected_tables = ["A"]\n')
+    assert preset.selected_tables == ["A"]
+    assert preset.hidden_columns is None and preset.column_order is None
+    assert preset.column_sort is None and preset.keys_first is None
+    assert preset.label_layout is None
+
+
+def test_preset_rejects_bad_column_values():
+    import pytest
+
+    from xsltomermaid.selection_preset import load_preset
+
+    head = 'filename = "x.xlsx"\nselected_tables = ["A"]\n'
+    for line, key in (
+        ('hidden_columns = [["a"]]', "hidden_columns"),
+        ('column_order = [["a", "b"]]', "column_order"),
+        ('column_sort = "random"', "column_sort"),
+        ('keys_first = "yes"', "keys_first"),
+        ('label_layout = [["k", 1, 2]]', "label_layout"),
+    ):
+        with pytest.raises(ValueError, match=key):
+            load_preset(head + line + "\n")

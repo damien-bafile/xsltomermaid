@@ -2934,6 +2934,44 @@ def test_saving_a_table_list_reports_write_errors(tmp_path, monkeypatch):
     del app
 
 
+def test_a_saved_table_list_brings_back_columns_order_and_labels(tmp_path, monkeypatch):
+    app, window = _inspector_window(tmp_path)
+    monkeypatch.setattr(window, "_report_saved", lambda path: None)
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer", "Order"])
+    window._render_selection()
+    window._focus_table("Customer")
+    cols = window._columns
+    next(r for r in cols._rows() if r.text(0) == "Email").setCheckState(0, app_module.Qt.Unchecked)
+    cols._tree.setCurrentItem(cols._tree.topLevelItem(1))
+    cols._move(-1)  # Customer gets its own order
+    order = [r.text(0) for r in cols._rows()]
+    cols._keys_first.setChecked(True)
+    window._diagram_view._on_bridge("label", '["Customer|Order|0", 90, 28, 19]')
+    path = tmp_path / "list.toml"
+    monkeypatch.setattr(app_module.QFileDialog, "getSaveFileName", lambda *a, **k: (str(path), ""))
+    window.save_table_selection_toml()
+    text = path.read_text(encoding="utf-8")
+    assert 'hidden_columns = [["customer", "email"]]' in text and "label_layout" in text
+    window._diagram_view.cleanup()
+
+    again = app_module.MainWindow()
+    sample = tmp_path / "s.xlsx"
+    again.load_file(str(sample))
+    monkeypatch.setattr(app_module.QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
+    again.load_table_selection_toml()
+    assert set(again._selector.selected_tables()) == {"Customer", "Order"}
+    assert ("customer", "email") in again._columns.excluded_pairs()
+    assert "Email" not in again._mermaid_text.split("Order {")[0]  # left out of the diagram
+    again._focus_table("Customer")
+    assert [r.text(0) for r in again._columns._rows()] == order  # the dragged order
+    assert again._columns._sort.currentData() == "dragged"
+    assert again._columns._keys_first.isChecked()
+    assert again._diagram_view.label_edits() == {"Customer|Order|0": [90.0, 28.0, 19.0]}
+    again._diagram_view.cleanup()
+    del app
+
+
 def test_cluster_header_rows_are_double_height_and_sorting_keeps_the_open_table():
     app, window = _list_window()
     sel = window._selector
