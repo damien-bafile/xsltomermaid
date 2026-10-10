@@ -110,6 +110,7 @@ from .excel_to_mermaid import (
     filter_columns,
     filter_schema,
     drawn_column_name,
+    drawn_columns,
     generate_mermaid,
     system_columns,
     linked_fk_columns,
@@ -175,11 +176,14 @@ from .table_list import (  # noqa: F401 - used by tests via the main module
     _ROLE_LINKS,
     _ROLE_MAPSEL,
 )
-from .inspector import (
-    TableInspector,
-)
 from .column_selector import (
     ColumnSelector,
+)
+from .relationships_view import (
+    RelationshipsView,
+)
+from .tables_view import (
+    TablesView,
 )
 from .options_bar import (
     DiagramOptionsBar,
@@ -390,18 +394,27 @@ class MainWindow(QMainWindow):
         self._table_stack = QStackedWidget()
         self._table_stack.addWidget(self._table_empty)
         self._table_stack.addWidget(self._table)
-        self._inspector = TableInspector()
-        self._inspector.column_toggled.connect(self._columns_set_included)
-        self._inspector.add_requested.connect(self._add_table_from_inspector)
-        self._inspector.select_requested.connect(self._focus_table)
-        self._inspector.reference_picked.connect(self._mark_reference)
-        self._inspector.column_picked.connect(self._mark_column)
-        tabs.addTab(self._inspector, "Table")
-        tabs.setTabToolTip(0, "The selected table: its columns and connected tables")
+        # One table at a time: the Tables view lists the diagram's tables;
+        # Columns and Relationships show the selected one, and are disabled
+        # until a table is selected.
+        self._tables_view = TablesView()
+        self._tables_view.table_picked.connect(self._focus_table)
+        self._tables_view.columns_requested.connect(self._open_columns)
+        tabs.addTab(self._tables_view, "Tables")
+        tabs.setTabToolTip(0, "The tables in the diagram")
 
         self._columns = ColumnSelector()
         self._columns.changed.connect(self._on_selection_edited)
+        self._columns.column_picked.connect(self._mark_column)
         tabs.addTab(self._columns, "Columns")
+        tabs.setTabToolTip(1, "The selected table's columns: which show, and their order")
+
+        self._relations = RelationshipsView()
+        self._relations.add_requested.connect(self._add_tables_from_details)
+        self._relations.select_requested.connect(self._focus_table)
+        self._relations.reference_picked.connect(self._mark_reference)
+        tabs.addTab(self._relations, "Relationships")
+        tabs.setTabToolTip(2, "The tables the selected table is linked to")
 
         self._mermaid_view = QPlainTextEdit()
         self._mermaid_view.setAccessibleName("Mermaid source")
@@ -487,8 +500,9 @@ class MainWindow(QMainWindow):
         self._details_btn.setArrowType(Qt.LeftArrow)
         self._details_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._details_btn.setToolTip(
-            "Show or hide the Details panel: the selected table, extracted data, "
-            "columns, Mermaid and SQL (Ctrl+I; Ctrl+1–5 open a view)."
+            "Show or hide the Details panel: the diagram's tables, the selected "
+            "table's columns and relationships, Mermaid, SQL and the extracted "
+            "data (Ctrl+I; Ctrl+1–6 open a view)."
         )
         self._details_btn.setStyleSheet(
             # A transparent border that turns accent on keyboard focus (3.4:1+);
@@ -802,8 +816,9 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self._details_action)
         for number, (label, widget) in enumerate(
             [
-                ("&Table", self._inspector),
+                ("&Tables", self._tables_view),
                 ("&Columns", self._columns),
+                ("Relations&hips", self._relations),
                 ("&Mermaid source", self._mermaid_view),
                 ("&SQL query", self._sql_tab),
                 ("E&xtracted data", self._table_stack),
@@ -1042,8 +1057,9 @@ class MainWindow(QMainWindow):
         if app is not None:
             self._options_bar.apply_system_defaults(system_is_dark(app), notify=True)
         # Views that bake colours into items or pages when they fill.
-        self._inspector.retheme()
-        self._refresh_inspector()
+        for view in (self._tables_view, self._relations):
+            view.retheme()
+        self._refresh_details()
         self._map_view.retheme()
         self._diagram_view.retheme()
 
@@ -1098,11 +1114,10 @@ class MainWindow(QMainWindow):
             return
         if double:
             self._diagram_view.focus_entity(entity_id)  # readable, if it wasn't
-            self.show_details(self._inspector)
+            self.show_details(self._columns)
         else:
             self._status.setText(
-                f"{html.escape(name)} open · double-click it for its columns "
-                "and connected tables"
+                f"{html.escape(name)} open · double-click it for its columns"
             )
 
     def _on_list_table_changed(self, name: str):
@@ -1118,8 +1133,7 @@ class MainWindow(QMainWindow):
                     f"{html.escape(name)} isn't on the map: it has no links there "
                     "(it's listed under Unconnected)."
                 )
-        self._columns.focus_table(name)
-        self._refresh_inspector(name)
+        self._refresh_details(name)
 
     # -- schema map -----------------------------------------------------------
     def map_visible(self) -> bool:
@@ -1144,7 +1158,7 @@ class MainWindow(QMainWindow):
     def _on_map_table_activated(self, name: str, double: bool):
         self._focus_table(name, from_map=True)
         if double:
-            self.show_details(self._inspector)
+            self.show_details(self._columns)
 
     def _sync_map_hide_audit(self, on: bool):
         """The diagram's audit setting changed: mirror it on the map."""
@@ -1223,7 +1237,7 @@ class MainWindow(QMainWindow):
         return next((e for e, t in self._entity_to_table.items() if t == table), "")
 
     def _mark_reference(self, name: str, joins: list | None = None):
-        """A connected table picked in the Table view: glow it orange in the
+        """A connected table picked in the Relationships view: glow it orange in the
         diagram, beside the blue selection, and tint the rows the two tables
         join on (nothing for tables that aren't drawn)."""
         self._diagram_view.mark_reference(self._entity_for(name))
@@ -1235,13 +1249,13 @@ class MainWindow(QMainWindow):
         self._diagram_view.mark_rows("xjoin", rows)
 
     def _mark_column(self, table: str, column: str):
-        """A column picked in the Table view: tint its row in the diagram."""
+        """A column picked in the Columns view: tint its row in the diagram."""
         entity = self._entity_for(table)
         rows = [(entity, drawn_column_name(column))] if entity and column else []
         self._diagram_view.mark_rows("xrow", rows)
 
     def _on_row_clicked(self, entity_id: str, drawn_name: str):
-        """A row clicked in the diagram: pick that column in the Table view
+        """A row clicked in the diagram: pick that column in the Columns view
         (which tints the row). The click has already selected the table."""
         table = self._entity_to_table.get(entity_id)
         schema_table = next((t for t in self._schema.tables if t.name == table), None) if (
@@ -1251,8 +1265,8 @@ class MainWindow(QMainWindow):
         column = next(
             (c.name for c in schema_table.columns if drawn_column_name(c.name) == drawn_name), ""
         )
-        if column and self._inspector.select_column(column) and not self._tabs.isHidden():
-            self.show_details(self._inspector)
+        if column and self._columns.select_column(column) and not self._tabs.isHidden():
+            self.show_details(self._columns)
 
     def _arrive_after_draw(self, ok: bool):
         name, self._focus_after_render = self._focus_after_render, ""
@@ -1262,9 +1276,8 @@ class MainWindow(QMainWindow):
     def _focus_table(self, name: str, from_diagram: bool = False, from_map: bool = False):
         """Make ``name`` the selected table everywhere ("" clears)."""
         self._selector.focus_table(name)
-        self._columns.focus_table(name)
         if not from_diagram:
-            # Picked from the list, map or Table view: zoom to it if the
+            # Picked from the list, map or Details panel: zoom to it if the
             # diagram is drawn too small to read.
             entity = next((e for e, t in self._entity_to_table.items() if t == name), "")
             if entity:
@@ -1273,39 +1286,64 @@ class MainWindow(QMainWindow):
                 self._diagram_view.highlight_entity("")
         if not from_map and self.map_visible() and name:
             self._map_view.select([name])
-        self._refresh_inspector(name)
+        self._refresh_details(name)
 
-    def _refresh_inspector(self, name: str | None = None):
-        """Show ``name`` (default: the current one) in the Table view."""
+    def _refresh_details(self, name: str | None = None):
+        """Show ``name`` (default: the current one) in the Columns and
+        Relationships views, which are disabled while nothing is selected."""
         if name is None:
-            name = self._inspector.current_table()
+            name = self._columns.current_table()
         schema = self._schema
         table = None
         if schema is not None and name:
             table = next((t for t in schema.tables if t.name == name), None)
-        if table is None:
-            self._inspector.show_table(None, [], [], set(), set())
-            return
-        key = table.name.lower()
-        outgoing = [r for r in schema.relationships if r.child_table.lower() == key]
-        incoming = [r for r in schema.relationships if r.parent_table.lower() == key]
         final = self._drawio_schema
         drawn = {t.name.lower() for t in (final.tables if final else [])}
+        if table is None and self._tabs.currentWidget() in (self._columns, self._relations):
+            # Its view is about to be disabled: back to the list, not the next tab.
+            self._tabs.setCurrentWidget(self._tables_view)
+        for view in (self._columns, self._relations):
+            self._tabs.setTabEnabled(self._tabs.indexOf(view), table is not None)
+        self._tables_view.set_current(table.name if table is not None else "")
+        if table is None:
+            self._columns.show_table(None)
+            self._relations.show_table("", [], set())
+            return
+        key = table.name.lower()
         linked = linked_fk_columns(final).get(key, set()) if final else set()
-        self._inspector.show_table(
-            table, outgoing, incoming, drawn, self._columns.excluded_pairs(),
-            self._options_bar.diagram_options(), linked,
+        self._columns.show_table(
+            table, key in drawn, self._options_bar.diagram_options(), linked
         )
+        self._relations.show_table(table.name, schema.relationships, drawn)
 
-    def _columns_set_included(self, table: str, column: str, included: bool):
-        self._columns.set_column_included(table, column, included)
+    def _refresh_tables_view(self):
+        """List the diagram's tables, with how many of their columns are drawn."""
+        final = self._drawio_schema
+        if final is None or self._schema is None:
+            self._tables_view.set_tables([])
+            return
+        totals = {t.name: len(t.columns) for t in self._schema.tables}
+        options = self._options_bar.diagram_options()
+        linked = linked_fk_columns(final)
+        self._tables_view.set_tables([
+            (t.name, len(drawn_columns(t, options, linked.get(t.name.lower(), set())).columns),
+             totals.get(t.name, len(t.columns)))
+            for t in final.tables
+        ])
 
-    def _add_table_from_inspector(self, name: str):
-        """Tick a connected table from the Table view (undoable, auto-renders)."""
+    def _open_columns(self, name: str):
+        """Columns picked for a table in the Tables view: select it, then show them."""
+        self._focus_table(name)
+        self.show_details(self._columns)
+
+    def _add_tables_from_details(self, names: list):
+        """Tick tables from the Relationships view (undoable, auto-renders)."""
         self._selector.snapshot_for_undo("add")
-        if self._selector.check_tables([name]):
+        if self._selector.check_tables(names):
             self._on_selection_edited()
-            self._status.setText(f"Added {html.escape(name)} to the diagram.")
+            self._status.setText(
+                f"Added {html.escape(' and '.join(names))} to the diagram."
+            )
 
     # -- details panel ----------------------------------------------------
     def set_details_visible(self, visible: bool):
@@ -1388,19 +1426,18 @@ class MainWindow(QMainWindow):
             self._body.restoreState(split)
         open_ = str(settings.value("window/details_open", "false")).lower() in ("true", "1")
         self.set_details_visible(open_)
-        tab = settings.value("window/details_tab")
-        try:
-            if tab is not None and 0 <= int(tab) < self._tabs.count():
-                self._tabs.setCurrentIndex(int(tab))
-        except (TypeError, ValueError):
-            pass
+        # By name: the views' order has changed between versions.
+        view = str(settings.value("window/details_view", ""))
+        for index in range(self._tabs.count()):
+            if self._tabs.tabText(index) == view and self._tabs.isTabEnabled(index):
+                self._tabs.setCurrentIndex(index)
         self._options_bar.restore_state(settings)
 
     def closeEvent(self, event):  # noqa: N802 (Qt naming)
         settings = app_settings()
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/splitter3", self._body.saveState())
-        settings.setValue("window/details_tab", self._tabs.currentIndex())
+        settings.setValue("window/details_view", self._tabs.tabText(self._tabs.currentIndex()))
         # The view's temp folder (a copy of mermaid.js) and the preview's.
         self._diagram_view.cleanup()
         if self._preview_dir is not None:
@@ -1776,7 +1813,6 @@ class MainWindow(QMainWindow):
 
         # Refresh the column picker for the tables now in play, then apply the
         # user's column choices on top of the table filter.
-        self._columns.set_tables(filtered.tables)
         final = self._columns.sorted_schema(
             filter_columns(filtered, self._columns.excluded_pairs())
         )
@@ -1786,9 +1822,9 @@ class MainWindow(QMainWindow):
                 relationships=[r for r in final.relationships if not is_hidden_link(r)],
             )
         self._drawio_schema = final
-        self._columns.set_keys_only(self._options_bar.diagram_options().keys_only)
         self._sql_tab.set_schema(final, self._schema, self._options_bar.hide_system_columns())
-        self._refresh_inspector()
+        self._refresh_tables_view()
+        self._refresh_details()
         self._map_view.set_ticked(self._selector.selected_tables())
         self._selector.set_drawn(
             [t.name for t in self._drawio_schema.tables] if self._drawio_schema else []

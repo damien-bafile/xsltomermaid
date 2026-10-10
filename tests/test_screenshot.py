@@ -74,30 +74,65 @@ def test_column_selector_marks_primary_and_foreign_keys():
 
     app = QApplication.instance() or QApplication([])
     selector = app_module.ColumnSelector()
-    selector.set_tables(
-        [
-            Table(
-                "dbo",
-                "Orders",
-                [
-                    Column("dbo", "Orders", 1, "OrderID", "int", is_primary_key=True),
-                    Column(
-                        "dbo",
-                        "Orders",
-                        2,
-                        "CustomerID",
-                        "int",
-                        foreign_key_reference="dbo.Customer.CustomerID",
-                    ),
-                ],
-            )
-        ]
+    selector.show_table(
+        Table(
+            "dbo",
+            "Orders",
+            [
+                Column("dbo", "Orders", 1, "OrderID", "int", is_primary_key=True,
+                       is_nullable=False),
+                Column(
+                    "dbo",
+                    "Orders",
+                    2,
+                    "CustomerID",
+                    "int",
+                    foreign_key_reference="dbo.Customer.CustomerID",
+                ),
+            ],
+        )
     )
 
-    table_item = selector._tree.topLevelItem(0)
-    assert table_item.child(0).text(0) == "OrderID  [PK]"
-    assert table_item.child(1).text(0) == "CustomerID  [FK]"
-    assert table_item.child(0).toolTip(0) == "PK key column: OrderID"
+    rows = [selector._tree.topLevelItem(i) for i in range(2)]
+    # Column, type, key, and whether it can be NULL.
+    assert [rows[0].text(i) for i in range(4)] == ["OrderID", "int", "PK", "No"]
+    assert [rows[1].text(i) for i in range(4)] == ["CustomerID", "int", "FK", "Yes"]
+    assert rows[1].toolTip(2) == "References dbo.Customer.CustomerID"
+    del app
+
+
+def test_dragging_columns_gives_the_table_its_own_order():
+    from xsltomermaid.excel_to_mermaid import Column, Table
+
+    app = QApplication.instance() or QApplication([])
+    table = Table("dbo", "T", [
+        Column("dbo", "T", 1, "Id", "int", is_primary_key=True),
+        Column("dbo", "T", 2, "b", "int"),
+        Column("dbo", "T", 3, "a", "int"),
+    ])
+    other = Table("dbo", "U", [Column("dbo", "U", 1, "z", "int"), Column("dbo", "U", 2, "y", "int")])
+    selector = app_module.ColumnSelector()
+    selector.show_table(table)
+    changes = []
+    selector.changed.connect(lambda: changes.append(1))
+    # What a drop does: move the last row to the top, then say so.
+    tree = selector._tree
+    tree.insertTopLevelItem(0, tree.takeTopLevelItem(2))
+    tree.reordered.emit()
+    assert [c.name for c in selector.ordered_columns(table)] == ["a", "Id", "b"]
+    assert changes == [1]
+    assert selector._sort.currentData() == "dragged"
+    assert not selector._keys_first.isEnabled()  # the drag decides the order
+    # Other tables keep the shared sort.
+    assert [c.name for c in selector.ordered_columns(other)] == ["z", "y"]
+    # Picking a sort replaces the dragged order.
+    selector._sort.setCurrentIndex(selector._sort.findData("name"))
+    assert [c.name for c in selector.ordered_columns(table)] == ["a", "b", "Id"]
+    assert [tree.topLevelItem(i).text(0) for i in range(3)] == ["a", "b", "Id"]
+    assert selector._sort.findData("dragged") < 0 and selector._keys_first.isEnabled()
+    # Filtered rows can't be dragged (the hidden ones would lose their place).
+    selector._filter.setText("a")
+    assert not tree.dragEnabled()
     del app
 
 
@@ -148,15 +183,15 @@ def test_column_sorting_preserves_selection_and_source(mode, keys_first, expecte
         Column("dbo", "Example", 4, "alpha", "bit"),
     ])
     selector = app_module.ColumnSelector()
-    selector.set_tables([table])
-    selector._tree.topLevelItem(0).child(0).setCheckState(0, app_module.Qt.Unchecked)
+    selector.show_table(table)
+    selector._tree.topLevelItem(0).setCheckState(0, app_module.Qt.Unchecked)
     selector._filter.setText("Id")
     selector._sort.setCurrentIndex(selector._sort.findData(mode))
     selector._keys_first.setChecked(keys_first)
 
     assert [c.name for c in selector.ordered_columns(table)] == expected
-    children = list(selector._children(selector._tree.topLevelItem(0)))
-    assert [c.text(0).split("  [")[0] for c in children] == expected
+    children = selector._rows()
+    assert [c.text(0) for c in children] == expected
     assert next(c for c in children if c.text(0) == "zeta").checkState(0) == app_module.Qt.Unchecked
     assert next(c for c in children if c.text(0) == "alpha").isHidden()
     assert selector.excluded_pairs() == {("example", "zeta")}
@@ -1196,10 +1231,10 @@ def test_column_bulk_none_is_undoable():
 
     app = QApplication.instance() or QApplication([])
     selector = app_module.ColumnSelector()
-    selector.set_tables([Table("dbo", "T", [
+    selector.show_table(Table("dbo", "T", [
         Column("dbo", "T", 1, "Id", "int", is_primary_key=True),
         Column("dbo", "T", 2, "Name", "varchar"),
-    ])])
+    ]))
     changes = []
     selector.changed.connect(lambda: changes.append(1))
     selector._bulk("none")
@@ -1333,7 +1368,7 @@ def test_sql_tab_follows_the_diagram_and_its_options(tmp_path, monkeypatch):
     sql = window._sql_tab.text()
     assert sql.startswith("SELECT TOP (100)") and "JOIN" in sql
     tabs = [window._tabs.tabText(i) for i in range(window._tabs.count())]
-    assert tabs == ["Table", "Columns", "Mermaid", "SQL", "Data"]  # raw rows last
+    assert tabs == ["Tables", "Columns", "Relationships", "Mermaid", "SQL", "Data"]  # raw rows last
 
     window._sql_tab.root.setCurrentText("OrderLine")
     window._sql_tab.join.setCurrentIndex(window._sql_tab.join.findData("LEFT"))
@@ -1514,12 +1549,12 @@ def test_details_panel_starts_closed_and_opens_on_a_view():
 def test_details_panel_state_is_remembered():
     app = QApplication.instance() or QApplication([])
     window = app_module.MainWindow()
-    window.show_details(window._columns)
+    window.show_details(window._sql_tab)
     window.close()
     window._diagram_view.cleanup()
     again = app_module.MainWindow()
     again.show()
-    assert again._tabs.isVisible() and again._tabs.currentWidget() is again._columns
+    assert again._tabs.isVisible() and again._tabs.currentWidget() is again._sql_tab
     again._diagram_view.cleanup()
     del app
 
@@ -1560,12 +1595,12 @@ def test_clicking_a_table_in_the_diagram_selects_it(tmp_path):
     click("click")
     assert _wait_for(lambda: window._selector._list.currentItem() is not None
                      and window._selector._list.currentItem().text() == "OrderLine", 5000)
-    assert window._columns._scope_tables()[0].name == "OrderLine"
+    assert window._columns.current_table() == "OrderLine"
     assert not window._tabs.isVisible()  # single click doesn't open the panel
     click("dblclick")
     assert _wait_for(lambda: window._tabs.isVisible(), 5000)
-    assert window._tabs.currentWidget() is window._inspector
-    assert window._inspector.current_table() == "OrderLine"
+    assert window._tabs.currentWidget() is window._columns
+    assert window._relations.current_table() == "OrderLine"
     window._diagram_view.cleanup()
     del app
 
@@ -1584,7 +1619,7 @@ def test_highlighting_a_list_row_highlights_the_drawn_table(monkeypatch):
 
 
 
-# -- the Table view (per-table inspector) ---------------------------------------
+# -- the Details panel: Tables, Columns and Relationships ------------------------
 def _audit_rows():
     from tests_rows import row  # noqa: F401  (placeholder, replaced below)
 
@@ -1604,9 +1639,9 @@ def test_table_view_shows_columns_and_both_directions_of_links(tmp_path):
     window._selector.check_tables(["Order"])
     window._render_selection()
     window._focus_table("Order")
-    ins = window._inspector
+    ins = window._relations
     assert ins.current_table() == "Order"
-    assert ins._columns.count() == 4
+    assert window._columns._tree.topLevelItemCount() == 4
     groups = [ins._links.topLevelItem(i) for i in range(ins._links.topLevelItemCount())]
     assert [g.text(0) for g in groups] == ["Has foreign keys to (1)", "Targeted by foreign keys from (1)"]
     out_row, in_row = groups[0].child(0), groups[1].child(0)
@@ -1623,24 +1658,22 @@ def test_table_view_counts_match_the_diagram_under_keys_only(tmp_path):
     window._selector.check_tables(["Customer"])
     window._render_selection()
     window._focus_table("Customer")
-    ins = window._inspector
-    total = ins._columns.count()
-    assert ins._meta.text().startswith(f"{total} of {total} columns drawn")
+    cols = window._columns
+    total = cols._tree.topLevelItemCount()
+    assert cols._meta.text() == f"{total} of {total} columns drawn"
     window._options_bar._keys_only.setChecked(True)  # re-renders
-    assert ins._meta.text().startswith(f"1 of {total} columns drawn (Keys only)")
-    # The drawn key first, then a closed "Hidden by Keys only" group.
-    items = [ins._columns.item(i) for i in range(ins._columns.count())]
-    assert items[0].data(app_module.Qt.UserRole) == "CustomerID"
-    fold = items[1]
-    assert fold.data(ins._ROLE_FOLD) and fold.text() == f"▸  Hidden by Keys only ({total - 1})"
-    hidden = items[2:]
-    assert len(hidden) == total - 1 and all(i.isHidden() for i in hidden)
-    assert all(i.checkState() == app_module.Qt.Checked for i in hidden)  # still ticked
-    ins._columns.itemClicked.emit(fold)  # open the group
-    assert fold.text().startswith("▾") and not any(i.isHidden() for i in hidden)
-    window._focus_table("Customer")  # refilled: stays open while the app runs
-    assert not ins._columns.item(2).isHidden()
-    assert "only key columns are drawn" in window._columns._count.text()
+    assert cols._meta.text() == (
+        f"1 of {total} columns drawn · {total - 1} ticked but hidden by Keys only (greyed)"
+    )
+    # The key is drawn; the others stay ticked, but greyed with the reason.
+    rows = cols._rows()
+    assert rows[0].text(0) == "CustomerID" and not rows[0].toolTip(0)
+    hidden = rows[1:]
+    assert all(r.toolTip(0).startswith("Ticked, but Keys only") for r in hidden)
+    assert all(r.checkState(0) == app_module.Qt.Checked for r in hidden)
+    # The Tables view counts the drawn columns too.
+    tables = window._tables_view._rows()
+    assert [(r.text(0), r.text(1)) for r in tables] == [("Customer", f"1 of {total}")]
     assert "hidden by Keys only" in window._mermaid_text
     window._diagram_view.cleanup()
     del app
@@ -1652,7 +1685,7 @@ def test_table_view_add_ticks_the_table_and_can_be_undone(tmp_path, monkeypatch)
     window._selector.clear_selection()
     window._selector.check_tables(["Order"])
     window._focus_table("Order")
-    window._inspector.add_requested.emit("Customer")
+    window._relations.add_requested.emit(["Customer"])
     assert set(window._selector.selected_tables()) == {"Order", "Customer"}
     assert window._selector._undo_btn.text() == "&Undo add"
     window._selector.undo_last_change()
@@ -1664,12 +1697,8 @@ def test_table_view_add_ticks_the_table_and_can_be_undone(tmp_path, monkeypatch)
 def test_table_view_column_ticks_change_the_diagram_columns(tmp_path):
     app, window = _inspector_window(tmp_path)
     window._focus_table("Customer")
-    item = next(
-        window._inspector._columns.item(i)
-        for i in range(window._inspector._columns.count())
-        if window._inspector._columns.item(i).data(app_module.Qt.UserRole) == "Email"
-    )
-    item.setCheckState(app_module.Qt.Unchecked)
+    item = next(r for r in window._columns._rows() if r.text(0) == "Email")
+    item.setCheckState(0, app_module.Qt.Unchecked)
     assert ("customer", "email") in window._columns.excluded_pairs()
     window._diagram_view.cleanup()
     del app
@@ -1687,11 +1716,68 @@ def test_table_view_folds_audit_and_system_links_like_the_map():
     ])
     window._schema.tables[0].columns.append(Column("", "systemuser", 1, "systemuserid", "guid"))
     window._focus_table("systemuser")
-    group = window._inspector._links.topLevelItem(1)  # Targeted by foreign keys from
+    group = window._relations._links.topLevelItem(1)  # Targeted by foreign keys from
     assert group.text(0) == "Targeted by foreign keys from (4)"
     assert group.child(0).text(0) == "b  ·  via approver"
     folded = group.child(1)
     assert folded.text(0) == "Audit and system links (3)" and not folded.isExpanded()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_tables_view_lists_the_diagram_and_opens_a_tables_columns(tmp_path):
+    app, window = _inspector_window(tmp_path)
+    tabs = window._tabs
+    columns, relations = tabs.indexOf(window._columns), tabs.indexOf(window._relations)
+    window._focus_table("")
+    # Nothing selected: Columns and Relationships are disabled.
+    assert not tabs.isTabEnabled(columns) and not tabs.isTabEnabled(relations)
+    window._selector.clear_selection()
+    window._selector.check_tables(["Order", "Customer"])
+    window._render_selection()
+    view = window._tables_view
+    rows = {r.text(0): r for r in view._rows()}
+    assert set(rows) == {"Order", "Customer"} and rows["Order"].text(2) == "Columns ›"
+    view._tree.itemClicked.emit(rows["Order"], view._OPEN)  # the Columns action
+    assert window._columns.current_table() == "Order"
+    assert not tabs.isHidden() and tabs.currentWidget() is window._columns
+    assert tabs.isTabEnabled(columns) and tabs.isTabEnabled(relations)
+    assert window._selector._list.currentItem().text() == "Order"  # selected everywhere
+    view._tree.setCurrentItem(rows["Customer"])  # a plain click selects it
+    assert window._columns.current_table() == "Customer"
+    window._focus_table("OrderLine")  # not drawn: no row highlighted
+    assert view.current_table() == ""
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_relationships_view_adds_tables_linked_through_another(monkeypatch):
+    from xsltomermaid.excel_to_mermaid import Relationship
+    from xsltomermaid.relationships_view import extended_relations
+
+    tables, rels = _diamond()
+    app, window = _window_with_schema(tables + ["E", "lonely"], rels + [Relationship("E", "D", "ed")])
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    assert {via: [t for t, _r in rows] for via, rows in extended_relations(rels, "A").items()} == {
+        "B": ["D"], "C": ["D"],
+    }
+    view = window._relations
+    window._focus_table("A")
+    assert not view._extended.isChecked()  # immediate links only, by default
+    groups = [view._links.topLevelItem(i).text(0) for i in range(view._links.topLevelItemCount())]
+    assert groups == ["Has foreign keys to (0)", "Targeted by foreign keys from (2)"]
+    view._extended.setChecked(True)
+    extended = view._links.topLevelItem(2)
+    assert extended.text(0) == "Through another table (1)"
+    assert [extended.child(i).text(0) for i in range(extended.childCount())] == ["via B (1)", "via C (1)"]
+    row = extended.child(0).child(0)
+    assert row.text(0) == "D  ·  via bd" and row.text(1) == "Add"
+    window._selector.clear_selection()
+    view._links.itemClicked.emit(row, view._ADD_COL)  # adds D and the table between
+    assert set(window._selector.selected_tables()) == {"B", "D"}
+    window._focus_table("lonely")
+    assert view._links.isHidden() and "has no relationships" in view._empty.text()
+    assert window._tabs.isTabEnabled(window._tabs.indexOf(view))  # enabled, with the message
     window._diagram_view.cleanup()
     del app
 
@@ -1760,7 +1846,7 @@ def test_map_single_selection_focuses_the_table_and_filter_dims_others():
     window.show_map(True)
     window._map_view.select(["C7"])
     window._map_view._on_selection_changed()  # as a user click would
-    assert window._inspector.current_table() == "C7"
+    assert window._columns.current_table() == "C7"
     window._selector._filter.setText("C1")
     items = window._map_view._items
     assert items["C10"].opacity() == 1.0 and items["C8"].opacity() < 0.5
@@ -1979,8 +2065,8 @@ def test_arrow_keys_move_between_tables_and_enter_opens_one(tmp_path):
     assert _wait_for(lambda: current() not in ("", first), 5000)
     key("Enter")
     assert _wait_for(lambda: window._tabs.isVisible(), 5000)
-    assert window._tabs.currentWidget() is window._inspector
-    assert window._inspector.current_table() == current()
+    assert window._tabs.currentWidget() is window._columns
+    assert window._columns.current_table() == current()
     window._diagram_view.cleanup()
     del app
 
@@ -2132,11 +2218,11 @@ def test_switching_light_to_dark_rethemes_table_view_map_and_shell(tmp_path):
     window.load_file(str(sample))
     window._focus_table("Customer")
     window.show_map(True)
-    light_meta = window._inspector._meta.styleSheet()
+    light_meta = window._relations._meta.styleSheet()
     app.setPalette(theme._dark_palette())
     app.processEvents()  # the palette change reaches the window…
     app.processEvents()  # …which rethemes once its children have it too
-    assert window._inspector._meta.styleSheet() != light_meta
+    assert window._relations._meta.styleSheet() != light_meta
     base = window.palette().color(QPalette.Base)
     assert window._map_view._view.backgroundBrush().color() == base
     shell = diagram_view._shell_html(base.name(), True)
@@ -2172,7 +2258,7 @@ def test_clicking_a_table_with_underscores_opens_it():
     group = "entity-hsldayrule-ead42477-c0aa-545e-ab0c-1307fce3a23c"
     assert entity_id_from_group(group) == dom_entity_key("hsl_dayrule") == "hsldayrule"
     window._on_entity_clicked(entity_id_from_group(group), False)
-    assert window._inspector.current_table() == "hsl_dayrule"
+    assert window._columns.current_table() == "hsl_dayrule"
     assert window._selector._list.currentItem().text() == "hsl_dayrule"
     window._diagram_view.cleanup()
     del app
@@ -2228,8 +2314,8 @@ def test_picking_a_connected_table_marks_it_orange_in_the_diagram(monkeypatch):
     marked = []
     monkeypatch.setattr(window._diagram_view, "mark_reference", marked.append)
     window._focus_table("hsl_dayrule")
-    tree = window._inspector._links
-    rows = {tree.topLevelItem(0).child(i).data(0, window._inspector._ROLE_TABLE):
+    tree = window._relations._links
+    rows = {tree.topLevelItem(0).child(i).data(0, window._relations._ROLE_TABLE):
             tree.topLevelItem(0).child(i) for i in range(tree.topLevelItem(0).childCount())}
     tree.setCurrentItem(rows["hsl_dayrulegroup"])
     assert marked[-1] == "hsldayrulegroup"  # Mermaid's DOM name: orange
@@ -2260,17 +2346,17 @@ def test_rows_are_tinted_for_a_column_a_reference_and_a_clicked_row(monkeypatch)
     marks = []
     monkeypatch.setattr(window._diagram_view, "mark_rows", lambda kind, rows: marks.append((kind, rows)))
     window._focus_table("hsl_dayrule")
-    window._inspector.select_column("grp id")
+    window._columns.select_column("grp id")
     assert marks[-1] == ("xrow", [("hsldayrule", "grp_id")])  # drawn name, DOM key
-    tree = window._inspector._links
+    tree = window._relations._links
     tree.setCurrentItem(tree.topLevelItem(0).child(0))  # Has foreign keys to: the first parent
     assert marks[-1] == ("xjoin", [("hsldayrule", "grp_id"), ("hsldayrulegroup", "hsl_dayrulegroupid")])
     # As the page reports it: the group id, then the row's drawn name.
     window._diagram_view._on_bridge(
         "click", "entity-hsldayrulegroup-b3ec03d0-e4d3-5073-9de2-9b9ddd885256|hsl_dayrulegroupid"
     )
-    assert window._inspector.current_table() == "hsl_dayrulegroup"
-    assert window._inspector._columns.currentItem().data(app_module.Qt.UserRole) == "hsl_dayrulegroupid"
+    assert window._columns.current_table() == "hsl_dayrulegroup"
+    assert window._columns._tree.currentItem().text(0) == "hsl_dayrulegroupid"
     window._focus_table("hsl_dayrule")
     assert ("xrow", []) in marks[-3:] and ("xjoin", []) in marks[-3:]  # a new table clears both
     window._diagram_view.cleanup()
@@ -2353,7 +2439,7 @@ def test_a_map_draw_arrives_on_the_busiest_table(monkeypatch):
     window._draw_from_map(["H", "C3", "C4"])
     assert window._focus_after_render == "H"  # the hub of the drawn tables
     window._diagram_view.render_finished.emit(True)
-    assert window._inspector.current_table() == "H"
+    assert window._columns.current_table() == "H"
     assert window._selector._list.currentItem().text() == "H"  # list scrolled to it
     assert window._focus_after_render == ""  # once only
     window._diagram_view.cleanup()
@@ -2537,8 +2623,11 @@ def test_dynamics_system_columns_are_hidden_from_diagram_table_view_and_sql():
     assert "acc.importsequencenumber" not in window._sql_tab.text()
     assert "acc.revenue" in window._sql_tab.text()
     window._focus_table("account")
-    ins = window._inspector
-    assert ins._fold is not None and ins._fold.text().endswith("Hidden system columns (5)")
+    cols = window._columns
+    assert cols._meta.text().endswith("5 ticked but hidden by Hide system columns (greyed)")
+    greyed = [r.text(0) for r in cols._rows() if r.toolTip(0).startswith("A Dynamics system column")]
+    assert greyed == ["createdbyname", "createdbyyominame", "revenue_base",
+                      "importsequencenumber", "statecodename"]
     bar._system_chip.click()  # show them again
     assert not bar.hide_system_columns()
     assert "importsequencenumber" in window._mermaid_text
@@ -2764,9 +2853,9 @@ def test_cluster_header_rows_are_double_height_and_sorting_keeps_the_open_table(
     sel = window._selector
     sel.cluster_provider = lambda: {"msdyn_project": (0, "msdyn_project"), "msdyn_task": (0, "msdyn_project")}
     window._focus_table("msdyn_task")
-    assert window._inspector.current_table() == "msdyn_task"
+    assert window._columns.current_table() == "msdyn_task"
     sel._sort.setCurrentIndex(sel._sort.findData("cluster"))
-    assert window._inspector.current_table() == "msdyn_task"  # not emptied by the re-sort
+    assert window._columns.current_table() == "msdyn_task"  # not emptied by the re-sort
     rows = list(sel._items())
     header_row = sel._list.row(next(i for i in rows if i.data(app_module._ROLE_GROUP)))
     plain_row = sel._list.row(next(i for i in rows if not i.data(app_module._ROLE_GROUP)))

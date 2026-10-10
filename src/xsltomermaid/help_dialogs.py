@@ -32,7 +32,7 @@ def show_shortcuts_help(parent) -> None:
     rows = [
         ("Ctrl+O", "Open a spreadsheet"),
         ("Ctrl+M", "Switch between the diagram and the map"),
-        ("Ctrl+I / Ctrl+1–5", "Show the Details panel / one of its views"),
+        ("Ctrl+I / Ctrl+1–6", "Show the Details panel / one of its views"),
         ("Ctrl+F", "Find tables by name or column (fuzzy)"),
         ("F5 or Ctrl+Enter", "Draw the ticked tables"),
         ("Esc", "Stop drawing; in the diagram or map, clear the selection"),
@@ -44,7 +44,8 @@ def show_shortcuts_help(parent) -> None:
         ("Diagram: arrows, Enter", "Move between tables, open one"),
         ("Map: drag, Ctrl+click", "Select a region, add or remove a table"),
         ("Map: arrows, Space, Enter, Ctrl+A", "Move, select, open, select the cluster"),
-        ("Table view: Space", "Tick the highlighted connected table"),
+        ("Relationships view: Space", "Tick the highlighted linked table"),
+        ("Columns view: drag a row", "Give the table its own column order"),
         ("Diagram: drag a relationship label", "Move it; drag its dot to rotate "
          "(Shift: 15° steps); double-click to reset"),
     ]

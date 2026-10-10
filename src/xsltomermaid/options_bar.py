@@ -118,7 +118,7 @@ class DiagramOptionsBar(QWidget):
             "Leave out Dynamics bookkeeping columns (importsequencenumber, "
             "overriddencreatedon, time-zone and solution columns), the …name and "
             "…yominame copies of a lookup, and …_base currency copies, from the "
-            "diagram, Table view and SQL. Keys are always kept."
+            "diagram and SQL (greyed in the Columns view). Keys are always kept."
         )
         self._hide_audit = QCheckBox("Hide audit and system links")
         self._hide_audit.setToolTip(
@@ -328,7 +328,7 @@ class DiagramOptionsBar(QWidget):
             self._system_chip.setText(f"System columns hidden ({share})  ✕")
             self._system_chip.setToolTip(
                 f"Dynamics system columns are {share} of all columns, so the diagram, "
-                "Table view and SQL leave them out. Click to show them."
+                "and SQL leave them out. Click to show them."
             )
             self._system_chip.setAccessibleName(
                 f"System columns hidden ({share}). Click to show them"
