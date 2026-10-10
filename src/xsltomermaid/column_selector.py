@@ -498,6 +498,29 @@ class ColumnSelector(QWidget):
     def excluded_pairs(self) -> set[tuple[str, str]]:
         return set(self._excluded)
 
+    def column_state(self) -> tuple[dict[str, list[str]], str, bool]:
+        """(dragged orders, shared sort, PK FK first), for a preset."""
+        sort = self._sort.itemData(self._shared_sort)
+        return {k: list(v) for k, v in self._custom.items()}, sort, self._keys_first.isChecked()
+
+    def restore(self, excluded=None, custom=None, sort=None, keys_first=None):
+        """Apply a preset's column choices (None leaves that one as it is)."""
+        if excluded is not None:
+            self._excluded = set(excluded)
+        if custom is not None:
+            self._custom = {k: list(v) for k, v in custom.items()}
+        if sort is not None and self._sort.findData(sort) >= 0:
+            self._shared_sort = self._sort.findData(sort)
+        if keys_first is not None:
+            self._keys_first.blockSignals(True)
+            self._keys_first.setChecked(keys_first)
+            self._keys_first.blockSignals(False)
+        self._undo = None
+        self._undo_btn.setVisible(False)
+        self._sync_sort_controls()
+        self._redraw_rows()
+        self._sync_checks()
+
     # -- helpers -------------------------------------------------------------
     def _apply_filter_text(self, text: str):
         needle = text.strip().lower()

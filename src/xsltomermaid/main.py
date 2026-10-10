@@ -121,7 +121,7 @@ from .excel_to_mermaid import (
     wrap_mermaid_html,
 )
 from .make_sample import write_sample
-from .selection_preset import dump_selection_toml, load_selection_toml
+from .selection_preset import Preset, dump_preset, load_preset
 from .map_view import SchemaMapView
 from .schema_map import (
     clusters_of,
@@ -2043,10 +2043,18 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        text = dump_selection_toml(
+        # The ticked tables, and the work done on them: column choices and
+        # moved relationship labels.
+        custom, sort, keys_first = self._columns.column_state()
+        text = dump_preset(Preset(
             self._loaded_name,
             self._selector.selected_tables(),
-        )
+            hidden_columns=self._columns.excluded_pairs(),
+            column_order=custom,
+            column_sort=sort,
+            keys_first=keys_first,
+            label_layout=self._diagram_view.label_edits(),
+        ))
         try:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(text)
@@ -2078,7 +2086,8 @@ class MainWindow(QMainWindow):
         try:
             with open(path, encoding="utf-8") as handle:
                 text = handle.read()
-            source_name, selected = load_selection_toml(text)
+            preset = load_preset(text)
+            source_name, selected = preset.filename, preset.selected_tables
         except OSError:
             preset_name = os.path.basename(path) or "selected preset"
             QMessageBox.critical(
@@ -2119,6 +2128,13 @@ class MainWindow(QMainWindow):
             return
 
         applied, missing = self._selector.set_selected_tables(matched)
+        # Column choices and label moves, when the preset has them (older
+        # presets only list tables, and leave these as they are).
+        self._columns.restore(
+            preset.hidden_columns, preset.column_order, preset.column_sort, preset.keys_first
+        )
+        if preset.label_layout is not None:
+            self._diagram_view.set_label_edits(preset.label_layout)
         self._render_selection()
         if missing:
             self._status.setText(

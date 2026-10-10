@@ -1469,6 +1469,15 @@ class DiagramView(QWidget):
     def has_label_edits(self) -> bool:
         return bool(self._label_edits)
 
+    def label_edits(self) -> dict[str, list[float]]:
+        """The moved labels: ``{label key: [angle, dx, dy]}``."""
+        return {k: list(v) for k, v in self._label_edits.items()}
+
+    def set_label_edits(self, edits: dict[str, list[float]]):
+        """Replace the moved labels (from a preset); applied on the next draw."""
+        self._label_edits = {str(k): [float(x) for x in v] for k, v in edits.items()}
+        self.labels_changed.emit()
+
     def reset_labels(self):
         """Put every relationship label back where Mermaid placed it."""
         self._label_edits.clear()
