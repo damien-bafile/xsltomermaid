@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -22,6 +22,7 @@ from PySide6.QtGui import (
     QTransform,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -152,6 +153,25 @@ class _MapGraphicsView(QGraphicsView):
         return self.transform().m11() / (self.fit_scale or 1.0)
 
 
+# From this many tables the map is computed on a worker thread (over a second
+# for a 1,772-table Dynamics export); smaller ones are instant, so they're
+# built in place.
+_BUILD_IN_BACKGROUND_FROM = 400
+
+
+class _MapBuilder(QThread):
+    """Computes a map off the UI thread. Pure Python, no widgets touched."""
+
+    built = Signal(int, object)  # generation, SchemaMap
+
+    def __init__(self, generation: int, schema, hidden, parent=None):
+        super().__init__(parent)
+        self._generation, self._schema, self._hidden = generation, schema, hidden
+
+    def run(self):  # noqa: D401 - QThread entry point
+        self.built.emit(self._generation, build_map(self._schema, self._hidden))
+
+
 class SchemaMapView(QWidget):
     """Summary bar, the map, and the list of unconnected tables."""
 
@@ -174,6 +194,9 @@ class SchemaMapView(QWidget):
         self._ticked: set[str] = set()
         self._filter = ""
         self._matches = None  # the list's search, or None
+        self._generation = 0  # bumped per build; a stale background result is dropped
+        self._builders: set[_MapBuilder] = set()
+        self._building = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -325,6 +348,7 @@ class SchemaMapView(QWidget):
     def set_schema(self, schema: Schema | None):
         """Point the map at a schema (computed lazily, when first shown)."""
         self._schema = schema
+        self._generation += 1  # a build still running is for the old schema
         self._map = None
         self._drawn = False
         self._scene.clear()
@@ -348,25 +372,82 @@ class SchemaMapView(QWidget):
         if self._schema is None or self._drawn:
             return
         if self._map is None:
-            self._rebuild()
+            self._rebuild(wait=True)
         else:
             self._present()
 
     def ensure_map(self) -> SchemaMap | None:
         """The map, computed now if it hasn't been (drawn when first shown)."""
         if self._map is None and self._schema is not None:
-            hidden = HIDDEN_BY_DEFAULT if self._hide.isChecked() else frozenset()
-            self._map = build_map(self._schema, hidden)
+            self._generation += 1  # this result wins over one in flight
+            self._map = build_map(self._schema, self._hidden_links())
             self._drawn = False
+            if self._building:  # the background one is now dropped: show this
+                self._set_building(False)
+                if self.isVisible():
+                    self._present()
         return self._map
 
-    def _rebuild(self):
+    def _hidden_links(self):
+        return HIDDEN_BY_DEFAULT if self._hide.isChecked() else frozenset()
+
+    def _rebuild(self, wait: bool = False):
+        """Compute the map and draw it. A big schema is computed on a worker
+        thread, with "Building the map…" showing, so the window keeps
+        responding; ``wait`` (a capture that must have it now) builds in place."""
         if self._schema is None:
             return
-        hidden = HIDDEN_BY_DEFAULT if self._hide.isChecked() else frozenset()
-        self._map = build_map(self._schema, hidden)
+        self._generation += 1
+        if wait or len(self._schema.tables) < _BUILD_IN_BACKGROUND_FROM:
+            self._apply_built(self._generation, build_map(self._schema, self._hidden_links()))
+            return
+        self._map = None  # nothing stale to read while it computes
+        self._set_building(True)
+        builder = _MapBuilder(self._generation, self._schema, self._hidden_links(), self)
+        builder.built.connect(self._apply_built)
+        builder.finished.connect(lambda b=builder: self._builders.discard(b))
+        builder.finished.connect(builder.deleteLater)
+        self._builders.add(builder)
+        builder.start()
+
+    def _apply_built(self, generation: int, built: SchemaMap):
+        if generation != self._generation:
+            return  # the schema or the audit setting changed since it started
+        self._set_building(False)
+        self._map = built
         self._present()
         self.map_rebuilt.emit()
+
+    def _set_building(self, on: bool):
+        """Say the map is being computed: the summary, and a busy cursor over it."""
+        self._building = on
+        if on:
+            self._scene.clear()
+            self._items = {}
+            self._summary.setText("Building the map…")
+            # Said where the eye is too: the middle of the (empty) canvas.
+            note = self._scene.addSimpleText("Building the map…")
+            font = note.font()
+            font.setPointSizeF(font.pointSizeF() * 1.25)
+            note.setFont(font)
+            note.setBrush(QColor(_muted_hex(self)))
+            # Text size whatever the view's zoom, centred on the origin.
+            note.setFlag(QGraphicsItem.ItemIgnoresTransformations)
+            box = note.boundingRect()
+            note.setTransform(QTransform.fromTranslate(-box.width() / 2, -box.height() / 2))
+            self._view.centerOn(0, 0)
+            self._view.viewport().setCursor(Qt.BusyCursor)
+        else:
+            self._view.viewport().unsetCursor()
+
+    def is_building(self) -> bool:
+        return self._building
+
+    def wait_for_build(self):
+        """Block until a background build finishes (tests and captures)."""
+        for builder in list(self._builders):
+            builder.wait()
+        QApplication.processEvents()
 
     def _present(self):
         """Draw the computed map and fit it to the view."""

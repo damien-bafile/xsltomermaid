@@ -1446,6 +1446,7 @@ class MainWindow(QMainWindow):
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/splitter3", self._body.saveState())
         settings.setValue("window/details_view", self._tabs.tabText(self._tabs.currentIndex()))
+        self._map_view.wait_for_build()  # a running worker thread can't outlive the window
         # The view's temp folder (a copy of mermaid.js) and the preview's.
         self._diagram_view.cleanup()
         if self._preview_dir is not None:
@@ -1973,7 +1974,15 @@ class MainWindow(QMainWindow):
         if rows is None or self._tabs.isHidden() or self._tabs.currentWidget() is not self._table_stack:
             return
         self._pending_rows = None
-        self._populate_table(rows)
+        # Up to a second for a big file: say so, with a busy cursor.
+        self._status.setText(f"Filling the Data view ({len(rows):,} rows)…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()  # paint the message before the work
+        try:
+            self._populate_table(rows)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._status.setText(f"Data view: {len(rows):,} rows read from the spreadsheet.")
 
     def _populate_table(self, rows: list[dict]):
         # Build a plain 2-D grid of strings (loose header matching so extra or

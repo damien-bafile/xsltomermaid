@@ -1872,6 +1872,34 @@ def test_big_folded_link_groups_are_built_when_opened():
     del app
 
 
+def test_a_big_map_is_built_in_the_background_with_a_busy_state(monkeypatch):
+    from xsltomermaid import map_view
+
+    monkeypatch.setattr(map_view, "_BUILD_IN_BACKGROUND_FROM", 20)  # "big", but quick
+    app, window = _big_window(n=40)
+    window.show()
+    mv = window._map_view
+    window.show_map(True)  # starts the build; the window keeps responding
+    assert mv.is_building() and mv._summary.text() == "Building the map…"
+    assert mv._view.viewport().cursor().shape() == app_module.Qt.BusyCursor
+    mv.wait_for_build()
+    assert not mv.is_building() and "H" in mv._items
+    assert mv._view.viewport().cursor().shape() != app_module.Qt.BusyCursor
+    # A result for an older setting is dropped: the newest build wins.
+    mv._hide.setChecked(False)  # rebuilds (in the background)
+    stale = mv._generation
+    mv._hide.setChecked(True)  # and again, before the first finished
+    mv.wait_for_build()
+    assert mv._generation == stale + 1 and not mv.is_building()
+    # Asking for the map mid-build (the list's cluster sort) clears the busy state.
+    mv._hide.setChecked(False)
+    assert mv.ensure_map() is not None and not mv.is_building()
+    mv.wait_for_build()
+    window.close()  # waits for any worker
+    window._diagram_view.cleanup()
+    del app
+
+
 # -- schema map integration -------------------------------------------------------
 def _big_window(n=70):
     from xsltomermaid.excel_to_mermaid import Relationship
