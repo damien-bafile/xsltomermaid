@@ -497,6 +497,7 @@ class MainWindow(QMainWindow):
         # by default so the canvas gets the width.
         self._tabs = tabs
         self._diagram_tab = diagram_tab
+        tabs.currentChanged.connect(self._fill_data_if_shown)
         tabs.setMinimumWidth(300)
         tabs.setVisible(False)
         self._details_btn = QToolButton()
@@ -1362,11 +1363,13 @@ class MainWindow(QMainWindow):
                 toggle.blockSignals(False)
         self._details_btn.setArrowType(Qt.RightArrow if visible else Qt.LeftArrow)
         app_settings().setValue("window/details_open", visible)
+        self._fill_data_if_shown()
 
     def show_details(self, widget):
         """Open the Details panel on one of its views."""
         self._tabs.setCurrentWidget(widget)
         self.set_details_visible(True)
+        self._fill_data_if_shown()
 
     # -- recent files and session state --------------------------------------
     def recent_files(self) -> list[str]:
@@ -1570,8 +1573,12 @@ class MainWindow(QMainWindow):
         self._schema = schema
         self._loaded_name = os.path.basename(path)
         self._render_confirmed_sig = None  # new file: forget the prior confirmation
-        self._populate_table(rows)
+        # The Data view is filled the first time it's shown: most loads never
+        # open it, and the grid took a third of a big file's load.
+        self._pending_rows = rows
+        self._table_model.set_rows([])
         self._table_stack.setCurrentWidget(self._table)
+        self._fill_data_if_shown()
         self._remember_recent(path)
         # The big drop target has done its job; shrink it to a file chip so the
         # tabs get the height, and wake up the (until now inert) table picker.
@@ -1960,20 +1967,34 @@ class MainWindow(QMainWindow):
         hub = max(sorted(degree), key=lambda name: degree[name])
         return next((e for e, t in self._entity_to_table.items() if t == hub), "")
 
+    def _fill_data_if_shown(self, *_args):
+        """Fill the Data view from the loaded rows once it's on screen."""
+        rows = getattr(self, "_pending_rows", None)
+        if rows is None or self._tabs.isHidden() or self._tabs.currentWidget() is not self._table_stack:
+            return
+        self._pending_rows = None
+        self._populate_table(rows)
+
     def _populate_table(self, rows: list[dict]):
         # Build a plain 2-D grid of strings (loose header matching so extra or
         # renamed columns still line up) and hand it to the model in one reset —
         # no per-cell widgets.
         keyed_headers = [self._key(h) for h in EXPECTED_HEADERS]
+        # Every row has the same few keys: match each one to its column once,
+        # not once per cell (1.3 million calls on a big export).
+        where: dict[str, int | None] = {}
+        width = len(keyed_headers)
         data: list[list[str]] = []
         for row in rows:
-            row_by_key = {self._key(k): v for k, v in row.items()}
-            data.append(
-                [
-                    "" if row_by_key.get(k) is None else str(row_by_key.get(k))
-                    for k in keyed_headers
-                ]
-            )
+            line = [""] * width
+            for k, v in row.items():
+                if k not in where:
+                    key = self._key(k)
+                    where[k] = keyed_headers.index(key) if key in keyed_headers else None
+                at = where[k]
+                if at is not None and v is not None:
+                    line[at] = str(v)
+            data.append(line)
         self._table_model.set_rows(data)
         self._table.resizeColumnsToContents()
         # Keep any single long free-text cell (Description, DefaultValue, …) from
