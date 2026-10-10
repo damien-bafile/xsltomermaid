@@ -147,6 +147,15 @@ def _blend(a: QColor, b: QColor, f: float) -> QColor:
     )
 
 
+def _font_size(scale: float = 1.0) -> str:
+    """A stylesheet font size relative to the app font, so text follows the
+    system text size (fixed px sizes ignored it)."""
+    from PySide6.QtWidgets import QApplication
+
+    base = QApplication.font().pointSizeF()
+    return f"font-size: {(base if base > 0 else 9.0) * scale:.1f}pt;"
+
+
 def _muted_hex(widget) -> str:
     """A subdued but legible secondary-text colour for the current palette.
 

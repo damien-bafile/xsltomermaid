@@ -83,6 +83,8 @@ class DiagramOptionsBar(QWidget):
         for combo in (self._theme, self._background):
             combo.currentIndexChanged.connect(self._stop_following_system)
         self._orientation.setToolTip("Orientation: which way the diagram flows.")
+        # Never squeezed to "Left → I": the row wraps before that.
+        self._orientation.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self._theme.setToolTip("Theme: the diagram's colours.")
         self._background.setToolTip(
             "Canvas background: the view only. Exports use their own background "
@@ -147,6 +149,8 @@ class DiagramOptionsBar(QWidget):
         self._diagram_only: list[QWidget] = []
         self._row1_labels: list[QLabel] = []
         self._full_width = 0
+        self._wrapped = False  # Labels and Keys only on a line of their own
+        self._compact_width = 0
         # Theme and background are set once and rarely touched, so they sit
         # behind More; the row keeps room for its labels at narrow widths.
         for label, widget in [
@@ -209,6 +213,12 @@ class DiagramOptionsBar(QWidget):
         self._diagram_only.append(self._more)
         self._row1 = row1
         outer.addLayout(row1)
+        # Where Labels and Keys only go when even the short row doesn't fit
+        # (a narrow canvas beside the list and the Details panel).
+        self._wrap_row = QHBoxLayout()
+        self._wrap_row.setSpacing(8)
+        self._wrap_row.addStretch(1)
+        outer.addLayout(self._wrap_row)
 
         # Two lines (looks, then content) so neither is squeezed in a narrow
         # canvas.
@@ -268,6 +278,24 @@ class DiagramOptionsBar(QWidget):
         for label in self._row1_labels:
             label.setVisible(not compact)
         self._show_rel_labels.setText("La&bels" if compact else "Relationship la&bels")
+        # Still short of room: the two checkboxes move to a line of their own,
+        # rather than the row overlapping its controls.
+        margins = self.layout().contentsMargins()
+        if compact and not self._wrapped:
+            self._row1.invalidate()  # the labels were just hidden: measure without them
+            self._compact_width = self._row1.sizeHint().width() + margins.left() + margins.right()
+        wrap = compact and self.width() < self._compact_width
+        if wrap != self._wrapped:
+            self._wrapped = wrap
+            boxes = (self._show_rel_labels, self._keys_only)
+            for box in boxes:
+                (self._row1 if wrap else self._wrap_row).removeWidget(box)
+            at = self._row1.indexOf(self._orientation) + 2  # after its spacing
+            for i, box in enumerate(boxes):
+                if wrap:
+                    self._wrap_row.insertWidget(i, box)
+                else:
+                    self._row1.insertWidget(at + i, box)
 
     # -- state chips --------------------------------------------------------
     def _chip(self, on_click) -> QPushButton:
@@ -327,7 +355,7 @@ class DiagramOptionsBar(QWidget):
             share = f"{self._system_share:.0%}"
             self._system_chip.setText(f"System columns hidden ({share})  ✕")
             self._system_chip.setToolTip(
-                f"Dynamics system columns are {share} of all columns, so the diagram, "
+                f"Dynamics system columns are {share} of all columns, so the diagram "
                 "and SQL leave them out. Click to show them."
             )
             self._system_chip.setAccessibleName(

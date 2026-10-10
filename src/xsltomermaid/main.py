@@ -400,6 +400,9 @@ class MainWindow(QMainWindow):
         self._tables_view = TablesView()
         self._tables_view.table_picked.connect(self._focus_table)
         self._tables_view.columns_requested.connect(self._open_columns)
+        self._tables_view.relationships_requested.connect(
+            lambda name: (self._focus_table(name), self.show_details(self._relations))
+        )
         tabs.addTab(self._tables_view, "Tables")
         tabs.setTabToolTip(0, "The tables in the diagram")
 
@@ -474,7 +477,7 @@ class MainWindow(QMainWindow):
         # Lasting states the app chose (audit links hidden, automatic Keys
         # only) sit beside it as chips, each undone with a click.
         for chip in self._options_bar.state_chips():
-            self._diagram_view.add_status_widget(chip)
+            self._diagram_view.add_status_chip(chip)
         # The canvas shows either the ER diagram or, for big schemas, the map.
         self._map_view = SchemaMapView()
         self._canvas = QStackedWidget()
@@ -485,7 +488,9 @@ class MainWindow(QMainWindow):
         # The raw rows are a reference, not where work happens: last.
         tabs.addTab(self._table_stack, "Data")
         tabs.setTabToolTip(tabs.indexOf(self._table_stack), "The rows read from the spreadsheet")
-        tabs.setUsesScrollButtons(False)
+        # Six views don't fit a narrow panel: scroll arrows keep every tab
+        # reachable by mouse (Ctrl+1–6 reach them from the keyboard).
+        tabs.setUsesScrollButtons(True)
 
         # Diagram-first: the diagram is the centre of the window, always in
         # view; the other views sit in a Details panel on the right, closed

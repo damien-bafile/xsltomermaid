@@ -11,6 +11,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QHeaderView,
+    QMenu,
     QLabel,
     QLineEdit,
     QTreeWidget,
@@ -36,6 +37,7 @@ class TablesView(QWidget):
 
     table_picked = Signal(str)
     columns_requested = Signal(str)
+    relationships_requested = Signal(str)
 
     _ROLE_TABLE = Qt.UserRole
     _SHOWN, _OPEN = 1, 2
@@ -73,6 +75,8 @@ class TablesView(QWidget):
         self._tree.currentItemChanged.connect(self._on_current)
         self._tree.itemClicked.connect(self._on_clicked)
         self._tree.itemActivated.connect(self._on_activated)
+        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._menu)
         for widget in (self._meta, self._empty, self._filter):
             layout.addWidget(widget)
         layout.addWidget(self._tree, 1)
@@ -89,7 +93,8 @@ class TablesView(QWidget):
             item = QTreeWidgetItem([name, f"{shown:,} of {total:,}", "Columns ›"])
             item.setData(0, self._ROLE_TABLE, name)
             item.setTextAlignment(self._SHOWN, Qt.AlignRight | Qt.AlignVCenter)
-            item.setToolTip(self._OPEN, f"Choose {name}'s columns")
+            item.setToolTip(self._OPEN, f"Choose {name}'s columns (Enter)")
+            item.setData(self._OPEN, Qt.AccessibleTextRole, f"Open {name}'s columns (Enter)")
             font = item.font(self._OPEN)
             font.setUnderline(True)
             item.setFont(self._OPEN, font)
@@ -133,6 +138,16 @@ class TablesView(QWidget):
 
     def _on_activated(self, item, _column):
         self.columns_requested.emit(item.data(0, self._ROLE_TABLE))
+
+    def _menu(self, pos):
+        item = self._tree.itemAt(pos)
+        if item is None:
+            return
+        name = item.data(0, self._ROLE_TABLE)
+        menu = QMenu(self)
+        menu.addAction("Columns", lambda: self.columns_requested.emit(name))
+        menu.addAction("Relationships", lambda: self.relationships_requested.emit(name))
+        menu.exec(self._tree.viewport().mapToGlobal(pos))
 
     def _apply_filter_text(self, text: str):
         needle = text.strip().lower()

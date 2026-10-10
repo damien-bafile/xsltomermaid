@@ -34,6 +34,7 @@ from .theme import (
     announce,
     status_icon,
     _control_border_hex,
+    _font_size,
 )
 from .updates import (
     fetch_latest_release,
@@ -110,7 +111,7 @@ class DropArea(QLabel):
                 f"  border: 2px solid {_ACCENT};"
                 "  border-radius: 12px;"
                 f"  color: {_link_hex(self)};"
-                "  font-size: 15px;"
+                f"  {_font_size(1.25)}"
                 f"  background: {_ACCENT_WASH};"
                 "}"
             )
@@ -150,7 +151,7 @@ class DropArea(QLabel):
                 f"  border: 1px solid {_control_border_hex(self)};"
                 "  border-radius: 8px;"
                 f"  color: {_muted_hex(self)};"
-                "  font-size: 13px;"
+                f"  {_font_size(1.08)}"
                 "  padding: 4px 12px;"
                 "}"
                 + focus
@@ -161,7 +162,7 @@ class DropArea(QLabel):
                 f"  border: 2px dashed {_line_hex(self)};"
                 "  border-radius: 12px;"
                 f"  color: {_muted_hex(self)};"
-                "  font-size: 15px;"
+                f"  {_font_size(1.25)}"
                 "}"
                 + focus
             )

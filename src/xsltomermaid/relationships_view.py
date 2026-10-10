@@ -14,6 +14,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QCheckBox,
     QHeaderView,
+    QMenu,
     QLabel,
     QTreeWidget,
     QTreeWidgetItem,
@@ -35,20 +36,29 @@ def _join_columns(rel) -> list[tuple[str, str]]:
     return [(rel.child_table, c) for c in child] + [(rel.parent_table, p) for p in rel.parent_columns]
 
 
-def extended_relations(relationships, name: str) -> dict[str, list[tuple[str, object]]]:
-    """Tables two links from ``name``: ``{via table: [(table, relationship)]}``.
-
-    Either direction on both links. Leaves out the tables ``name`` already
-    links to directly, ``name`` itself, and audit and system links (they reach
-    nearly every table, so through them everything would be "extended").
-    """
-    key = name.lower()
+def link_index(relationships) -> dict[str, list[tuple[str, object]]]:
+    """``{table: [(linked table, relationship)]}`` both ways, without audit
+    and system links (they reach nearly every table)."""
     links: dict[str, list[tuple[str, object]]] = defaultdict(list)
     for rel in relationships:
         if is_hidden_link(rel):
             continue
         links[rel.child_table.lower()].append((rel.parent_table, rel))
         links[rel.parent_table.lower()].append((rel.child_table, rel))
+    return links
+
+
+def extended_relations(relationships, name: str, links=None) -> dict[str, list[tuple[str, object]]]:
+    """Tables two links from ``name``: ``{via table: [(table, relationship)]}``.
+
+    Either direction on both links. Leaves out the tables ``name`` already
+    links to directly, ``name`` itself, and audit and system links (through
+    them everything would be "extended"). ``links`` is a ready
+    :func:`link_index` of ``relationships``.
+    """
+    key = name.lower()
+    if links is None:
+        links = link_index(relationships)
     direct = {other.lower() for other, _r in links.get(key, [])}
     result: dict[str, list[tuple[str, object]]] = {}
     for via in sorted({o for o, _r in links.get(key, []) if o.lower() != key}, key=str.lower):
@@ -80,12 +90,15 @@ class RelationshipsView(QWidget):
     _ROLE_JOIN = Qt.UserRole + 1  # [(table, column), ...] the link joins on
     _ROLE_ADD = Qt.UserRole + 2  # [table, ...] the Add action ticks
     _ADD_COL = 1
+    _LAZY_FROM = 50  # a folded group this big gets its rows when first opened
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._table = ""
         self._drawn: set[str] = set()
         self._relationships: list = []
+        self._index: tuple[int, dict] | None = None  # (id of relationships, link_index)
+        self._pending: dict[int, tuple] = {}  # folded group -> (rows, via) to add on opening
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
@@ -118,6 +131,9 @@ class RelationshipsView(QWidget):
         self._links.itemClicked.connect(self._on_link_clicked)
         self._links.itemActivated.connect(self._on_link_activated)
         self._links.currentItemChanged.connect(self._on_link_current)
+        self._links.itemExpanded.connect(self._fill_group)
+        self._links.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._links.customContextMenuRequested.connect(self._menu)
         header = self._links.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -147,6 +163,7 @@ class RelationshipsView(QWidget):
 
     def _fill(self):
         self._links.clear()
+        self._pending.clear()
         self.reference_picked.emit("", [])
         name = self._table
         key = name.lower()
@@ -176,7 +193,11 @@ class RelationshipsView(QWidget):
         self._add_group("Has foreign keys to", [(r.parent_table, r) for r in outgoing])
         self._add_group("Targeted by foreign keys from", [(r.child_table, r) for r in incoming])
         if self._extended.isChecked():
-            self._add_extended(extended_relations(self._relationships, name))
+            if self._index is None or self._index[0] != id(self._relationships):
+                self._index = (id(self._relationships), link_index(self._relationships))
+            self._add_extended(
+                extended_relations(self._relationships, name, self._index[1])
+            )
 
     def _add_group(self, title: str, pairs):
         # The same rule as the map, the diagram and the link counts.
@@ -186,8 +207,7 @@ class RelationshipsView(QWidget):
         self._add_rows(group, regular)
         if audit:
             folded = self._group(group, f"Audit and system links ({len(audit):,})")
-            self._add_rows(folded, audit)
-            folded.setExpanded(False)
+            self._add_folded(folded, audit)
         group.setExpanded(True)
 
     def _add_extended(self, by_via: dict):
@@ -199,9 +219,28 @@ class RelationshipsView(QWidget):
             empty.setFlags(Qt.ItemIsEnabled)
         for via, rows in by_via.items():
             sub = self._group(group, f"via {via} ({len(rows):,})")
-            self._add_rows(sub, rows, via=via)
-            sub.setExpanded(len(by_via) == 1)
+            if len(by_via) == 1:
+                self._add_rows(sub, rows, via=via)
+                sub.setExpanded(True)
+            else:
+                self._add_folded(sub, rows, via)
         group.setExpanded(True)
+
+    def _add_folded(self, group, rows, via: str = ""):
+        """Rows for a closed group: built now if few, else when first opened
+        (a Dynamics hub has thousands of audit links)."""
+        if len(rows) < self._LAZY_FROM:
+            self._add_rows(group, rows, via=via)
+        else:
+            self._pending[id(group)] = (rows, via)
+            group.setChildIndicatorPolicy(QTreeWidgetItem.ShowIndicator)
+        group.setExpanded(False)
+
+    def _fill_group(self, group):
+        pending = self._pending.pop(id(group), None)
+        if pending is not None:
+            rows, via = pending
+            self._add_rows(group, rows, via=via)
 
     @staticmethod
     def _group(parent, text: str):
@@ -224,6 +263,10 @@ class RelationshipsView(QWidget):
             row.setData(0, self._ROLE_ADD, to_add)
             row.setToolTip(0, f"{other} (through {rel.label}). Double-click to move to it.")
             row.setToolTip(self._ADD_COL, f"Tick {' and '.join(to_add)} in the diagram" if to_add else "")
+            row.setData(
+                self._ADD_COL, Qt.AccessibleTextRole,
+                f"Add {' and '.join(to_add)} to the diagram (Space)" if to_add else "In the diagram",
+            )
             if to_add:
                 font = row.font(self._ADD_COL)
                 font.setUnderline(True)
@@ -246,6 +289,21 @@ class RelationshipsView(QWidget):
         other = item.data(0, self._ROLE_TABLE)
         if other:
             self.select_requested.emit(other)
+
+    def _menu(self, pos):
+        item = self._links.itemAt(pos)
+        other = item.data(0, self._ROLE_TABLE) if item is not None else None
+        if not other:
+            return
+        menu = QMenu(self)
+        to_add = item.data(0, self._ROLE_ADD)
+        if to_add:
+            menu.addAction(
+                f"Add {' and '.join(to_add)} to the diagram",
+                lambda: self.add_requested.emit(list(to_add)),
+            )
+        menu.addAction(f"Go to {other}", lambda: self.select_requested.emit(other))
+        menu.exec(self._links.viewport().mapToGlobal(pos))
 
     def keyPressEvent(self, event):  # noqa: N802 (Qt naming)
         item = self._links.currentItem() if self._links.hasFocus() else None
