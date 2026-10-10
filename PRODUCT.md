@@ -81,7 +81,7 @@ schema-to-diagram converter with Mermaid as its rendering engine.
 - **Mermaid ER parser limitation:** attribute types must be a single plain word, so
   `varchar(100)` / `decimal(18,2)` are flattened to `varchar_100` / `decimal_18_2`.
 - **Default rendered layout:** Left → Right.
-- **Current version:** see `src/xsltomermaid/__init__.py` (1.1.1 at the last update).
+- **Current version:** see `src/xsltomermaid/__init__.py` (1.2.0 at the last update).
 
 ## Brand Commitments
 
