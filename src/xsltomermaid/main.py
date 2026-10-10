@@ -1473,7 +1473,7 @@ class MainWindow(QMainWindow):
     def load_file(self, path: str):
         """Load a file synchronously (used by tests and the CLI)."""
         try:
-            rows, schema, mermaid_text = self._importer.load(path)
+            rows, schema, mermaid_text = self._importer.load(path, with_mermaid=False)
         except Exception as exc:  # noqa: BLE001 - surface any parse error to the user
             self._pending_path = path
             self._on_load_failed(describe_load_error(exc))

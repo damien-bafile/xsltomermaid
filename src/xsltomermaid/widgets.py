@@ -215,8 +215,9 @@ class LoadWorker(QThread):
                     previous_stage = stage
                 self.progressed.emit(percent)
 
+            # The window draws only the ticked tables: no whole-schema Mermaid.
             rows, schema, mermaid_text = self._importer.load(
-                self._path, report_progress
+                self._path, report_progress, with_mermaid=False
             )
             self.loaded.emit(rows, schema, mermaid_text)
         except Exception as exc:  # noqa: BLE001 - surface any parse error to the UI
