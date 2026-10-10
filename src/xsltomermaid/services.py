@@ -34,9 +34,15 @@ class SchemaImportService:
     """Load a workbook and produce its parsed schema and Mermaid source."""
 
     def load(
-        self, path: str, progress: ProgressReporter | None = None
+        self, path: str, progress: ProgressReporter | None = None,
+        with_mermaid: bool = True,
     ) -> tuple[list[dict], Schema, str]:
-        """Return workbook rows, the schema model, and its Mermaid source."""
+        """Return workbook rows, the schema model, and its Mermaid source.
+
+        ``with_mermaid=False`` skips the whole-schema Mermaid (returning ""):
+        the window draws only the ticked tables, and for a 1,772-table export
+        the full text took ~0.6 s and 4 MB that nothing used.
+        """
 
         def report(stage: str, percent: int) -> None:
             if progress is not None:
@@ -54,6 +60,8 @@ class SchemaImportService:
                 "Building schema…", 50 + int(fraction * 40)
             ),
         )
+        if not with_mermaid:
+            return rows, schema, ""
         report("Generating diagram…", 90)
         mermaid_text = generate_mermaid(schema)
         report("Generating diagram…", 95)

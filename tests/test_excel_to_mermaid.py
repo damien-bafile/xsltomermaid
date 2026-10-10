@@ -316,6 +316,13 @@ def test_schema_import_service_coordinates_import_steps(monkeypatch):
         ("Generating diagram…", 90),
         ("Generating diagram…", 95),
     ]
+    # The window skips the whole-schema Mermaid: it draws only ticked tables.
+    called = []
+    monkeypatch.setattr(services, "generate_mermaid", lambda value: called.append(1) or "x")
+    assert services.SchemaImportService().load("schema.xlsx", with_mermaid=False) == (
+        rows, schema, ""
+    )
+    assert not called
 
 
 def test_generate_mermaid():
