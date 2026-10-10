@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -37,13 +38,22 @@ from .theme import (
 
 
 class _ColumnTree(QTreeWidget):
-    """A flat, checkable column list whose rows can be dragged into order."""
+    """A flat, checkable column list whose rows can be dragged into order, or
+    moved with Alt+Up / Alt+Down."""
 
     reordered = Signal()
+    move_requested = Signal(int)  # -1 up, +1 down
 
     def dropEvent(self, event):  # noqa: N802 (Qt naming)
         super().dropEvent(event)
         self.reordered.emit()
+
+    def keyPressEvent(self, event):  # noqa: N802 (Qt naming)
+        if event.modifiers() == Qt.AltModifier and event.key() in (Qt.Key_Up, Qt.Key_Down):
+            self.move_requested.emit(-1 if event.key() == Qt.Key_Up else 1)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class ColumnSelector(QWidget):
@@ -152,6 +162,8 @@ class ColumnSelector(QWidget):
         self._tree.itemChanged.connect(self._on_item_changed)
         self._tree.currentItemChanged.connect(self._on_current_changed)
         self._tree.reordered.connect(self._on_reordered)
+        self._tree.move_requested.connect(self._move)
+        self._tree.currentItemChanged.connect(lambda *_a: self._sync_move_buttons())
         body.addWidget(self._tree, 1)
 
         button_row = QHBoxLayout()
@@ -172,9 +184,22 @@ class ColumnSelector(QWidget):
         self._undo_btn.setVisible(False)
         button_row.addWidget(self._undo_btn)
         button_row.addStretch(1)
+        # The same moves as dragging, for the keyboard and a single click.
+        self._move_btns = []
+        for arrow, step, name in ((Qt.UpArrow, -1, "Move up"), (Qt.DownArrow, 1, "Move down")):
+            button = QToolButton()
+            button.setArrowType(arrow)
+            button.setAccessibleName(f"{name}: the selected column")
+            button.setToolTip(f"{name} (Alt+{'Up' if step < 0 else 'Down'})")
+            button.clicked.connect(lambda _c=False, s=step: self._move(s))
+            button_row.addWidget(button)
+            self._move_btns.append(button)
         body.addLayout(button_row)
 
-        self._hint = QLabel("Drag rows to reorder. Click a column to tint its row in the diagram.")
+        self._hint = QLabel(
+            "Drag rows, or Alt+Up / Alt+Down, to reorder. Click a column to tint "
+            "its row in the diagram."
+        )
         self._hint.setWordWrap(True)
         body.addWidget(self._hint)
         self.retheme()
@@ -250,8 +275,14 @@ class ColumnSelector(QWidget):
             excluded = (key, column.name.lower()) in self._excluded
             item.setCheckState(self._NAME, Qt.Unchecked if excluded else Qt.Checked)
             if drawn and not excluded and column.name.lower() not in on_canvas:
+                # Greyed and italic (not colour alone), and named for screen readers.
+                why = "Keys only" if opts.keys_only else "Hide system columns"
+                font = item.font(self._NAME)
+                font.setItalic(True)
                 for section in range(4):
                     item.setForeground(section, muted)
+                    item.setFont(section, font)
+                item.setData(self._NAME, Qt.AccessibleTextRole, f"{column.name}, hidden by {why}")
                 item.setToolTip(
                     self._NAME,
                     "Ticked, but Keys only leaves it out of the diagram."
@@ -263,6 +294,7 @@ class ColumnSelector(QWidget):
                 self._tree.setCurrentItem(item)
         self._updating = False
         self._apply_filter_text(self._filter.text())
+        self._sync_move_buttons()
         if new:  # a new table: no column is picked yet
             self.column_picked.emit("", "")
 
@@ -341,6 +373,30 @@ class ColumnSelector(QWidget):
     def _on_keys_first_changed(self, _on: bool):
         self._redraw_rows()
         self.changed.emit()
+
+    def _move(self, step: int):
+        """Move the current row up (-1) or down (+1), as a drag would."""
+        item = self._tree.currentItem()
+        if item is None or not self._tree.dragEnabled():
+            return
+        row = self._tree.indexOfTopLevelItem(item)
+        target = row + step
+        if not 0 <= target < self._tree.topLevelItemCount():
+            return
+        self._updating = True
+        self._tree.insertTopLevelItem(target, self._tree.takeTopLevelItem(row))
+        self._tree.setCurrentItem(item)
+        self._updating = False
+        self._tree.scrollToItem(item)
+        self._on_reordered()
+        self._sync_move_buttons()
+
+    def _sync_move_buttons(self):
+        item = self._tree.currentItem()
+        row = self._tree.indexOfTopLevelItem(item) if item is not None else -1
+        movable = row >= 0 and self._tree.dragEnabled()
+        self._move_btns[0].setEnabled(movable and row > 0)
+        self._move_btns[1].setEnabled(movable and row < self._tree.topLevelItemCount() - 1)
 
     def _on_reordered(self):
         if self._table is None:
@@ -447,8 +503,10 @@ class ColumnSelector(QWidget):
         needle = text.strip().lower()
         for item in self._rows():
             item.setHidden(needle not in item.text(self._NAME).lower())
-        # Dragging among a filtered few would scramble the hidden rows' places.
+        # Moving among a filtered few would scramble the hidden rows' places.
         self._tree.setDragEnabled(not needle)
+        if hasattr(self, "_move_btns"):
+            self._sync_move_buttons()
 
     def _rows(self):
         return [self._tree.topLevelItem(i) for i in range(self._tree.topLevelItemCount())]

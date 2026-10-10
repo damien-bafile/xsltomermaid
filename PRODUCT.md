@@ -54,9 +54,10 @@ schema-to-diagram converter with Mermaid as its rendering engine.
 - Relationships are derived from `ForeignKeyReference`, parsed flexibly
   (`dbo.Customer.CustomerID`, `Customer.CustomerID`, `Customer(CustomerID)`, and a bare
   `Customer` all resolve to the `Customer` table).
-- The GUI presents the work in tabs: **Extracted data**, **Columns**, **Mermaid source**,
-  and **Rendered diagram**. Users can select a subset of tables to include, and save/load
-  those selections as `.toml` presets (source filename included).
+- The GUI centres on the rendered diagram (or a schema map for big schemas), with the
+  table list on the left and a Details panel on the right: **Tables**, **Columns**,
+  **Relationships**, **Mermaid**, **SQL** and **Data**. Users tick the tables to include,
+  and save/load those selections as `.toml` presets (source filename included).
 - Frequently used in offline / enterprise settings; also runnable headless (CLI generation
   via `excel_to_mermaid.py`, and `--screenshot` / `--screenshot-diagram` self-capture for
   CI where no display is available).
@@ -80,7 +81,7 @@ schema-to-diagram converter with Mermaid as its rendering engine.
 - **Mermaid ER parser limitation:** attribute types must be a single plain word, so
   `varchar(100)` / `decimal(18,2)` are flattened to `varchar_100` / `decimal_18_2`.
 - **Default rendered layout:** Left → Right.
-- **Current version:** 0.5.1.
+- **Current version:** see `src/xsltomermaid/__init__.py` (1.1.1 at the last update).
 
 ## Brand Commitments
 

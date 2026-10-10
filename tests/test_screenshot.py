@@ -1782,6 +1782,92 @@ def test_relationships_view_adds_tables_linked_through_another(monkeypatch):
     del app
 
 
+def test_columns_move_with_the_keyboard_and_hidden_ones_are_marked_beyond_colour(tmp_path):
+    from PySide6.QtGui import QKeyEvent
+
+    app, window = _inspector_window(tmp_path)
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer"])
+    window._render_selection()
+    window._focus_table("Customer")
+    cols = window._columns
+    tree = cols._tree
+    first, second = tree.topLevelItem(0).text(0), tree.topLevelItem(1).text(0)
+    tree.setCurrentItem(tree.topLevelItem(1))
+    up, down = cols._move_btns
+    assert up.isEnabled() and up.accessibleName() == "Move up: the selected column"
+    tree.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, app_module.Qt.Key_Up, app_module.Qt.AltModifier))
+    assert [tree.topLevelItem(i).text(0) for i in range(2)] == [second, first]
+    assert tree.currentItem().text(0) == second and not up.isEnabled()  # at the top
+    assert cols._sort.currentData() == "dragged"  # the same as a drag
+    down.click()
+    assert [tree.topLevelItem(i).text(0) for i in range(2)] == [first, second]
+    cols._filter.setText("x")  # filtered: no moves (hidden rows would lose their place)
+    assert not up.isEnabled() and not down.isEnabled()
+    cols._filter.setText("")
+    window._options_bar._keys_only.setChecked(True)
+    hidden = [r for r in cols._rows() if r.toolTip(0).startswith("Ticked, but Keys only")]
+    assert hidden and all(r.font(0).italic() for r in hidden)
+    assert hidden[0].data(0, app_module.Qt.AccessibleTextRole).endswith(", hidden by Keys only")
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_a_narrow_canvas_wraps_the_options_and_scrolls_the_tabs():
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window.show()  # the bar measures its row only while it's shown
+    app.processEvents()
+    assert window._tabs.usesScrollButtons()  # every view reachable by mouse
+    bar = window._options_bar
+    bar.set_audit_share(0.74)
+    bar._hide_audit.blockSignals(True)  # no redraw: just the chip
+    bar._hide_audit.setChecked(True)
+    bar._hide_audit.blockSignals(False)
+    bar._sync_chips()
+    bar.resize(1600, bar.height())
+    bar._fit_labels()
+    assert not bar._wrapped and bar._row1.indexOf(bar._keys_only) >= 0
+    # The strip under a narrow diagram moves its chips to a line of their own.
+    view = window._diagram_view
+    view.resize(1600, view.height())
+    view._fit_strip()
+    assert view._chip_row.indexOf(bar._audit_chip) < 0
+    view.resize(300, view.height())
+    view._fit_strip()
+    assert view._chip_row.indexOf(bar._audit_chip) >= 0
+    assert bar._audit_chip.text() == "Audit links hidden (74%)  ✕"  # kept in full
+    bar.resize(320, bar.height())
+    bar._fit_labels()
+    assert bar._wrapped and bar._wrap_row.indexOf(bar._keys_only) >= 0
+    assert bar._row1.indexOf(bar._keys_only) < 0
+    bar.resize(1600, bar.height())
+    bar._fit_labels()
+    assert not bar._wrapped and bar._row1.indexOf(bar._show_rel_labels) == (
+        bar._row1.indexOf(bar._orientation) + 2
+    )
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_big_folded_link_groups_are_built_when_opened():
+    from xsltomermaid.excel_to_mermaid import Relationship
+
+    kids = [f"t{i}" for i in range(80)]
+    app, window = _window_with_schema(
+        ["systemuser", *kids],
+        [Relationship("systemuser", k, "createdby", ("createdby",), ("systemuserid",)) for k in kids],
+    )
+    window._focus_table("systemuser")
+    view = window._relations
+    folded = view._links.topLevelItem(1).child(0)
+    assert folded.text(0) == "Audit and system links (80)" and folded.childCount() == 0
+    folded.setExpanded(True)
+    assert folded.childCount() == 80 and folded.child(0).data(0, view._ROLE_TABLE) == "t0"
+    window._diagram_view.cleanup()
+    del app
+
+
 # -- schema map integration -------------------------------------------------------
 def _big_window(n=70):
     from xsltomermaid.excel_to_mermaid import Relationship

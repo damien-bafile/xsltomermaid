@@ -50,6 +50,7 @@ class RenderStyle:
 
 from PySide6.QtCore import (
     QByteArray,
+    QEvent,
     QEventLoop,
     QMarginsF,
     QRectF,
@@ -1310,6 +1311,15 @@ class DiagramView(QWidget):
                 "A picture of the diagram. Its text form is in the Mermaid tab."
             )
             layout.addLayout(self._strip)
+            # The window's state chips sit in the strip, or on a line of their
+            # own below it when the strip is short of room.
+            self._chips: list = []
+            self._chip_row = QHBoxLayout()
+            self._chip_row.setContentsMargins(6, 0, 4, 2)
+            self._chip_row.setSpacing(4)
+            self._chip_row.addStretch(1)
+            self._chips_wrapped = False
+            layout.addLayout(self._chip_row)
             self._zoom_timer = QTimer(self)
             self._zoom_timer.setInterval(200)
             self._zoom_timer.timeout.connect(self._update_zoom_label)
@@ -1383,6 +1393,45 @@ class DiagramView(QWidget):
         """Put a status widget (render status, Stop) at the strip's left end."""
         if self._view is not None:
             self._strip.insertWidget(self._strip.count() - 5, widget)
+
+    def add_status_chip(self, widget):
+        """Put a state chip in the strip; it moves below when room runs out."""
+        if self._view is None:
+            return
+        self._chips.append(widget)
+        self.add_status_widget(widget)
+        widget.installEventFilter(self)  # shown or hidden: re-check the room
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt naming)
+        if event.type() in (QEvent.Show, QEvent.Hide) and obj in getattr(self, "_chips", ()):
+            QTimer.singleShot(0, self._fit_strip)
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):  # noqa: N802 (Qt naming)
+        super().resizeEvent(event)
+        self._fit_strip()
+
+    def _fit_strip(self):
+        """Chips on the strip when it all fits, else on their own line (a
+        squeezed strip overlapped them)."""
+        if self._view is None or not self._chips:
+            return
+        self._strip.invalidate()
+        need = self._strip.sizeHint().width()
+        if self._chips_wrapped:
+            spacing = self._strip.spacing()
+            need += sum(c.sizeHint().width() + spacing for c in self._chips if not c.isHidden())
+        wrap = self.width() < need
+        if wrap == self._chips_wrapped:
+            return
+        self._chips_wrapped = wrap
+        at = self._strip.count() - 5 if not wrap else 0
+        for i, chip in enumerate(self._chips):
+            (self._strip if wrap else self._chip_row).removeWidget(chip)
+            if wrap:
+                self._chip_row.insertWidget(i, chip)
+            else:
+                self._strip.insertWidget(at + i, chip)
 
     def fit_to_view(self):
         """Reset zoom and size the diagram to the view, whatever Fit says."""

@@ -414,7 +414,7 @@ class TableSelector(QWidget):
             "A foreign key points from a child table to the parent it references."
         )
         self._path_hint.setWordWrap(True)
-        self._path_hint.setStyleSheet(f"color: {_muted_hex(self)}; font-size: 11px;")
+        self._path_hint.setStyleSheet(f"color: {_muted_hex(self)};")
         path_box.addWidget(self._path_hint)
 
         path_row = QHBoxLayout()
@@ -921,4 +921,4 @@ class TableSelector(QWidget):
         self._count.setStyleSheet(f"color: {muted};")
         self._legend.setStyleSheet(f"color: {muted};")
         self._path_heading.setStyleSheet(f"color: {muted};")
-        self._path_hint.setStyleSheet(f"color: {muted}; font-size: 11px;")
+        self._path_hint.setStyleSheet(f"color: {muted};")
