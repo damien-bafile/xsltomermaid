@@ -38,12 +38,6 @@ EXPORT_WARN_TABLES = 500
 MAX_RENDER_CHARS = 1_800_000
 
 
-# Building a checkable tree of every column gets heavy; above this many columns
-# the "All tables" view isn't built at once — the user picks a single table from
-# the dropdown instead (which is always fast, whatever the schema size).
-COLUMN_TREE_LIMIT = 10000
-
-
 _ACCEPTED_SUFFIXES = (".xlsx", ".xlsm", ".xltx", ".xltm")
 
 

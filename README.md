@@ -56,7 +56,7 @@ this export.
   The strip underneath shows the render status and **− / % / + / Fit** zoom
   controls. The percentage is the real on-screen scale. When you zoom or Fit
   below a readable size it says so, and picking a table in the list, map or
-  Table view goes back to a readable size centred on it.
+  Details panel goes back to a readable size centred on it.
 - **Relationship labels can be moved and rotated** to clear tables they
   overlap: click one, drag it to move it, drag its round handle to rotate it
   around its centre (Shift snaps to 15°; the text never reads upside down,
@@ -64,7 +64,7 @@ this export.
   kept while the app runs, survive redraws, go into PNG/SVG/PDF exports, and
   **Diagram → Reset label layout** puts them all back.
 - **Click a table** to select it: it's highlighted, and the table list scrolls
-  to it. **Double-click** (or **Enter**) opens it in the Table view. With the
+  to it. **Double-click** (or **Enter**) opens its Columns view. With the
   diagram focused, the **arrow keys** move between tables and **Esc** clears.
 - **The options bar** has Orientation (Left → Right by default), Relationship
   labels and *Keys only*. **More** adds the theme, the canvas background (the
@@ -113,14 +113,15 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
   (`importsequencenumber`, `overriddencreatedon`, time-zone and solution
   columns), the `…name` / `…yominame` copies of a lookup or choice, and
   `…_base` currency copies. Keys are always kept. They leave the diagram (each
-  table says "+N system columns hidden"), the Table view (folded) and the SQL;
+  table says "+N system columns hidden") and the SQL, and are greyed in the
+  Columns view;
   a chip under the diagram, or **More → Hide system columns**, shows them.
 - **Wide tables:** drawing tables that average more than 50 columns switches
   *Keys only* on, with a chip under the diagram to turn it off. **Undo draw**
   turns it off too.
 - **Keys only says what it left out:** each table ends with a
-  "+N hidden by Keys only" row, and the Table view counts the columns actually
-  drawn. A table with more than 12 key columns keeps its primary key and the
+  "+N hidden by Keys only" row, and the Tables and Columns views count the
+  columns actually drawn. A table with more than 12 key columns keeps its primary key and the
   foreign keys to tables in the diagram; the other foreign keys are counted in
   that row.
 - **Solution-layering columns** (`overwritetime`, `componentstate`) aren't
@@ -150,13 +151,15 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
 
 ### The Details panel
 
-Closed by default; open it with **Details**, **Ctrl+I**, or **Ctrl+1–5** for a
-specific view.
+Closed by default; open it with **Details**, **Ctrl+I**, or **Ctrl+1–6** for a
+specific view. Columns and Relationships show the selected table, and are
+disabled until one is selected.
 
 | View | What it shows |
 |---|---|
-| **Table** | The selected table's columns (tick to show them) and every table it has foreign keys to or is targeted by foreign keys from, each with **Add**. Audit and system links are folded into their own group, matching the map and the link counts. Selecting a connected table glows it orange in the diagram (beside the selected table's blue) when it's drawn, and tints the rows the two tables join on; double-click it to move to it. Selecting a column tints its row blue, and clicking a row in the diagram selects that column here. |
-| **Columns** | Include or leave out columns per table; sort by name or type; *PK, FK first*; **All / None / Keys only**, which can be undone. |
+| **Tables** | The tables in the diagram, with how many of their columns are drawn. Click one to select it; **Columns ›** (or Enter) also opens its columns. |
+| **Columns** | The selected table's columns, with their type, key (PK, FK) and whether they can be NULL. Tick to show or leave out; **All / None / Keys only** for the table, which can be undone. Sort by name or type, optionally *PK, FK first*, or drag rows to give the table its own order. Columns that Keys only or Hide system columns leaves out are greyed. Selecting a column tints its row blue, and clicking a row in the diagram selects that column here. |
+| **Relationships** | Every table the selected one has foreign keys to or is targeted by foreign keys from, each with **Add**. Audit and system links are folded into their own group, matching the map and the link counts. *Show tables linked through another table* adds the tables one more link away, grouped by the table between; their **Add** ticks both. Selecting a linked table glows it orange in the diagram (beside the selected table's blue) when it's drawn, and tints the rows the two tables join on; double-click it to move to it. A table with no relationships says so. |
 | **Mermaid** | The generated `erDiagram` source, syntax-coloured. |
 | **SQL** | A syntax-coloured T-SQL `SELECT` over the diagram's tables, joined on their foreign keys (composite keys included). Choose the start table, `INNER` or `LEFT` joins and a `TOP (n)` limit. Names are bracketed only where T-SQL needs it (**Quote all names** brackets every one). For Dynamics data, **Latest version only** keeps each record's newest row in a Synapse Link or Fabric copy (by `versionnumber`, without `IsDelete` rows), and **Active records only** keeps `statecode = 0`, each applied per table where it fits. Anything that can't be a clean join (a second foreign key between the same tables, a self-reference, a table with no path) is written as a `--` comment. |
 | **Data** | The rows read from the spreadsheet, sortable by column. Before a file loads, it explains the expected format. |
@@ -194,7 +197,7 @@ specific view.
 | F1 | The spreadsheet format |
 | Ctrl+M | Switch between diagram and map |
 | Ctrl+I | Show or hide the Details panel |
-| Ctrl+1 … Ctrl+5 | Details: Table · Columns · Mermaid · SQL · Data |
+| Ctrl+1 … Ctrl+6 | Details: Tables · Columns · Relationships · Mermaid · SQL · Data |
 | Ctrl++ · Ctrl+- · Ctrl+0 | Zoom in · out · true 100% (until **Fit**) |
 | Arrows · Enter | Move between tables · open one (diagram or map) |
 | Ctrl+E | Export the diagram |
@@ -272,8 +275,9 @@ erDiagram
 | `src/xsltomermaid/updates.py` | Checks the GitHub API for a newer release. No Qt. |
 | `src/xsltomermaid/main.py` | The main window, which wires everything together, and the CLI modes. |
 | `src/xsltomermaid/table_list.py` | The table list: filters, sorting, link counts, cluster headers. |
-| `src/xsltomermaid/inspector.py` | The Details panel's Table view. |
+| `src/xsltomermaid/tables_view.py` | The Details panel's Tables view. |
 | `src/xsltomermaid/column_selector.py` | The Details panel's Columns view. |
+| `src/xsltomermaid/relationships_view.py` | The Details panel's Relationships view. |
 | `src/xsltomermaid/options_bar.py` | The diagram options bar. |
 | `src/xsltomermaid/map_view.py` | The schema map (`QGraphicsView`). |
 | `src/xsltomermaid/highlight.py` | Syntax colouring for the SQL and Mermaid text (`QSyntaxHighlighter`). |

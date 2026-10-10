@@ -1,4 +1,4 @@
-"""The Details panel's Columns view: which columns each table shows."""
+"""The Details panel's Columns view: the selected table's columns."""
 
 from __future__ import annotations
 
@@ -6,10 +6,15 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
+from PySide6.QtGui import (
+    QColor,
+)
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -19,83 +24,89 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .config import COLUMN_TREE_LIMIT
 from .excel_to_mermaid import (
+    DiagramOptions,
     Schema,
     Table,
+    drawn_columns,
 )
-from .theme import _muted_hex
+from .theme import (
+    _muted_hex,
+    _plural,
+)
+
+
+class _ColumnTree(QTreeWidget):
+    """A flat, checkable column list whose rows can be dragged into order."""
+
+    reordered = Signal()
+
+    def dropEvent(self, event):  # noqa: N802 (Qt naming)
+        super().dropEvent(event)
+        self.reordered.emit()
 
 
 class ColumnSelector(QWidget):
-    """A tab with a checkable tree (table → columns) to choose diagram columns.
+    """The selected table's columns: tick to show, sort or drag to order.
 
-    Owns the set of *excluded* ``(table, column)`` pairs — columns are included
-    unless unticked — so the choice survives re-rendering and changing which
-    tables are shown.
+    Owns the set of *excluded* ``(table, column)`` pairs (columns are included
+    unless unticked) and the column order, so both survive re-rendering and
+    changing which tables are shown. The order is one sort for every table
+    (original, name, type; optionally keys first), unless a table's rows were
+    dragged: then that table keeps its own order until another sort is picked.
     """
 
     changed = Signal()  # the user changed which columns show, or their order
+    column_picked = Signal(str, str)  # (table, column) highlighted; ("", "") clears
 
-    # Item data roles.
-    _ROLE_KIND = Qt.UserRole  # "table" | "column"
-    _ROLE_KEYS = Qt.UserRole + 1  # (table_lower, column_lower, is_key)
+    _ROLE_NAME = Qt.UserRole  # the column's name
+    _ROLE_KEY = Qt.UserRole + 1  # True for a PK or FK column
+    _NAME, _TYPE, _KEYS, _NULL = range(4)
+    _DRAGGED = "dragged"  # the sort value shown for a table with its own order
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._excluded: set[tuple[str, str]] = set()
-        self._signature: tuple[str, ...] | None = None
-        self._tables: list[Table] = []
-        self._keys_only = False
+        self._custom: dict[str, list[str]] = {}  # table key -> dragged column order
+        self._table: Table | None = None
+        self._shared_sort = 0  # the sort combo's index for undragged tables
         self._updating = False
+        self._undo: tuple[str, set[tuple[str, str]]] | None = None  # (table, excluded)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
-        # Frame this tab as a refinement of the tables picked on the left, not a
-        # second place to select tables. Palette-coloured (no stylesheet) so it
-        # tracks light/dark on its own.
-        self._header = QLabel()
-        self._header.setWordWrap(True)
-        self._header.setVisible(False)
-        layout.addWidget(self._header)
-
-        # A dropdown to focus on one table's columns (fast for huge schemas).
-        scope_row = QHBoxLayout()
-        self._scope = QComboBox()
-        scope_label = QLabel("Show:")
-        scope_label.setBuddy(self._scope)
-        self._scope.setToolTip("Show every ticked table's columns, or one table's.")
-        self._scope.setAccessibleName("Show columns for")
-        scope_row.addWidget(scope_label)
-        self._scope.currentIndexChanged.connect(lambda _i: self._rebuild_view())
-        scope_row.addWidget(self._scope, 1)
-        layout.addLayout(scope_row)
-
-        self._hint = QLabel(
-            "Tick tables at left, then refine which of their columns to "
-            "include here."
+        self._title = QLabel()
+        self._title.setStyleSheet("font-weight: 600;")
+        self._title.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._meta = QLabel()
+        self._meta.setWordWrap(True)
+        self._empty = QLabel(
+            "Select a table in the diagram, the map, the list or the Tables view "
+            "to choose its columns."
         )
-        self._hint.setWordWrap(True)
-        self._hint.setStyleSheet(f"color: {_muted_hex(self)};")
-        layout.addWidget(self._hint)
+        self._empty.setWordWrap(True)
+        self._empty.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        layout.addWidget(self._title)
+        layout.addWidget(self._meta)
+        layout.addWidget(self._empty)
 
-        self._filter = QLineEdit()
-        self._filter.setPlaceholderText("Filter columns…")
-        self._filter.setAccessibleName("Filter columns")
-        self._filter.setClearButtonEnabled(True)
-        self._filter.textChanged.connect(self._apply_filter_text)
-        layout.addWidget(self._filter)
+        self._body = QWidget()
+        body = QVBoxLayout(self._body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
+        layout.addWidget(self._body, 1)
 
-        self._tree = QTreeWidget()
         sort_row = QHBoxLayout()
         self._sort = QComboBox()
-        sort_label = QLabel("Sort columns:")
+        sort_label = QLabel("Sort:")
         sort_label.setBuddy(self._sort)
         self._sort.setAccessibleName("Sort columns")
-        self._sort.setToolTip("The order columns are listed and drawn in.")
-        sort_row.addWidget(sort_label)
+        self._sort.setToolTip(
+            "The order columns are listed and drawn in. Drag rows to give this "
+            "table its own order."
+        )
         for label, value in (
             ("Original order", "order"),
             ("Name A–Z", "name"),
@@ -103,290 +114,321 @@ class ColumnSelector(QWidget):
             ("Data type", "type"),
         ):
             self._sort.addItem(label, value)
-        self._sort.currentIndexChanged.connect(self._on_order_changed)
-        sort_row.addWidget(self._sort)
+        self._sort.currentIndexChanged.connect(self._on_sort_changed)
         self._keys_first = QCheckBox("PK, FK first")
         self._keys_first.setToolTip(
-            "Place primary-key columns, then foreign-key columns, above other "
-            "columns in each table."
+            "Place primary-key columns, then foreign-key columns, above the "
+            "other columns."
         )
-        self._keys_first.toggled.connect(self._on_order_changed)
+        self._keys_first.toggled.connect(self._on_keys_first_changed)
+        sort_row.addWidget(sort_label)
+        sort_row.addWidget(self._sort)
         sort_row.addWidget(self._keys_first)
         sort_row.addStretch(1)
-        layout.addLayout(sort_row)
-        self._tree.setHeaderHidden(True)
-        self._tree.setAccessibleName("Columns to include")
-        self._tree.setUniformRowHeights(True)
-        self._tree.itemChanged.connect(self._on_item_changed)
-        layout.addWidget(self._tree, 1)
+        body.addLayout(sort_row)
 
-        self._count = QLabel("0 of 0 columns included")
-        self._count.setStyleSheet(f"color: {_muted_hex(self)};")
-        layout.addWidget(self._count)
+        self._filter = QLineEdit()
+        self._filter.setPlaceholderText("Filter columns…")
+        self._filter.setAccessibleName("Filter columns")
+        self._filter.setClearButtonEnabled(True)
+        self._filter.textChanged.connect(self._apply_filter_text)
+        body.addWidget(self._filter)
+
+        self._tree = _ColumnTree()
+        self._tree.setAccessibleName("Columns of the selected table")
+        self._tree.setColumnCount(4)
+        self._tree.setHeaderLabels(["Column", "Type", "Key", "Null"])
+        self._tree.setRootIsDecorated(False)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setDragDropMode(QAbstractItemView.InternalMove)
+        self._tree.setDefaultDropAction(Qt.MoveAction)
+        self._tree.setDragDropOverwriteMode(False)
+        self._tree.headerItem().setToolTip(self._NULL, "Yes: the column can be NULL.")
+        header = self._tree.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(self._NAME, QHeaderView.Stretch)
+        for section in (self._TYPE, self._KEYS, self._NULL):
+            header.setSectionResizeMode(section, QHeaderView.ResizeToContents)
+        self._tree.itemChanged.connect(self._on_item_changed)
+        self._tree.currentItemChanged.connect(self._on_current_changed)
+        self._tree.reordered.connect(self._on_reordered)
+        body.addWidget(self._tree, 1)
 
         button_row = QHBoxLayout()
-        all_btn = QPushButton("All")
-        none_btn = QPushButton("None")
-        keys_btn = QPushButton("Keys only")
-        for btn, tip in (
-            (all_btn, "Include every column (across all tables)."),
-            (none_btn, "Exclude every column (across all tables)."),
-            (keys_btn, "Include only primary-key and foreign-key columns everywhere."),
+        for label, mode, tip in (
+            ("All", "all", "Show every column of this table."),
+            ("None", "none", "Leave out every column of this table."),
+            ("Keys only", "keys", "Show only this table's primary and foreign keys."),
         ):
-            btn.setToolTip(tip)
-        all_btn.clicked.connect(lambda: self._bulk("all"))
-        none_btn.clicked.connect(lambda: self._bulk("none"))
-        keys_btn.clicked.connect(lambda: self._bulk("keys"))
-        button_row.addWidget(all_btn)
-        button_row.addWidget(none_btn)
-        button_row.addWidget(keys_btn)
-        # All / None / Keys only rewrite every table's columns at once, so the
-        # previous choice is kept for one undo.
+            button = QPushButton(label)
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _c=False, m=mode: self._bulk(m))
+            button_row.addWidget(button)
+        # All / None / Keys only rewrite the whole table, so the previous
+        # choice is kept for one undo.
         self._undo_btn = QPushButton("Undo")
-        self._undo_btn.setToolTip(
-            "Restore the columns from before the last All / None / Keys only."
-        )
+        self._undo_btn.setToolTip("Restore this table's columns from before the last button.")
         self._undo_btn.clicked.connect(self._undo_bulk)
         self._undo_btn.setVisible(False)
-        self._undo_excluded: set[tuple[str, str]] | None = None
         button_row.addWidget(self._undo_btn)
-        layout.addLayout(button_row)
+        button_row.addStretch(1)
+        body.addLayout(button_row)
 
-    # -- population --------------------------------------------------------
-    def set_tables(self, tables: list[Table]):
-        """Point the picker at ``tables``; the excluded set persists.
+        self._hint = QLabel("Drag rows to reorder. Click a column to tint its row in the diagram.")
+        self._hint.setWordWrap(True)
+        body.addWidget(self._hint)
+        self.retheme()
+        self.show_table(None)
 
-        Rebuilds the scope dropdown and view only when the set of tables
-        actually changes, so re-rendering (e.g. tweaking diagram options) keeps
-        the user's current table focus and column edits.
+    # -- the selected table -------------------------------------------------
+    def current_table(self) -> str:
+        return self._table.name if self._table is not None else ""
+
+    def show_table(
+        self, table: Table | None, drawn: bool = False,
+        options: DiagramOptions | None = None, linked: set[str] | None = None,
+    ):
+        """Fill the view for ``table`` (None shows the empty state).
+
+        ``drawn`` says whether it's in the diagram; ``options`` and ``linked``
+        (its FK columns whose table is drawn) say which ticked columns Keys
+        only or Hide system columns leave out, so those are greyed.
         """
-        signature = tuple(f"{t.schema}.{t.name}" for t in tables)
-        if signature == self._signature:
+        new = self._table is None or table is None or table.name != self._table.name
+        if new:
+            self._undo = None
+            self._undo_btn.setVisible(False)
+        self._table = table
+        has = table is not None
+        for widget in (self._title, self._meta, self._body):
+            widget.setVisible(has)
+        self._empty.setVisible(not has)
+        if not has:
+            self._tree.clear()
+            self.column_picked.emit("", "")
             return
 
-        self._signature = signature
-        self._tables = list(tables)
+        key = table.name.lower()
+        opts = options or DiagramOptions()
+        included = [c for c in table.columns if (key, c.name.lower()) not in self._excluded]
+        result = drawn_columns(Table(table.schema, table.name, included), opts, linked)
+        on_canvas = {c.name.lower() for c in result.columns}
+        self._title.setText(table.full_name)
+        total = _plural(len(table.columns), "column")
+        if drawn:
+            meta = f"{len(result.columns):,} of {total} drawn"
+            if result.hidden:
+                why = "Keys only" if opts.keys_only else "Hide system columns"
+                meta += f" · {result.hidden:,} ticked but hidden by {why} (greyed)"
+        else:
+            meta = f"{len(included):,} of {total} ticked · not in the diagram"
+        self._meta.setText(meta)
 
-        total = sum(len(t.columns) for t in tables)
-        self._scope.blockSignals(True)
-        self._scope.clear()
-        self._scope.addItem(f"All tables ({total:,} columns)", -1)
-        for i, table in enumerate(tables):
-            self._scope.addItem(f"{table.full_name} ({len(table.columns)})", i)
-        self._scope.setCurrentIndex(0)
-        self._scope.blockSignals(False)
-        self._scope.setVisible(bool(tables))
+        self._sync_sort_controls()
+        muted = QColor(_muted_hex(self))
+        self._updating = True
+        current = None if new else self._tree.currentItem()
+        current_name = current.data(self._NAME, self._ROLE_NAME) if current else None
+        self._tree.clear()
+        for column in self.ordered_columns(table):
+            marks = [m for m, on in (("PK", column.is_primary_key),
+                                     ("FK", bool(column.foreign_key_reference))) if on]
+            item = QTreeWidgetItem([
+                column.name, column.rendered_type(), ", ".join(marks),
+                "Yes" if column.is_nullable else "No",
+            ])
+            # Checkable and draggable, but nothing drops *onto* a row (that
+            # would nest it): drops land between rows.
+            item.setFlags(
+                (item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
+                & ~Qt.ItemIsDropEnabled
+            )
+            item.setData(self._NAME, self._ROLE_NAME, column.name)
+            item.setData(self._NAME, self._ROLE_KEY, bool(marks))
+            if column.foreign_key_reference:
+                item.setToolTip(self._KEYS, f"References {column.foreign_key_reference}")
+            excluded = (key, column.name.lower()) in self._excluded
+            item.setCheckState(self._NAME, Qt.Unchecked if excluded else Qt.Checked)
+            if drawn and not excluded and column.name.lower() not in on_canvas:
+                for section in range(4):
+                    item.setForeground(section, muted)
+                item.setToolTip(
+                    self._NAME,
+                    "Ticked, but Keys only leaves it out of the diagram."
+                    if opts.keys_only
+                    else "A Dynamics system column, hidden (More › Hide system columns).",
+                )
+            self._tree.addTopLevelItem(item)
+            if current_name and column.name == current_name:
+                self._tree.setCurrentItem(item)
+        self._updating = False
+        self._apply_filter_text(self._filter.text())
+        if new:  # a new table: no column is picked yet
+            self.column_picked.emit("", "")
 
-        self._rebuild_view()
+    def select_column(self, name: str) -> bool:
+        """Make ``name`` the current column (a row clicked in the diagram)."""
+        for item in self._rows():
+            if (item.data(self._NAME, self._ROLE_NAME) or "").lower() == name.lower():
+                self._tree.setCurrentItem(item)
+                self._tree.scrollToItem(item)
+                return True
+        return False
 
-    def focus_table(self, name: str):
-        """Show one table's columns ("" goes back to all tables)."""
-        index = next(
-            (i for i, t in enumerate(self._tables) if t.name == name), -1
-        ) if name else -1
-        combo_index = self._scope.findData(index)
-        if combo_index >= 0 and combo_index != self._scope.currentIndex():
-            self._scope.setCurrentIndex(combo_index)
-
-    def _scope_tables(self) -> list[Table]:
-        """The tables the current dropdown choice covers ('All' or just one)."""
-        index = self._scope.currentData()
-        if index is None or index < 0:
-            return self._tables
-        if 0 <= index < len(self._tables):
-            return [self._tables[index]]
-        return self._tables
-
+    # -- order ---------------------------------------------------------------
     def ordered_columns(self, table: Table):
         columns = list(table.columns)
-        mode = self._sort.currentData()
+        custom = self._custom.get(table.name.lower())
+        if custom is not None:
+            rank = {name: i for i, name in enumerate(custom)}
+            # Columns the dragged order doesn't know keep their place at the end.
+            return sorted(columns, key=lambda c: rank.get(c.name.lower(), len(rank) + c.order))
+        mode = self._sort.itemData(self._sort_index())
         if mode in ("name", "name_desc"):
             columns.sort(key=lambda c: c.name.casefold(), reverse=mode == "name_desc")
         elif mode == "type":
             columns.sort(key=lambda c: (c.data_type.casefold(), c.name.casefold()))
-        # Stable grouping retains the chosen order within each key group.
+        # Stable grouping keeps the chosen order within each key group.
         if self._keys_first.isChecked():
             columns.sort(
-                key=lambda c: 0 if c.is_primary_key
-                else 1 if c.foreign_key_reference
-                else 2
+                key=lambda c: 0 if c.is_primary_key else 1 if c.foreign_key_reference else 2
             )
         return columns
 
     def sorted_schema(self, schema: Schema) -> Schema:
         return Schema(
-            tables=[
-                Table(t.schema, t.name, self.ordered_columns(t))
-                for t in schema.tables
-            ],
+            tables=[Table(t.schema, t.name, self.ordered_columns(t)) for t in schema.tables],
             relationships=schema.relationships,
         )
 
-    def _rebuild_view(self):
-        """(Re)build the tree for the current dropdown scope."""
-        if not self._tables:
-            self._header.setVisible(False)
-            self._tree.clear()
-            self._tree.setVisible(False)
-            self._filter.setVisible(False)
-            self._hint.setText(
-                "Tick tables at left, then refine which of their columns to "
-                "include here."
-            )
-            self._hint.setVisible(True)
-            self._update_count()
-            return
+    def _sort_index(self) -> int:
+        """The shared sort's index (the "Dragged order" entry isn't one)."""
+        index = self._sort.currentIndex()
+        return self._shared_sort if self._sort.itemData(index) == self._DRAGGED else index
 
-        n = len(self._tables)
-        self._header.setText(
-            f"Columns for the {n} table{'' if n == 1 else 's'} ticked at left. "
-            "Untick a column to leave it out; the diagram updates as you go."
+    def _sync_sort_controls(self):
+        """Show "Dragged order" (and grey PK, FK first) for a dragged table."""
+        dragged = self._table is not None and self._table.name.lower() in self._custom
+        at = self._sort.findData(self._DRAGGED)
+        self._sort.blockSignals(True)
+        if dragged and at < 0:
+            self._sort.addItem("Dragged order", self._DRAGGED)
+            at = self._sort.count() - 1
+        if dragged:
+            self._sort.setCurrentIndex(at)
+        else:
+            if at >= 0:
+                self._sort.removeItem(at)
+            self._sort.setCurrentIndex(self._shared_sort)
+        self._sort.blockSignals(False)
+        self._keys_first.setEnabled(not dragged)
+        self._keys_first.setToolTip(
+            "This table has its own dragged order; pick a sort to use the shared one."
+            if dragged
+            else "Place primary-key columns, then foreign-key columns, above the "
+            "other columns."
         )
-        self._header.setVisible(True)
 
-        scope = self._scope_tables()
-        is_all = self._scope.currentData() in (None, -1)
-        total_all = sum(len(t.columns) for t in self._tables)
-
-        # The "All tables" view is only built when it's not too heavy; otherwise
-        # the dropdown is the way in (one table at a time is always fine).
-        if is_all and total_all > COLUMN_TREE_LIMIT:
-            self._tree.clear()
-            self._tree.setVisible(False)
-            self._filter.setVisible(False)
-            self._hint.setText(
-                f"This selection has {total_all:,} columns — too many to list at "
-                "once. Pick a single table from the “Show” dropdown above to "
-                "choose its columns (or narrow the tables on the left)."
-            )
-            self._hint.setVisible(True)
-            self._update_count()
+    def _on_sort_changed(self, index: int):
+        if self._sort.itemData(index) == self._DRAGGED:
             return
+        self._shared_sort = index
+        if self._table is not None:
+            self._custom.pop(self._table.name.lower(), None)  # picking a sort replaces the drag
+        self._redraw_rows()
+        self.changed.emit()
 
-        self._hint.setVisible(False)
-        self._filter.setVisible(True)
-        self._tree.setVisible(True)
+    def _on_keys_first_changed(self, _on: bool):
+        self._redraw_rows()
+        self.changed.emit()
 
+    def _on_reordered(self):
+        if self._table is None:
+            return
+        self._custom[self._table.name.lower()] = [
+            item.data(self._NAME, self._ROLE_NAME).lower() for item in self._rows()
+        ]
+        self._sync_sort_controls()
+        self.changed.emit()
+
+    def _redraw_rows(self):
+        """Put the rows in the new order. They're moved, not rebuilt, so
+        greying, ticks and the current row stay as they are."""
+        if self._table is None:
+            return
+        order = {c.name: i for i, c in enumerate(self.ordered_columns(self._table))}
         self._updating = True
-        self._tree.clear()
-        for table in scope:
-            key = table.name.lower()
-            # Show the column count so a table row reads as an "all columns of
-            # this table" group toggle, distinct from the plain table names in
-            # the left picker.
-            parent = QTreeWidgetItem(self._tree, [f"{table.name}  ({len(table.columns)})"])
-            parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
-            parent.setData(0, self._ROLE_KIND, "table")
-            for column in self.ordered_columns(table):
-                markers = []
-                if column.is_primary_key:
-                    markers.append("PK")
-                if column.foreign_key_reference:
-                    markers.append("FK")
-                label = (
-                    f"{column.name}  [{', '.join(markers)}]"
-                    if markers
-                    else column.name
-                )
-                child = QTreeWidgetItem(parent, [label])
-                child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
-                is_key = bool(column.is_primary_key or column.foreign_key_reference)
-                child.setData(0, self._ROLE_KIND, "column")
-                child.setData(0, self._ROLE_KEYS, (key, column.name.lower(), is_key))
-                if markers:
-                    child.setToolTip(0, f"{', '.join(markers)} key column: {column.name}")
-                excluded = (key, column.name.lower()) in self._excluded
-                child.setCheckState(0, Qt.Unchecked if excluded else Qt.Checked)
-        self._tree.expandAll()
+        current = self._tree.currentItem()
+        items = [self._tree.takeTopLevelItem(0) for _ in range(self._tree.topLevelItemCount())]
+        items.sort(key=lambda it: order.get(it.data(self._NAME, self._ROLE_NAME), len(order)))
+        self._tree.addTopLevelItems(items)
+        if current is not None:
+            self._tree.setCurrentItem(current)
         self._updating = False
-        self._apply_filter_text(self._filter.text())
-        self._update_count()
+        self._sync_sort_controls()
 
-    # -- interaction -------------------------------------------------------
-    def _on_item_changed(self, item, _column=0):
-        if self._updating:
+    # -- ticks ---------------------------------------------------------------
+    def _on_item_changed(self, item, column=0):
+        if self._updating or column != self._NAME or self._table is None:
             return
-        if item.data(0, self._ROLE_KIND) != "column":
-            return  # parent (table) toggles cascade to children via auto-tristate
-        table_key, col_key, _is_key = item.data(0, self._ROLE_KEYS)
-        pair = (table_key, col_key)
-        if item.checkState(0) == Qt.Checked:
+        pair = (self._table.name.lower(), item.data(self._NAME, self._ROLE_NAME).lower())
+        if item.checkState(self._NAME) == Qt.Checked:
             self._excluded.discard(pair)
         else:
             self._excluded.add(pair)
-        self._update_count()
         self.changed.emit()
 
-    def _on_order_changed(self, *_args):
-        self._rebuild_view()
-        self.changed.emit()
-
-    def _undo_bulk(self):
-        if self._undo_excluded is None:
+    def _on_current_changed(self, item, _prev=None):
+        if self._updating:
             return
-        self._excluded = self._undo_excluded
-        self._undo_excluded = None
-        self._undo_btn.setVisible(False)
-        self._sync_tree_checks()
-        self._update_count()
-        self.changed.emit()
+        if item is None or self._table is None:
+            self.column_picked.emit("", "")
+        else:
+            self.column_picked.emit(self._table.name, item.data(self._NAME, self._ROLE_NAME))
 
     def _bulk(self, mode: str):
-        self._undo_excluded = set(self._excluded)
+        if self._table is None:
+            return
+        self._undo = (self._table.name, set(self._excluded))
         self._undo_btn.setText(
             {"all": "Undo all", "none": "Undo none", "keys": "Undo keys only"}[mode]
         )
         self._undo_btn.setVisible(True)
-        # Operate on the whole selection (not just the visible scope) so "Keys
-        # only" etc. apply everywhere, even for tables not currently listed.
-        for table in self._tables:
-            table_key = table.name.lower()
-            for column in table.columns:
-                col_key = column.name.lower()
-                is_key = bool(column.is_primary_key or column.foreign_key_reference)
-                keep = True if mode == "all" else False if mode == "none" else is_key
-                if keep:
-                    self._excluded.discard((table_key, col_key))
-                else:
-                    self._excluded.add((table_key, col_key))
-        self._sync_tree_checks()
-        self._update_count()
+        key = self._table.name.lower()
+        for column in self._table.columns:
+            is_key = bool(column.is_primary_key or column.foreign_key_reference)
+            keep = mode == "all" or (mode == "keys" and is_key)
+            if keep:
+                self._excluded.discard((key, column.name.lower()))
+            else:
+                self._excluded.add((key, column.name.lower()))
+        self._sync_checks()
         self.changed.emit()
 
-    def _sync_tree_checks(self):
-        """Update the visible tree's checkboxes to match the excluded set."""
+    def _undo_bulk(self):
+        if self._undo is None:
+            return
+        _table, self._excluded = self._undo
+        self._undo = None
+        self._undo_btn.setVisible(False)
+        self._sync_checks()
+        self.changed.emit()
+
+    def _sync_checks(self):
+        """Update the rows' ticks to match the excluded set."""
+        if self._table is None:
+            return
+        key = self._table.name.lower()
         self._updating = True
-        for parent in self._top_items():
-            for child in self._children(parent):
-                table_key, col_key, _is_key = child.data(0, self._ROLE_KEYS)
-                state = (
-                    Qt.Unchecked
-                    if (table_key, col_key) in self._excluded
-                    else Qt.Checked
-                )
-                child.setCheckState(0, state)
+        for item in self._rows():
+            pair = (key, item.data(self._NAME, self._ROLE_NAME).lower())
+            item.setCheckState(
+                self._NAME, Qt.Unchecked if pair in self._excluded else Qt.Checked
+            )
         self._updating = False
 
-    def _apply_filter_text(self, text: str):
-        needle = text.strip().lower()
-        for parent in self._top_items():
-            any_visible = False
-            for child in self._children(parent):
-                hidden = needle not in child.text(0).lower()
-                child.setHidden(hidden)
-                any_visible = any_visible or not hidden
-            parent.setHidden(needle != "" and not any_visible)
-
-    # -- helpers -----------------------------------------------------------
-    def _top_items(self):
-        return (self._tree.topLevelItem(i) for i in range(self._tree.topLevelItemCount()))
-
-    @staticmethod
-    def _children(parent):
-        return (parent.child(i) for i in range(parent.childCount()))
-
     def set_column_included(self, table: str, column: str, included: bool):
-        """Include or leave out one column (the Table view's ticks)."""
+        """Include or leave out one column."""
         pair = (table.lower(), column.lower())
         if (pair not in self._excluded) == included:
             return
@@ -394,34 +436,24 @@ class ColumnSelector(QWidget):
             self._excluded.discard(pair)
         else:
             self._excluded.add(pair)
-        self._sync_tree_checks()
-        self._update_count()
+        self._sync_checks()
         self.changed.emit()
 
     def excluded_pairs(self) -> set[tuple[str, str]]:
         return set(self._excluded)
 
-    def _update_count(self):
-        total = sum(len(t.columns) for t in self._tables)
-        excluded_here = sum(
-            1
-            for t in self._tables
-            for c in t.columns
-            if (t.name.lower(), c.name.lower()) in self._excluded
-        )
-        included = total - excluded_here
-        text = f"{included:,} of {total:,} columns included"
-        if self._keys_only:
-            text += " · Keys only is on, so only key columns are drawn"
-        self._count.setText(text)
+    # -- helpers -------------------------------------------------------------
+    def _apply_filter_text(self, text: str):
+        needle = text.strip().lower()
+        for item in self._rows():
+            item.setHidden(needle not in item.text(self._NAME).lower())
+        # Dragging among a filtered few would scramble the hidden rows' places.
+        self._tree.setDragEnabled(not needle)
 
-    def set_keys_only(self, on: bool):
-        """Say in the count when Keys only draws fewer columns than are ticked."""
-        if on != self._keys_only:
-            self._keys_only = on
-            self._update_count()
+    def _rows(self):
+        return [self._tree.topLevelItem(i) for i in range(self._tree.topLevelItemCount())]
 
     def retheme(self):
         muted = f"color: {_muted_hex(self)};"
-        self._hint.setStyleSheet(muted)
-        self._count.setStyleSheet(muted)
+        for label in (self._meta, self._empty, self._hint):
+            label.setStyleSheet(muted)
