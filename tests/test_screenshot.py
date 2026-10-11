@@ -2691,7 +2691,7 @@ def test_rows_are_tinted_for_a_column_a_reference_and_a_clicked_row(monkeypatch)
     monkeypatch.setattr(window._diagram_view, "mark_rows", lambda kind, rows: marks.append((kind, rows)))
     window._focus_table("hsl_dayrule")
     window._columns.select_column("grp id")
-    assert marks[-1] == ("xrow", [("hsldayrule", "grp_id")])  # drawn name, DOM key
+    assert ("xrow", [("hsldayrule", "grp_id")]) in marks[-2:]  # drawn name, DOM key
     tree = window._relations._links
     tree.setCurrentItem(tree.topLevelItem(0).child(0))  # Has foreign keys to: the first parent
     assert marks[-1] == ("xjoin", [("hsldayrule", "grp_id"), ("hsldayrulegroup", "hsl_dayrulegroupid")])
@@ -2703,6 +2703,38 @@ def test_rows_are_tinted_for_a_column_a_reference_and_a_clicked_row(monkeypatch)
     assert window._columns._tree.currentItem().text(0) == "hsl_dayrulegroupid"
     window._focus_table("hsl_dayrule")
     assert ("xrow", []) in marks[-3:] and ("xjoin", []) in marks[-3:]  # a new table clears both
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_clicking_a_foreign_key_row_glows_the_table_it_points_to(monkeypatch):
+    from xsltomermaid.excel_to_mermaid import Column, Relationship, Schema, Table
+
+    tables = [
+        Table("dbo", "Order", [Column("dbo", "Order", 1, "OrderID", "int", is_primary_key=True),
+                               Column("dbo", "Order", 2, "CustomerID", "int",
+                                      foreign_key_reference="dbo.Customer.CustomerID"),
+                               Column("dbo", "Order", 3, "Total", "int")]),
+        Table("dbo", "Customer", [Column("dbo", "Customer", 1, "CustomerID", "int",
+                                         is_primary_key=True)]),
+        Table("dbo", "Product", [Column("dbo", "Product", 1, "ProductID", "int",
+                                        is_primary_key=True)]),
+    ]
+    rels = [Relationship("Customer", "Order", "CustomerID", ("CustomerID",), ("CustomerID",))]
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window._apply_loaded("x.xlsx", [], Schema(tables, rels), "")
+    window._entity_to_table = {"Order": "Order", "Customer": "Customer"}  # Product isn't drawn
+    glow, rows = [], []
+    monkeypatch.setattr(window._diagram_view, "mark_reference", glow.append)
+    monkeypatch.setattr(window._diagram_view, "mark_rows", lambda kind, r: rows.append((kind, r)))
+    window._focus_table("Order")
+    # The FK row clicked in the diagram, as the page reports it.
+    window._on_row_clicked("Order", "CustomerID")
+    assert glow[-1] == "Customer"  # the table it points to, in orange
+    assert rows[-1] == ("xjoin", [("Order", "CustomerID"), ("Customer", "CustomerID")])
+    window._on_row_clicked("Order", "Total")  # not a key: the glow goes
+    assert glow[-1] == "" and rows[-1] == ("xjoin", [])
     window._diagram_view.cleanup()
     del app
 

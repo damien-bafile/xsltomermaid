@@ -182,6 +182,7 @@ from .column_selector import (
 )
 from .relationships_view import (
     RelationshipsView,
+    _join_columns,
 )
 from .tables_view import (
     TablesView,
@@ -1280,10 +1281,33 @@ class MainWindow(QMainWindow):
         self._diagram_view.mark_rows("xjoin", rows)
 
     def _mark_column(self, table: str, column: str):
-        """A column picked in the Columns view: tint its row in the diagram."""
+        """A column picked (in the Columns view, or its row clicked in the
+        diagram): tint its row. A foreign key also glows the table it points
+        to, when that's drawn, and tints the rows they join on, as picking
+        that table in the Links view does."""
         entity = self._entity_for(table)
         rows = [(entity, drawn_column_name(column))] if entity and column else []
         self._diagram_view.mark_rows("xrow", rows)
+        rel = self._foreign_key(table, column) if entity and column else None
+        if rel is None:
+            self._mark_reference("")
+        elif rel.parent_table.lower() == table.lower():
+            self._mark_reference("", _join_columns(rel))  # to itself: just the rows
+        else:
+            self._mark_reference(rel.parent_table, _join_columns(rel))
+
+    def _foreign_key(self, table: str, column: str):
+        """The relationship ``table.column`` is (part of) the foreign key of."""
+        if self._schema is None:
+            return None
+        key, col = table.lower(), column.lower()
+        for rel in self._schema.relationships:
+            if rel.child_table.lower() != key:
+                continue
+            columns = rel.child_columns or tuple(c.strip() for c in rel.label.split(","))
+            if any(c.lower() == col for c in columns):
+                return rel
+        return None
 
     def _on_row_clicked(self, entity_id: str, drawn_name: str):
         """A row clicked in the diagram: pick that column in the Columns view
