@@ -48,6 +48,7 @@ class RenderStyle:
     use_max_width: bool = True
     font_size: int = 12
 
+import shiboken6
 from PySide6.QtCore import (
     QByteArray,
     QEvent,
@@ -1349,6 +1350,8 @@ class DiagramView(QWidget):
             )
 
     def _on_fit_scale(self, value):
+        if self._view is None or not shiboken6.isValid(self._view):
+            return  # the answer came back after the window closed
         try:
             scale = float(value) if value else 1.0
         except (TypeError, ValueError):

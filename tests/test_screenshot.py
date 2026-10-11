@@ -95,9 +95,12 @@ def test_column_selector_marks_primary_and_foreign_keys():
 
     rows = [selector._tree.topLevelItem(i) for i in range(2)]
     # Column, type, key, and whether it can be NULL.
-    assert [rows[0].text(i) for i in range(4)] == ["OrderID", "int", "PK", "No"]
-    assert [rows[1].text(i) for i in range(4)] == ["CustomerID", "int", "FK", "Yes"]
-    assert rows[1].toolTip(2) == "References dbo.Customer.CustomerID"
+    # Key and type share a cell ("PK · int"), so names get the width.
+    assert [rows[0].text(i) for i in range(3)] == ["OrderID", "PK · int", "No"]
+    assert [rows[1].text(i) for i in range(3)] == ["CustomerID", "FK · int", "Yes"]
+    assert rows[1].toolTip(1) == "int · references dbo.Customer.CustomerID"
+    assert rows[0].data(1, app_module.Qt.AccessibleTextRole) == "primary key, int"
+    assert rows[1].data(2, app_module.Qt.AccessibleTextRole) == "can be null"
     del app
 
 
@@ -1663,7 +1666,8 @@ def test_table_view_shows_columns_and_both_directions_of_links(tmp_path):
     assert ins.current_table() == "Order"
     assert window._columns._tree.topLevelItemCount() == 4
     groups = [ins._links.topLevelItem(i) for i in range(ins._links.topLevelItemCount())]
-    assert [g.text(0) for g in groups] == ["Has foreign keys to (1)", "Targeted by foreign keys from (1)"]
+    assert [g.text(0) for g in groups] == [
+        "Has foreign keys to (1 table)", "Targeted by foreign keys from (1 table)"]
     out_row, in_row = groups[0].child(0), groups[1].child(0)
     assert (out_row.text(0), out_row.text(1)) == ("Customer  ·  CustomerID", "Add")
     assert out_row.data(0, app_module.Qt.UserRole) == "Customer"
@@ -1737,11 +1741,12 @@ def test_table_view_folds_audit_and_system_links_like_the_map():
     window._schema.tables[0].columns.append(Column("", "systemuser", 1, "systemuserid", "guid"))
     window._focus_table("systemuser")
     group = window._relations._links.topLevelItem(1)  # Targeted by foreign keys from
-    assert group.text(0) == "Targeted by foreign keys from (1)"  # audit links apart
+    assert group.text(0) == "Targeted by foreign keys from (1 table)"  # audit links apart
     assert group.child(0).text(0) == "b  ·  approver"
     assert window._relations._meta.text().endswith("3 audit and system links folded below")
     folded = group.child(1)
-    assert folded.text(0) == "Audit and system links (3)" and not folded.isExpanded()
+    # 3 audit links from 2 tables: a row per table.
+    assert folded.text(0) == "Audit and system links (2 tables)" and not folded.isExpanded()
     window._diagram_view.cleanup()
     del app
 
@@ -1791,10 +1796,10 @@ def test_relationships_view_adds_tables_linked_through_another(monkeypatch):
     window._focus_table("A")
     assert not view._extended.isChecked()  # immediate links only, by default
     groups = [view._links.topLevelItem(i).text(0) for i in range(view._links.topLevelItemCount())]
-    assert groups == ["Has foreign keys to (0)", "Targeted by foreign keys from (2)"]
+    assert groups == ["Has foreign keys to (0 tables)", "Targeted by foreign keys from (2 tables)"]
     view._extended.setChecked(True)
     extended = view._links.topLevelItem(2)
-    assert extended.text(0) == "Through another table (1)"
+    assert extended.text(0) == "Through another table (1 table)"
     # "via" is for columns; tables in between are "through".
     assert [extended.child(i).text(0) for i in range(extended.childCount())] == [
         "through B (1)", "through C (1)"]
@@ -1838,9 +1843,15 @@ def test_links_count_like_the_list_list_self_links_once_and_take_space_and_a_fil
     )
     outgoing = view._links.topLevelItem(0)
     texts = [outgoing.child(i).text(0) for i in range(outgoing.childCount())]
-    assert texts[:2] == ["account (itself)  ·  masterid", "account (itself)  ·  parentaccountid"]
+    # One row per table, its keys inline; expanded, one per key (each tints its join).
+    assert texts[0] == "account (itself)  ·  masterid, parentaccountid"
+    itself = outgoing.child(0)
+    assert [itself.child(i).text(0) for i in range(itself.childCount())] == [
+        "masterid", "parentaccountid"]
+    assert len(itself.data(0, view._ROLE_JOIN)) == 4  # both joins, both sides
+    assert len(itself.child(0).data(0, view._ROLE_JOIN)) == 2
     incoming = view._links.topLevelItem(1)
-    assert incoming.text(0) == "Targeted by foreign keys from (2)"
+    assert incoming.text(0) == "Targeted by foreign keys from (2 tables)"
     assert all("itself" not in incoming.child(i).text(0) for i in range(incoming.childCount()))
     # Space on the tree adds the current row's table (the tree used to swallow it).
     tree = view._links
@@ -1895,7 +1906,7 @@ def test_a_move_and_back_is_not_a_dragged_order_and_types_give_names_room():
     assert selector._sort.currentData() == "order" and selector._keys_first.isEnabled()
     # Type is capped; the full type is in its tooltip.
     fm = tree.fontMetrics()  # a fixed cap, whatever the type (fonts differ by platform)
-    assert tree.columnWidth(selector._TYPE) == fm.horizontalAdvance("decimal(18,2)") + 12
+    assert tree.columnWidth(selector._TYPE) == fm.horizontalAdvance("PK · decimal(18,2)") + 12
     assert tree.topLevelItem(0).toolTip(selector._TYPE) == "uniqueidentifier"
     selector._filter.setText("b")
     assert "Clear the filter" in selector._move_btns[0].toolTip()
@@ -1917,6 +1928,86 @@ def test_tables_view_shift_enter_opens_the_links(tmp_path):
         view._tree, QKeyEvent(QKeyEvent.KeyPress, app_module.Qt.Key_Return, app_module.Qt.ShiftModifier)
     )
     assert asked == ["Order"]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_back_and_forward_through_the_tables_shown(monkeypatch):
+    from PySide6.QtGui import QKeyEvent
+
+    app, window = _window_with_schema(*_diamond())
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    for name in ("A", "B", "D"):
+        window._focus_table(name)
+    back, forward = window._back_action, window._forward_action
+    assert back.isEnabled() and not forward.isEnabled()
+    assert back.toolTip() == "Back to B (Alt+Left)"
+    # Beside the table name in Columns and Links, not in the tab bar.
+    assert window._tabs.cornerWidget(app_module.Qt.TopRightCorner) is None
+    from PySide6.QtWidgets import QToolButton
+    buttons = window._relations.findChildren(QToolButton)
+    assert any(b.defaultAction() is back for b in buttons)
+    window._go_history(-1)
+    assert window._columns.current_table() == "B" and forward.isEnabled()
+    window._go_history(-1)
+    assert window._columns.current_table() == "A" and not back.isEnabled()
+    window._focus_table("C")  # a new path drops the forward steps
+    assert not forward.isEnabled() and window._history == ["A", "C"]
+    # In Links, Enter opens the table's columns and Shift+Enter its links,
+    # as in the Tables view (the number pad's Enter too).
+    window._focus_table("A")
+    view = window._relations
+    tree = view._links
+    asked = []
+    view.columns_requested.connect(lambda n: asked.append(("columns", n)))
+    view.select_requested.connect(lambda n: asked.append(("links", n)))
+    row = next(
+        view._links.topLevelItem(g).child(i)
+        for g in range(2) for i in range(view._links.topLevelItem(g).childCount())
+        if view._links.topLevelItem(g).child(i).data(0, app_module.Qt.UserRole)
+    )
+    tree.setCurrentItem(row)
+    name = row.data(0, app_module.Qt.UserRole)
+    tree.itemActivated.emit(row, 0)  # opens B's columns, and shows B
+    row = next(  # so pick a row in the new list
+        view._links.topLevelItem(g).child(i)
+        for g in range(2) for i in range(view._links.topLevelItem(g).childCount())
+        if view._links.topLevelItem(g).child(i).data(0, app_module.Qt.UserRole)
+    )
+    tree.setCurrentItem(row)
+    name2 = row.data(0, app_module.Qt.UserRole)
+    tree.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, app_module.Qt.Key_Enter,
+                                 app_module.Qt.ShiftModifier | app_module.Qt.KeypadModifier))
+    assert asked == [("columns", name), ("links", name2)]
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_details_opens_wider_than_its_minimum_and_says_open_like_more():
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window.show()
+    app.processEvents()
+    assert window._details_btn.arrowType() == app_module.Qt.RightArrow  # closed, like More
+    # Squeezed to its minimum: it takes room from the canvas (down to 420px),
+    # but leaves a width the user chose alone. (A stand-in splitter: offscreen
+    # fonts make the real one refuse any move.)
+    from types import SimpleNamespace
+
+    def widen(sizes):
+        body = SimpleNamespace(sizes=lambda: list(sizes), setSizes=lambda new: sizes.__setitem__(slice(None), new))
+        tabs = SimpleNamespace(minimumWidth=lambda: 300, isHidden=lambda: False)
+        app_module.MainWindow._widen_details(SimpleNamespace(_body=body, _tabs=tabs))
+        return sizes
+
+    assert widen([250, 900, 300]) == [250, 840, 360]
+    assert widen([250, 450, 300]) == [250, 420, 330]  # the canvas keeps 420
+    assert widen([250, 700, 420]) == [250, 700, 420]  # the user's width
+    window.set_details_visible(True)
+    app.processEvents()
+    assert window._details_btn.arrowType() == app_module.Qt.DownArrow
+    labels = [a.text() for a in window.menuBar().actions()[1].menu().actions()]
+    assert {"&Tables", "&Columns", "&Links", "&Mermaid", "&SQL", "&Data"} <= set(labels)
     window._diagram_view.cleanup()
     del app
 
@@ -2000,7 +2091,7 @@ def test_big_folded_link_groups_are_built_when_opened():
     window._focus_table("systemuser")
     view = window._relations
     folded = view._links.topLevelItem(1).child(0)
-    assert folded.text(0) == "Audit and system links (80)" and folded.childCount() == 0
+    assert folded.text(0) == "Audit and system links (80 tables)" and folded.childCount() == 0
     folded.setExpanded(True)
     assert folded.childCount() == 80 and folded.child(0).data(0, view._ROLE_TABLE) == "t0"
     window._diagram_view.cleanup()

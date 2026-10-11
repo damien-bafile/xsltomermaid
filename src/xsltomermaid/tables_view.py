@@ -86,6 +86,10 @@ class TablesView(QWidget):
         for widget in (self._meta, self._empty, self._filter):
             layout.addWidget(widget)
         layout.addWidget(self._tree, 1)
+        # The keys, in the footer like the other views.
+        self._hint = QLabel("Enter: columns · Shift+Enter: links")
+        self._hint.setWordWrap(True)
+        layout.addWidget(self._hint)
         self.retheme()
         self.set_tables([])
 
@@ -121,10 +125,8 @@ class TablesView(QWidget):
         self._tree.setVisible(has)
         self._empty.setVisible(not has)
         self._meta.setVisible(has)
-        self._meta.setText(
-            f"{len(rows):,} table{'' if len(rows) == 1 else 's'} in the diagram · "
-            "Enter: columns · Shift+Enter: links"
-        )
+        self._meta.setText(f"{len(rows):,} table{'' if len(rows) == 1 else 's'} in the diagram")
+        self._hint.setVisible(has)
         self._filter.setVisible(len(rows) >= _FILTER_FROM)
         self._apply_filter_text(self._filter.text())
         self.set_current(current)
@@ -158,7 +160,9 @@ class TablesView(QWidget):
         if obj is self._tree and event.type() == QEvent.KeyPress:
             item = self._tree.currentItem()
             if (
-                item is not None and event.modifiers() == Qt.ShiftModifier
+                item is not None
+                # The number pad's Enter carries KeypadModifier as well.
+                and (event.modifiers() & ~Qt.KeypadModifier) == Qt.ShiftModifier
                 and event.key() in (Qt.Key_Return, Qt.Key_Enter)
             ):
                 self.relationships_requested.emit(item.data(0, self._ROLE_TABLE))
@@ -188,5 +192,5 @@ class TablesView(QWidget):
 
     def retheme(self):
         muted = f"color: {_muted_hex(self)};"
-        for label in (self._meta, self._empty):
+        for label in (self._meta, self._empty, self._hint):
             label.setStyleSheet(muted)
