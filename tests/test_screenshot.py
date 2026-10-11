@@ -1894,8 +1894,8 @@ def test_a_move_and_back_is_not_a_dragged_order_and_types_give_names_room():
         tree.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, key, app_module.Qt.AltModifier))
     assert selector._sort.currentData() == "order" and selector._keys_first.isEnabled()
     # Type is capped; the full type is in its tooltip.
-    fm = tree.fontMetrics()
-    assert tree.columnWidth(selector._TYPE) < fm.horizontalAdvance("uniqueidentifier")
+    fm = tree.fontMetrics()  # a fixed cap, whatever the type (fonts differ by platform)
+    assert tree.columnWidth(selector._TYPE) == fm.horizontalAdvance("decimal(18,2)") + 12
     assert tree.topLevelItem(0).toolTip(selector._TYPE) == "uniqueidentifier"
     selector._filter.setText("b")
     assert "Clear the filter" in selector._move_btns[0].toolTip()
