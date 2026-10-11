@@ -63,7 +63,7 @@ def test_render_style_defaults_to_left_to_right():
 
 
 def test_diagram_options_bar_constructs_headlessly():
-    app = QApplication.instance() or QApplication([])
+    QApplication.instance() or QApplication([])
     bar = app_module.DiagramOptionsBar()
 
     assert bar.render_style().layout_direction == "LR"
@@ -264,7 +264,6 @@ def _wait_for(condition, timeout_ms: int = 3000) -> bool:
 
 def test_diagram_zoom_label_tracks_webengine_zoom():
     import xsltomermaid.diagram_view as diagram_view
-    from PySide6.QtTest import QTest
 
     if not diagram_view.WEBENGINE_AVAILABLE:
         pytest.skip("PySide6 WebEngine not available")
@@ -1729,7 +1728,7 @@ def test_table_view_column_ticks_change_the_diagram_columns(tmp_path):
 
 
 def test_table_view_folds_audit_and_system_links_like_the_map():
-    from xsltomermaid.excel_to_mermaid import Column, Relationship, Table
+    from xsltomermaid.excel_to_mermaid import Column, Relationship
 
     app, window = _window_with_schema(["systemuser", "a", "b"], [
         Relationship("systemuser", "a", "createdby", ("createdby",), ("systemuserid",)),
@@ -1983,6 +1982,38 @@ def test_back_and_forward_through_the_tables_shown(monkeypatch):
     del app
 
 
+def test_a_new_file_starts_a_new_history(monkeypatch):
+    from xsltomermaid.excel_to_mermaid import Schema, Table
+
+    app, window = _window_with_schema(*_diamond())
+    monkeypatch.setattr(window, "_render_selection", lambda: None)
+    window._focus_table("A")
+    window._focus_table("B")
+    assert window._back_action.isEnabled()
+    window._apply_loaded("other.xlsx", [], Schema([Table("", "X")], []), "")
+    # Back pointed at the last file's tables, which this one doesn't have.
+    assert window._history == [] and not window._back_action.isEnabled()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_a_running_window_keeps_its_temp_folder_fresh():
+    import os
+    import time
+
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    view = window._diagram_view
+    if view._workdir:  # (no folder without WebEngine)
+        old = time.time() - 3 * 24 * 3600
+        os.utime(view._workdir, (old, old))
+        view._touch_workdir()  # the hourly timer
+        assert time.time() - os.stat(view._workdir).st_mtime < 60
+        assert view._keep_fresh.interval() == 3600 * 1000
+    view.cleanup()
+    del app
+
+
 def test_details_opens_wider_than_its_minimum_and_says_open_like_more():
     app = QApplication.instance() or QApplication([])
     window = app_module.MainWindow()
@@ -2128,7 +2159,6 @@ def test_a_big_map_is_built_in_the_background_with_a_busy_state(monkeypatch):
 
 # -- schema map integration -------------------------------------------------------
 def _big_window(n=70):
-    from xsltomermaid.excel_to_mermaid import Relationship
 
     tables, rels = _hub_schema(children=n)
     app, window = _window_with_schema(tables, rels)
@@ -2359,7 +2389,7 @@ def test_setting_list_data_does_not_fire_selection_changes():
 
 # -- finishing touches: hide audit links, arrow keys, sort by cluster -----------
 def test_hide_audit_links_option_drops_them_from_diagram_and_sql(monkeypatch):
-    from xsltomermaid.excel_to_mermaid import Column, Relationship, Table
+    from xsltomermaid.excel_to_mermaid import Column, Relationship
 
     app, window = _window_with_schema(["systemuser", "task"], [
         Relationship("systemuser", "task", "createdby", ("createdby",), ("systemuserid",)),

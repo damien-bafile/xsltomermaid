@@ -1,6 +1,15 @@
 """Tests for table-selection preset serialization."""
 
-from xsltomermaid.selection_preset import dump_selection_toml, load_selection_toml
+from xsltomermaid.selection_preset import Preset, dump_preset, load_preset
+
+
+def dump_selection_toml(filename, selected_tables):
+    return dump_preset(Preset(filename, selected_tables))
+
+
+def load_selection_toml(text):
+    preset = load_preset(text)
+    return preset.filename, preset.selected_tables
 
 
 def test_selection_preset_round_trip():

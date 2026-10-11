@@ -25,7 +25,6 @@ from .excel_to_mermaid import DiagramOptions
 from .schema_map import HIDDEN_BY_DEFAULT
 from .theme import (
     _ACCENT_WASH,
-    _line_hex,
     _muted_hex,
     _ACCENT,
     _control_border_hex,

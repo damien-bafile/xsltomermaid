@@ -39,5 +39,9 @@ jobs:
       - name: Sync dependencies (incl. dev / pytest)
         run: uv sync
 
+      - name: Lint (real errors only)
+        # Unused imports, undefined names and the like; style is left alone.
+        run: uvx ruff check src tests --select F
+
       - name: Run tests
         run: uv run pytest -q

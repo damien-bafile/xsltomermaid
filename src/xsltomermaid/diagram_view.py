@@ -19,6 +19,7 @@ from __future__ import annotations
 import html
 import json
 import math
+import os
 import re
 import shutil
 import sys
@@ -1325,6 +1326,14 @@ class DiagramView(QWidget):
             self._zoom_timer.setInterval(200)
             self._zoom_timer.timeout.connect(self._update_zoom_label)
             self._zoom_timer.start()
+            # Another copy of the app, started later, deletes this app's temp
+            # folders untouched for 2 days (crash leftovers). A folder's date
+            # only changes when files come and go, so a window left open over
+            # a weekend would lose its mermaid.js: touch it every hour.
+            self._keep_fresh = QTimer(self)
+            self._keep_fresh.setInterval(3600 * 1000)
+            self._keep_fresh.timeout.connect(self._touch_workdir)
+            self._keep_fresh.start()
         else:
             label = QLabel(
                 "The rendered-diagram view needs PySide6's WebEngine module.\n"
@@ -1665,6 +1674,13 @@ class DiagramView(QWidget):
                 )
 
         self._view.page().runJavaScript("window._mermaidDone === true", on_done)
+
+    def _touch_workdir(self):
+        if self._workdir is not None:
+            try:
+                os.utime(self._workdir)
+            except OSError:
+                pass  # gone or locked: the next draw reports it
 
     def _write_shell(self):
         """(Re)write the shell page in the current palette, before it loads."""
