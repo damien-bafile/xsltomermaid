@@ -279,6 +279,58 @@ class MainWindow(QMainWindow):
         # or collapse the panels; every action is also reachable from the menu.
         self.setMinimumSize(960, 600)
 
+        self._init_state()
+
+        central = QWidget()
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
+
+        self._build_top_bar(outer)
+        tabs = self._build_details_panel()
+        diagram_tab = self._build_canvas()
+        self._build_left_rail()
+
+        body = QSplitter(Qt.Horizontal)
+        self._body = body
+        body.addWidget(self._selector)
+        body.addWidget(diagram_tab)
+        body.addWidget(tabs)
+        body.setStretchFactor(0, 0)
+        body.setStretchFactor(1, 1)
+        body.setStretchFactor(2, 0)
+        body.setCollapsible(1, False)
+        body.setSizes([280, 940, 380])
+        outer.addWidget(body, 1)
+
+        self._build_export_bar(outer)
+
+        self.setCentralWidget(central)
+        self._build_sql_dock()
+        self._build_menu_bar()
+
+        # Match the OS: default the diagram's own theme/background to dark when
+        # the app starts dark, and apply palette-derived colours everywhere.
+        app = QApplication.instance()
+        if app is not None:
+            self._options_bar.apply_system_defaults(system_is_dark(app))
+        self._restore_session()
+        # The canvas is the first thing anyone sees, so it says what to do.
+        self._diagram_view.show_message(
+            "No spreadsheet loaded yet.\n\n"
+            "Drop an Excel schema file on the bar above, or click it to browse. "
+            "New here? Use “try a sample”.\n\n"
+            "Once a file loads, the diagram appears here. The Details panel "
+            "(Ctrl+I) shows the selected table, the extracted rows, columns, "
+            "Mermaid and SQL."
+        )
+        save_options = lambda *_: self._options_bar.save_state(app_settings())  # noqa: E731
+        self._options_bar.changed.connect(save_options)
+        self._options_bar._more.toggled.connect(save_options)
+        self.retheme()
+
+    def _init_state(self):
+        """The window's data: what's loaded, what's drawn, what's selected."""
         self._schema: Schema | None = None
         self._mermaid_text: str = ""
         # The table selection last confirmed past the large-diagram warning, so
@@ -300,12 +352,19 @@ class MainWindow(QMainWindow):
         self._diagram_rendered: bool = False
         self._drawio_schema: Schema | None = None
         self._importer = SchemaImportService()
+        self._entity_to_table: dict[str, str] = {}
+        # After a draw from the map: select the busiest drawn table once the
+        # new diagram is on screen (see _draw_from_map).
+        self._focus_after_render = ""
+        # Back / Forward through the tables shown, like a browser: following
+        # a link no longer loses your place.
+        self._history: list[str] = []
+        self._history_at = -1
+        self._navigating = False
+        self._audit_share = 0.0
 
-        central = QWidget()
-        outer = QVBoxLayout(central)
-        outer.setContentsMargins(16, 16, 16, 16)
-        outer.setSpacing(12)
-
+    def _build_top_bar(self, outer):
+        """The drop zone, the status line, the first-run nudge and the load progress."""
         self._drop = DropArea(self.load_file_async)
         outer.addWidget(self._drop)
 
@@ -347,7 +406,13 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(False)
         outer.addWidget(self._progress)
 
-        # Tabs: extracted data table + generated Mermaid text.
+    def _build_details_panel(self) -> QTabWidget:
+        """The Details panel: Tables, Columns, Links, Mermaid, SQL and Data, the
+        Back / Forward history, and the Details button that opens it.
+
+        Diagram-first: the diagram is the centre of the window, always in
+        view; these views sit on the right, closed by default so the canvas
+        gets the width."""
         tabs = QTabWidget()
 
         # A model + view (not per-cell widgets) so only visible rows are realised.
@@ -439,55 +504,6 @@ class MainWindow(QMainWindow):
         # SQL query: a T-SQL SELECT over the diagram's tables (sql_tab.py).
         self._sql_tab = SqlTab()
         self._sql_tab.copy_requested.connect(self.copy_sql)
-
-        # Rendered diagram tab = an options bar above the actual diagram view.
-        self._diagram_view = DiagramView()
-        self._options_bar = DiagramOptionsBar()
-        self._options_bar.changed.connect(self._render_selection)
-        self._options_bar.changed.connect(self._sync_export_caption)
-        self._render_status = RenderStatus()
-        # A Stop control that only appears while a diagram is rendering, so a
-        # slow/large layout can be abandoned without waiting it out.
-        self._stop_btn = QPushButton("Stop")
-        self._stop_btn.setToolTip("Stop drawing the diagram (Esc).")
-        self._stop_btn.setVisible(False)
-        self._stop_btn.clicked.connect(self.cancel_render)
-        self._diagram_view.render_started.connect(self._render_status.start)
-        self._diagram_view.render_started.connect(lambda: self._set_rendering(True))
-        self._diagram_view.render_finished.connect(self._render_status.finish)
-        self._diagram_view.render_finished.connect(self._announce_render)
-        self._diagram_view.render_error.connect(self._on_render_error)
-        self._diagram_view.entity_clicked.connect(self._on_entity_clicked)
-        self._diagram_view.row_clicked.connect(self._on_row_clicked)
-        self._entity_to_table: dict[str, str] = {}
-        self._diagram_view.render_finished.connect(lambda _ok: self._set_rendering(False))
-        # After a draw from the map: select the busiest drawn table once the
-        # new diagram is on screen (see _draw_from_map).
-        self._focus_after_render = ""
-        self._diagram_view.render_finished.connect(self._arrive_after_draw)
-        diagram_tab = QWidget()
-        diagram_layout = QVBoxLayout(diagram_tab)
-        diagram_layout.setContentsMargins(0, 0, 0, 0)
-        diagram_layout.setSpacing(4)
-        diagram_layout.addWidget(self._options_bar)
-        self._divider = QFrame()
-        self._divider.setFrameShape(QFrame.HLine)
-        self._divider.setStyleSheet(f"color: {_line_hex(self)};")
-        diagram_layout.addWidget(self._divider)
-        # The render status (spinner → tick) and Stop share the diagram's
-        # bottom strip with the zoom controls, instead of spending a row.
-        self._diagram_view.add_status_widget(self._render_status)
-        self._diagram_view.add_status_widget(self._stop_btn)
-        # Lasting states the app chose (audit links hidden, automatic Keys
-        # only) sit beside it as chips, each undone with a click.
-        for chip in self._options_bar.state_chips():
-            self._diagram_view.add_status_chip(chip)
-        # The canvas shows either the ER diagram or, for big schemas, the map.
-        self._map_view = SchemaMapView()
-        self._canvas = QStackedWidget()
-        self._canvas.addWidget(self._diagram_view)
-        self._canvas.addWidget(self._map_view)
-        diagram_layout.addWidget(self._canvas, 1)
         tabs.addTab(self._sql_tab, "SQL")
         # The raw rows are a reference, not where work happens: last.
         tabs.addTab(self._table_stack, "Data")
@@ -498,16 +514,7 @@ class MainWindow(QMainWindow):
         # Fusion's roomy tab padding left the sixth tab off a 340px panel.
         tabs.tabBar().setStyleSheet("QTabBar::tab { padding: 4px 8px; }")
 
-        # Diagram-first: the diagram is the centre of the window, always in
-        # view; the other views sit in a Details panel on the right, closed
-        # by default so the canvas gets the width.
         self._tabs = tabs
-        self._diagram_tab = diagram_tab
-        # Back / Forward through the tables shown, like a browser: following
-        # a link no longer loses your place.
-        self._history: list[str] = []
-        self._history_at = -1
-        self._navigating = False
         # Shown beside the table name in Columns and Links.
         self._back_action = QAction("Back", self)
         self._forward_action = QAction("Forward", self)
@@ -547,6 +554,56 @@ class MainWindow(QMainWindow):
         )
         self._details_btn.toggled.connect(self.set_details_visible)
         self._details_btn.setMinimumWidth(self._details_btn.sizeHint().width())
+        return tabs
+
+    def _build_canvas(self) -> QWidget:
+        """The centre: the options bar over the diagram or the map, the render
+        status, and the Diagram / Map switch. Needs the Details button."""
+        # Rendered diagram tab = an options bar above the actual diagram view.
+        self._diagram_view = DiagramView()
+        self._options_bar = DiagramOptionsBar()
+        self._options_bar.changed.connect(self._render_selection)
+        self._options_bar.changed.connect(self._sync_export_caption)
+        self._render_status = RenderStatus()
+        # A Stop control that only appears while a diagram is rendering, so a
+        # slow/large layout can be abandoned without waiting it out.
+        self._stop_btn = QPushButton("Stop")
+        self._stop_btn.setToolTip("Stop drawing the diagram (Esc).")
+        self._stop_btn.setVisible(False)
+        self._stop_btn.clicked.connect(self.cancel_render)
+        self._diagram_view.render_started.connect(self._render_status.start)
+        self._diagram_view.render_started.connect(lambda: self._set_rendering(True))
+        self._diagram_view.render_finished.connect(self._render_status.finish)
+        self._diagram_view.render_finished.connect(self._announce_render)
+        self._diagram_view.render_error.connect(self._on_render_error)
+        self._diagram_view.entity_clicked.connect(self._on_entity_clicked)
+        self._diagram_view.row_clicked.connect(self._on_row_clicked)
+        self._diagram_view.render_finished.connect(lambda _ok: self._set_rendering(False))
+        self._diagram_view.render_finished.connect(self._arrive_after_draw)
+        diagram_tab = QWidget()
+        diagram_layout = QVBoxLayout(diagram_tab)
+        diagram_layout.setContentsMargins(0, 0, 0, 0)
+        diagram_layout.setSpacing(4)
+        diagram_layout.addWidget(self._options_bar)
+        self._divider = QFrame()
+        self._divider.setFrameShape(QFrame.HLine)
+        self._divider.setStyleSheet(f"color: {_line_hex(self)};")
+        diagram_layout.addWidget(self._divider)
+        # The render status (spinner → tick) and Stop share the diagram's
+        # bottom strip with the zoom controls, instead of spending a row.
+        self._diagram_view.add_status_widget(self._render_status)
+        self._diagram_view.add_status_widget(self._stop_btn)
+        # Lasting states the app chose (audit links hidden, automatic Keys
+        # only) sit beside it as chips, each undone with a click.
+        for chip in self._options_bar.state_chips():
+            self._diagram_view.add_status_chip(chip)
+        # The canvas shows either the ER diagram or, for big schemas, the map.
+        self._map_view = SchemaMapView()
+        self._canvas = QStackedWidget()
+        self._canvas.addWidget(self._diagram_view)
+        self._canvas.addWidget(self._map_view)
+        diagram_layout.addWidget(self._canvas, 1)
+        self._diagram_tab = diagram_tab
         # One switch for one choice: the canvas shows the diagram or the map.
         switch = QWidget()
         switch_row = QHBoxLayout(switch)
@@ -595,8 +652,10 @@ class MainWindow(QMainWindow):
         self._map_view.export_requested.connect(self.export_map)
         self._map_view._hide.toggled.connect(self._options_bar._hide_audit.setChecked)
         self._options_bar._hide_audit.toggled.connect(self._sync_map_hide_audit)
-        self._audit_share = 0.0
+        return diagram_tab
 
+    def _build_left_rail(self):
+        """The table list, wired to the map (built first) and the window."""
         # Left: table picker to limit what gets rendered. Right: the tabs.
         self._selector = TableSelector()
         self._selector.applied.connect(self._render_selection)
@@ -608,18 +667,9 @@ class MainWindow(QMainWindow):
         self._selector.path_requested.connect(self._find_shortest_path)
         self._selector.undone.connect(self._on_selection_undone)
 
-        body = QSplitter(Qt.Horizontal)
-        self._body = body
-        body.addWidget(self._selector)
-        body.addWidget(diagram_tab)
-        body.addWidget(tabs)
-        body.setStretchFactor(0, 0)
-        body.setStretchFactor(1, 1)
-        body.setStretchFactor(2, 0)
-        body.setCollapsible(1, False)
-        body.setSizes([280, 940, 380])
-        outer.addWidget(body, 1)
-
+    def _build_export_bar(self, outer):
+        """The bottom bar: Export (and its formats), Preview, the Mermaid menu,
+        and the table list's presets button."""
         # The bottom bar holds one job, getting the diagram out: Export is the
         # lead (a split button; its arrow picks another format and exports in
         # it), Preview sits beside it, and the Mermaid text outputs share one
@@ -742,30 +792,6 @@ class MainWindow(QMainWindow):
         outer.addLayout(buttons)
 
         self._preview_btn.clicked.connect(self.preview_browser)
-
-        self.setCentralWidget(central)
-        self._build_sql_dock()
-        self._build_menu_bar()
-
-        # Match the OS: default the diagram's own theme/background to dark when
-        # the app starts dark, and apply palette-derived colours everywhere.
-        app = QApplication.instance()
-        if app is not None:
-            self._options_bar.apply_system_defaults(system_is_dark(app))
-        self._restore_session()
-        # The canvas is the first thing anyone sees, so it says what to do.
-        self._diagram_view.show_message(
-            "No spreadsheet loaded yet.\n\n"
-            "Drop an Excel schema file on the bar above, or click it to browse. "
-            "New here? Use “try a sample”.\n\n"
-            "Once a file loads, the diagram appears here. The Details panel "
-            "(Ctrl+I) shows the selected table, the extracted rows, columns, "
-            "Mermaid and SQL."
-        )
-        save_options = lambda *_: self._options_bar.save_state(app_settings())  # noqa: E731
-        self._options_bar.changed.connect(save_options)
-        self._options_bar._more.toggled.connect(save_options)
-        self.retheme()
 
     def _build_menu_bar(self):
         """A menu bar so every action has a keyboard path and a shortcut.
