@@ -16,6 +16,11 @@ from PySide6.QtGui import (
     QPixmap,
 )
 
+from PySide6.QtWidgets import (
+    QProxyStyle,
+    QStyle,
+)
+
 from .diagram_view import resource_path
 
 
@@ -174,10 +179,43 @@ def _line_hex(widget) -> str:
     return widget.palette().color(QPalette.Mid).name()
 
 
+class AppStyle(QProxyStyle):
+    """Fusion, with tick boxes you can see.
+
+    Fusion outlines a check box in the window colour darkened by 40%: 1.8:1
+    in light and 1.05:1 in dark, so an empty box all but vanished. This
+    redraws the outline in the control-border colour (3:1 or better) for
+    every check box and every tickable list row.
+    """
+
+    _BOXES = (QStyle.PE_IndicatorCheckBox, QStyle.PE_IndicatorItemViewItemCheck)
+
+    def __init__(self, base: str = "Fusion"):
+        super().__init__(base)
+
+    def drawPrimitive(self, element, option, painter, widget=None):  # noqa: N802 (Qt naming)
+        super().drawPrimitive(element, option, painter, widget)
+        if element not in self._BOXES or not option.state & QStyle.State_Enabled:
+            return
+        dark = option.palette.color(QPalette.Window).lightness() < 128
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setPen(QPen(QColor(_BORDER_DARK if dark else _BORDER_LIGHT), 1))
+        painter.setBrush(Qt.NoBrush)
+        side = min(option.rect.width(), option.rect.height())
+        box = QRectF(option.rect.x(), option.rect.y() + (option.rect.height() - side) / 2,
+                     side, side)
+        painter.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5))
+        painter.restore()
+
+
+_BORDER_DARK, _BORDER_LIGHT = "#7a7e86", "#8a8a8a"  # 3.39:1 / 3.11:1 on the window
+
+
 def _control_border_hex(widget) -> str:
     """A border that marks a control's edge: at least 3:1 with the window."""
     dark = widget.palette().color(QPalette.Window).lightness() < 128
-    return "#7a7e86" if dark else "#8a8a8a"  # 3.39:1 / 3.11:1
+    return _BORDER_DARK if dark else _BORDER_LIGHT  # 3.39:1 / 3.11:1
 
 
 def _text_hex(widget) -> str:

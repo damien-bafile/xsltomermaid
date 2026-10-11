@@ -14,6 +14,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QHBoxLayout,
+    QToolButton,
     QHeaderView,
     QLabel,
     QLineEdit,
@@ -26,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from .schema_map import is_hidden_link
 from .theme import (
+    _ACCENT,
     _link_hex,
     _muted_hex,
     _plural,
@@ -76,6 +79,21 @@ def extended_relations(relationships, name: str, links=None) -> dict[str, list[t
     return result
 
 
+def _by_table(pairs) -> dict[str, list]:
+    """``{table key: [(table, relationship), ...]}``, in name then column order."""
+    grouped: dict[str, list] = {}
+    for other, rel in sorted(pairs, key=lambda p: (p[0].lower(), p[1].label.lower())):
+        grouped.setdefault(other.lower(), []).append((other, rel))
+    return grouped
+
+
+def _keys_text(rels, shown: int = 2) -> str:
+    """"masterid, parentaccountid +2": the first few foreign-key columns."""
+    labels = [r.label for r in rels]
+    text = ", ".join(labels[:shown])
+    return text + (f" +{len(labels) - shown}" if len(labels) > shown else "")
+
+
 def link_summary(name: str, relationships) -> tuple[list, list, str]:
     """(outgoing, incoming, summary line) for ``name``, counted like the
     table list: audit and system links apart, and a link from the table to
@@ -101,14 +119,21 @@ def link_summary(name: str, relationships) -> tuple[list, list, str]:
 
 
 class _LinkTree(QTreeWidget):
-    """The links tree. Space adds the current row's table: the tree's own
-    Space handling would otherwise swallow it."""
+    """The links tree. Space adds the current row's table (the tree's own
+    Space handling would swallow it); Shift+Enter opens that table's links
+    (the tree would take it as a plain Enter)."""
 
     add_current = Signal()
+    links_current = Signal()
 
     def keyPressEvent(self, event):  # noqa: N802 (Qt naming)
-        if event.key() == Qt.Key_Space and not event.modifiers():
+        mods = event.modifiers() & ~Qt.KeypadModifier  # the number pad's Enter too
+        if event.key() == Qt.Key_Space and not mods:
             self.add_current.emit()
+            event.accept()
+            return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and mods == Qt.ShiftModifier:
+            self.links_current.emit()
             event.accept()
             return
         super().keyPressEvent(event)
@@ -118,19 +143,24 @@ class RelationshipsView(QWidget):
     """The selected table's foreign keys, both ways, and optionally the tables
     one more link away (through another table).
 
-    Each row has an Add action that ticks its table (for a table reached
-    through another, both); double-click or Enter moves the view to it.
+    One row per linked table, its foreign-key columns inline; expanding it
+    lists each key (picking one tints that join in the diagram). Each row
+    has an Add action that ticks its table (for a table reached through
+    another, both). Enter or double-click opens the table's columns, and
+    Shift+Enter its links, as in the Tables view.
     Dynamics' audit and system links are folded into their own collapsed
     group, since one table can have thousands of them.
     """
 
     add_requested = Signal(list)  # tick these tables
-    select_requested = Signal(str)  # move the view (and selection) here
+    select_requested = Signal(str)  # move the view (and selection) here: its links
+    columns_requested = Signal(str)  # select it and show its columns
     reference_picked = Signal(str, list)  # connected table ("" for none), [(table, column)] it joins on
 
     _ROLE_TABLE = Qt.UserRole
     _ROLE_JOIN = Qt.UserRole + 1  # [(table, column), ...] the link joins on
     _ROLE_ADD = Qt.UserRole + 2  # [table, ...] the Add action ticks
+    _ROLE_FIND = Qt.UserRole + 3  # what the filter matches: the table and all its keys
     _ADD_COL = 1
     _LAZY_FROM = 50  # a folded group this big gets its rows when first opened
 
@@ -165,7 +195,11 @@ class RelationshipsView(QWidget):
         self._filter.setAccessibleName("Filter linked tables")
         self._filter.setClearButtonEnabled(True)
         self._filter.textChanged.connect(self._apply_filter_text)
-        for widget in (self._title, self._meta, self._extended, self._filter, self._empty):
+        self._title_row = QHBoxLayout()
+        self._title_row.setSpacing(0)
+        self._title_row.addWidget(self._title, 1)
+        layout.addLayout(self._title_row)
+        for widget in (self._meta, self._extended, self._filter, self._empty):
             layout.addWidget(widget)
 
         self._links = _LinkTree()
@@ -175,12 +209,13 @@ class RelationshipsView(QWidget):
         self._links.setHeaderHidden(True)
         self._links.setRootIsDecorated(True)
         self._links.setUniformRowHeights(True)
-        self._links.setTextElideMode(Qt.ElideMiddle)  # keep the table and the column's end
+        self._links.setTextElideMode(Qt.ElideRight)  # the table first; keys are inline and below
         self._links.itemClicked.connect(self._on_link_clicked)
         self._links.itemActivated.connect(self._on_link_activated)
         self._links.currentItemChanged.connect(self._on_link_current)
         self._links.itemExpanded.connect(self._fill_group)
         self._links.add_current.connect(self._add_current)
+        self._links.links_current.connect(self._links_current)
         self._links.setContextMenuPolicy(Qt.CustomContextMenu)
         self._links.customContextMenuRequested.connect(self._menu)
         header = self._links.header()
@@ -189,13 +224,22 @@ class RelationshipsView(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         layout.addWidget(self._links, 1)
         self._hint = QLabel(
-            f"Double-click or Enter moves to a table · Add (or Space) ticks it · "
-            f"{IN_DIAGRAM} in the diagram"
+            f"Enter: columns · Shift+Enter: links · Space: add · {IN_DIAGRAM} in the diagram"
         )
         self._hint.setWordWrap(True)
         layout.addWidget(self._hint)
         self.retheme()
         self.show_table("", [], set())
+
+    def add_title_buttons(self, *actions):
+        """Tool buttons for ``actions`` at the right of the title line (Back,
+        Forward)."""
+        for action in actions:
+            button = QToolButton()
+            button.setDefaultAction(action)
+            button.setArrowType(action.data())  # Qt.LeftArrow / Qt.RightArrow
+            button.setAutoRaise(True)
+            self._title_row.addWidget(button)
 
     def current_table(self) -> str:
         return self._table
@@ -252,31 +296,36 @@ class RelationshipsView(QWidget):
             self._apply_filter_text(self._filter.text())
 
     def _on_extended_toggled(self, on: bool):
+        top = self._links.verticalScrollBar().value()
         self._fill()
-        if on:  # it lands below the direct links: bring it into view
+        self._links.verticalScrollBar().setValue(top)  # the direct links stay put
+        if on:  # the summary counts them; show the group's heading, scrolling no more than needed
             last = self._links.topLevelItem(self._links.topLevelItemCount() - 1)
             if last is not None:
-                self._links.scrollToItem(last, QAbstractItemView.PositionAtTop)
+                self._links.scrollToItem(last, QAbstractItemView.EnsureVisible)
 
     def _add_group(self, title: str, pairs):
         # The same rule as the map, the diagram and the link counts.
         regular = [(t, r) for t, r in pairs if not is_hidden_link(r)]
         audit = [(t, r) for t, r in pairs if is_hidden_link(r)]
-        group = self._group(self._links, f"{title} ({len(regular):,})")
+        # Tables, counted: a row is a table, with its keys inline.
+        group = self._group(self._links, f"{title} ({_plural(len(_by_table(regular)), 'table')})")
         if not regular and not audit:
             self._note(group, "None")
         self._add_rows(group, regular)
         if audit:
-            folded = self._group(group, f"Audit and system links ({len(audit):,})")
+            folded = self._group(
+                group, f"Audit and system links ({_plural(len(_by_table(audit)), 'table')})"
+            )
             self._add_folded(folded, audit)
         group.setExpanded(True)
 
     def _add_extended(self, by_via: dict, targets: int):
-        group = self._group(self._links, f"Through another table ({targets:,})")
+        group = self._group(self._links, f"Through another table ({_plural(targets, 'table')})")
         if not by_via:
             self._note(group, "None: every linked table links only back here.")
         for via, rows in by_via.items():
-            sub = self._group(group, f"through {via} ({len(rows):,})")
+            sub = self._group(group, f"through {via} ({len(_by_table(rows)):,})")
             if len(by_via) == 1:
                 self._add_rows(sub, rows, via=via)
                 sub.setExpanded(True)
@@ -293,7 +342,7 @@ class RelationshipsView(QWidget):
     def _add_folded(self, group, rows, via: str = ""):
         """Rows for a closed group: built now if few, else when first opened
         (a Dynamics hub has thousands of audit links)."""
-        if len(rows) < self._LAZY_FROM:
+        if len(_by_table(rows)) < self._LAZY_FROM:
             self._add_rows(group, rows, via=via)
         else:
             self._pending[id(group)] = (rows, via)
@@ -318,20 +367,38 @@ class RelationshipsView(QWidget):
         return group
 
     def _add_rows(self, parent, pairs, via: str = ""):
-        muted = QColor(_muted_hex(self))
+        """One row per table, its foreign-key columns inline; a table linked
+        through more than one key lists each below it, to tint each join."""
         link = QColor(_link_hex(self))
-        for other, rel in sorted(pairs, key=lambda p: (p[0].lower(), p[1].label.lower())):
+        for rels in _by_table(pairs).values():
+            other = rels[0][0]
+            keys = [r for _o, r in rels]
             to_add = [t for t in ([via, other] if via else [other]) if t.lower() not in self._drawn]
-            # "via" is for columns only: the row is "table · column".
             itself = other.lower() == self._table.lower() and not via
             shown = f"{other} (itself)" if itself else other
-            row = QTreeWidgetItem(parent, [f"{shown}  ·  {rel.label}", "Add" if to_add else IN_DIAGRAM])
-            row.setData(0, self._ROLE_TABLE, other)
             # A table reached through another has no join with this one.
-            row.setData(0, self._ROLE_JOIN, [] if via else _join_columns(rel))
+            joins = [] if via else [j for r in keys for j in _join_columns(r)]
+            row = QTreeWidgetItem(
+                parent, [f"{shown}  ·  {_keys_text(keys)}", "Add" if to_add else IN_DIAGRAM]
+            )
+            row.setData(0, self._ROLE_TABLE, other)
+            row.setData(0, self._ROLE_JOIN, joins)
             row.setData(0, self._ROLE_ADD, to_add)
-            row.setToolTip(0, f"{shown}, through the {rel.label} column. Double-click or Enter to move to it.")
-            row.setData(0, Qt.AccessibleTextRole, f"{shown}, column {rel.label}")
+            row.setData(0, self._ROLE_FIND, " ".join([shown] + [r.label for r in keys]).lower())
+            columns = ", ".join(r.label for r in keys)
+            row.setToolTip(
+                0, f"{shown}, through {_plural(len(keys), 'column')}: {columns}. "
+                "Enter: its columns · Shift+Enter: its links."
+            )
+            row.setData(0, Qt.AccessibleTextRole, f"{shown}, columns {columns}")
+            if len(keys) > 1:
+                for rel in keys:
+                    key_row = QTreeWidgetItem(row, [rel.label, ""])
+                    key_row.setData(0, self._ROLE_TABLE, other)
+                    key_row.setData(0, self._ROLE_JOIN, [] if via else _join_columns(rel))
+                    key_row.setData(0, self._ROLE_ADD, to_add)
+                    key_row.setToolTip(0, f"{shown}, through the {rel.label} column.")
+                    key_row.setData(0, Qt.AccessibleTextRole, f"{shown}, column {rel.label}")
             if to_add:
                 row.setToolTip(self._ADD_COL, f"Tick {' and '.join(to_add)} in the diagram (Space)")
                 row.setData(
@@ -345,7 +412,7 @@ class RelationshipsView(QWidget):
             else:
                 row.setToolTip(self._ADD_COL, "In the diagram")
                 row.setData(self._ADD_COL, Qt.AccessibleTextRole, "In the diagram")
-                row.setForeground(self._ADD_COL, muted)
+                row.setForeground(self._ADD_COL, QColor(_ACCENT))  # the table list's ●
                 row.setTextAlignment(self._ADD_COL, Qt.AlignCenter)
 
     def _apply_filter_text(self, text: str):
@@ -354,8 +421,8 @@ class RelationshipsView(QWidget):
         needle = text.strip().lower()
 
         def walk(item) -> bool:
-            if item.data(0, self._ROLE_TABLE) is not None:  # a row
-                hit = not needle or needle in item.text(0).lower()
+            if item.data(0, self._ROLE_TABLE) is not None:  # a table row (its keys go with it)
+                hit = not needle or needle in (item.data(0, self._ROLE_FIND) or item.text(0).lower())
                 item.setHidden(not hit)
                 return hit
             if needle and id(item) in self._pending:
@@ -392,6 +459,12 @@ class RelationshipsView(QWidget):
 
     def _on_link_activated(self, item, _column):
         other = item.data(0, self._ROLE_TABLE)
+        if other:  # Enter or double-click: its columns, as in the Tables view
+            self.columns_requested.emit(other)
+
+    def _links_current(self):
+        item = self._links.currentItem()
+        other = item.data(0, self._ROLE_TABLE) if item is not None else None
         if other:
             self.select_requested.emit(other)
 
@@ -407,7 +480,8 @@ class RelationshipsView(QWidget):
                 f"Add {' and '.join(to_add)} to the diagram",
                 lambda: self.add_requested.emit(list(to_add)),
             )
-        menu.addAction(f"Go to {other}", lambda: self.select_requested.emit(other))
+        menu.addAction(f"{other}'s columns", lambda: self.columns_requested.emit(other))
+        menu.addAction(f"{other}'s links", lambda: self.select_requested.emit(other))
         menu.exec(self._links.viewport().mapToGlobal(pos))
 
     def retheme(self):

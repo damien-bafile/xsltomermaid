@@ -142,6 +142,7 @@ from .config import (
     RENDER_WARN_LIMIT,
 )
 from .theme import (
+    AppStyle,
     _ACCENT_FILL,
     _control_border_hex,
     _ACCENT_WASH,
@@ -415,6 +416,7 @@ class MainWindow(QMainWindow):
         self._relations = RelationshipsView()
         self._relations.add_requested.connect(self._add_tables_from_details)
         self._relations.select_requested.connect(self._focus_table)
+        self._relations.columns_requested.connect(self._open_columns)
         self._relations.reference_picked.connect(self._mark_reference)
         # "Links", not "Relationships": six views fit a narrow panel.
         tabs.addTab(self._relations, "Links")
@@ -500,13 +502,33 @@ class MainWindow(QMainWindow):
         # by default so the canvas gets the width.
         self._tabs = tabs
         self._diagram_tab = diagram_tab
+        # Back / Forward through the tables shown, like a browser: following
+        # a link no longer loses your place.
+        self._history: list[str] = []
+        self._history_at = -1
+        self._navigating = False
+        # Shown beside the table name in Columns and Links.
+        self._back_action = QAction("Back", self)
+        self._forward_action = QAction("Forward", self)
+        for action, arrow, key, step in (
+            (self._back_action, Qt.LeftArrow, "Alt+Left", -1),
+            (self._forward_action, Qt.RightArrow, "Alt+Right", 1),
+        ):
+            action.setData(arrow)
+            action.setShortcut(QKeySequence(key))
+            action.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+            action.triggered.connect(lambda _c=False, s=step: self._go_history(s))
+            tabs.addAction(action)  # the keys work anywhere in the panel
+        for view in (self._columns, self._relations):
+            view.add_title_buttons(self._back_action, self._forward_action)
+        self._sync_history_buttons()
         tabs.currentChanged.connect(self._fill_data_if_shown)
         tabs.setMinimumWidth(300)
         tabs.setVisible(False)
         self._details_btn = QToolButton()
         self._details_btn.setText("Details")
         self._details_btn.setCheckable(True)
-        self._details_btn.setArrowType(Qt.LeftArrow)
+        self._details_btn.setArrowType(Qt.RightArrow)  # a disclosure, like More
         self._details_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._details_btn.setToolTip(
             "Show or hide the Details panel: the diagram's tables, the selected "
@@ -818,7 +840,7 @@ class MainWindow(QMainWindow):
         self._map_action = act("Schema ma&p", lambda: self.show_map(not self.map_visible()),
                                QKeySequence("Ctrl+M"), schema_only=True)
         view_menu.addAction(self._map_action)
-        self._details_action = QAction("&Details panel", self)
+        self._details_action = QAction("Details pa&nel", self)
         self._details_action.setCheckable(True)
         self._details_action.setShortcut(QKeySequence("Ctrl+I"))
         self._details_action.toggled.connect(self.set_details_visible)
@@ -828,9 +850,9 @@ class MainWindow(QMainWindow):
                 ("&Tables", self._tables_view),
                 ("&Columns", self._columns),
                 ("&Links", self._relations),
-                ("&Mermaid source", self._mermaid_view),
-                ("&SQL query", self._sql_tab),
-                ("E&xtracted data", self._table_stack),
+                ("&Mermaid", self._mermaid_view),
+                ("&SQL", self._sql_tab),
+                ("&Data", self._table_stack),
             ],
             start=1,
         ):
@@ -1302,6 +1324,8 @@ class MainWindow(QMainWindow):
         views (with nothing selected, each says how to pick a table)."""
         if name is None:
             name = self._columns.current_table()
+        else:
+            self._remember(name)
         schema = self._schema
         table = None
         if schema is not None and name:
@@ -1319,6 +1343,42 @@ class MainWindow(QMainWindow):
             table, key in drawn, self._options_bar.diagram_options(), linked
         )
         self._relations.show_table(table.name, schema.relationships, drawn, table.full_name)
+
+    def _remember(self, name: str):
+        """Add a newly shown table to the Back / Forward history."""
+        if self._navigating or not name or self._schema is None:
+            return
+        if not any(t.name == name for t in self._schema.tables):
+            return
+        if 0 <= self._history_at < len(self._history) and self._history[self._history_at] == name:
+            return
+        del self._history[self._history_at + 1:]  # a new path drops the forward steps
+        self._history.append(name)
+        self._history = self._history[-50:]
+        self._history_at = len(self._history) - 1
+        self._sync_history_buttons()
+
+    def _go_history(self, step: int):
+        at = self._history_at + step
+        if not 0 <= at < len(self._history):
+            return
+        self._history_at = at
+        self._navigating = True
+        try:
+            self._focus_table(self._history[at])
+        finally:
+            self._navigating = False
+        self._sync_history_buttons()
+
+    def _sync_history_buttons(self):
+        for action, step, word, key in ((self._back_action, -1, "Back", "Alt+Left"),
+                                        (self._forward_action, 1, "Forward", "Alt+Right")):
+            at = self._history_at + step
+            ok = 0 <= at < len(self._history)
+            action.setEnabled(ok)
+            target = f" to {self._history[at]}" if ok else ""
+            action.setText(f"{word}{target}")  # also the buttons' accessible name
+            action.setToolTip(f"{word}{target} ({key})")
 
     def _refresh_tables_view(self):
         """List the diagram's tables, with how many of their columns are drawn."""
@@ -1360,9 +1420,22 @@ class MainWindow(QMainWindow):
                 toggle.blockSignals(True)
                 toggle.setChecked(visible)
                 toggle.blockSignals(False)
-        self._details_btn.setArrowType(Qt.RightArrow if visible else Qt.LeftArrow)
+        self._details_btn.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
         app_settings().setValue("window/details_open", visible)
+        if visible:  # once the splitter has laid the panel out
+            QTimer.singleShot(0, self._widen_details)
         self._fill_data_if_shown()
+
+    def _widen_details(self, want: int = 360, canvas_floor: int = 420):
+        """Opened squeezed to its minimum (a narrow window): take room from
+        the canvas, which shrinks better, so names fit. A width the user
+        chose is left alone."""
+        sizes = self._body.sizes()
+        if len(sizes) != 3 or self._tabs.isHidden() or sizes[2] > self._tabs.minimumWidth() + 8:
+            return
+        take = min(want - sizes[2], max(0, sizes[1] - canvas_floor))
+        if take > 0:
+            self._body.setSizes([sizes[0], sizes[1] - take, sizes[2] + take])
 
     def show_details(self, widget):
         """Open the Details panel on one of its views."""
@@ -2598,7 +2671,7 @@ def main(argv: list[str] | None = None):
     app.setWindowIcon(app_icon())
     # Follow the OS light/dark scheme, and keep following it if the user flips
     # the system theme while the app is open.
-    app.setStyle("Fusion")
+    app.setStyle(AppStyle("Fusion"))  # Fusion, with tick boxes you can see
     apply_system_palette(app)
     hints = app.styleHints()
     if hasattr(hints, "colorSchemeChanged"):

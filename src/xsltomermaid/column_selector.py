@@ -72,7 +72,7 @@ class ColumnSelector(QWidget):
 
     _ROLE_NAME = Qt.UserRole  # the column's name
     _ROLE_KEY = Qt.UserRole + 1  # True for a PK or FK column
-    _NAME, _TYPE, _KEYS, _NULL = range(4)
+    _NAME, _TYPE, _NULL = range(3)  # the key marks lead the Type cell: "PK · int"
     _DRAGGED = "dragged"  # the sort value shown for a table with its own order
 
     def __init__(self, parent=None):
@@ -99,7 +99,10 @@ class ColumnSelector(QWidget):
         )
         self._empty.setWordWrap(True)
         self._empty.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        layout.addWidget(self._title)
+        self._title_row = QHBoxLayout()
+        self._title_row.setSpacing(0)
+        self._title_row.addWidget(self._title, 1)
+        layout.addLayout(self._title_row)
         layout.addWidget(self._meta)
         layout.addWidget(self._empty)
 
@@ -147,8 +150,11 @@ class ColumnSelector(QWidget):
 
         self._tree = _ColumnTree()
         self._tree.setAccessibleName("Columns of the selected table")
-        self._tree.setColumnCount(4)
-        self._tree.setHeaderLabels(["Column", "Type", "Key", "Null"])
+        self._tree.setColumnCount(3)
+        self._tree.setHeaderLabels(["Column", "Key · type", "Null"])
+        self._tree.headerItem().setToolTip(
+            self._TYPE, "PK: primary key · FK: foreign key, then the data type."
+        )
         self._tree.setRootIsDecorated(False)
         self._tree.setUniformRowHeights(True)
         self._tree.setDragDropMode(QAbstractItemView.InternalMove)
@@ -159,12 +165,11 @@ class ColumnSelector(QWidget):
         header.setStretchLastSection(False)
         header.setSectionResizeMode(self._NAME, QHeaderView.Stretch)
         header.setSectionResizeMode(self._TYPE, QHeaderView.Fixed)
-        for section in (self._KEYS, self._NULL):
-            header.setSectionResizeMode(section, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(self._NULL, QHeaderView.ResizeToContents)
         # Column names are what people document: they get the room, and a
         # long type ("uniqueidentifier") is cut instead, whole in its tooltip.
         self._tree.setColumnWidth(
-            self._TYPE, self._tree.fontMetrics().horizontalAdvance("decimal(18,2)") + 12
+            self._TYPE, self._tree.fontMetrics().horizontalAdvance("PK · decimal(18,2)") + 12
         )
         self._tree.itemChanged.connect(self._on_item_changed)
         self._tree.currentItemChanged.connect(self._on_current_changed)
@@ -216,6 +221,16 @@ class ColumnSelector(QWidget):
         body.addWidget(self._hint)
         self.retheme()
         self.show_table(None)
+
+    def add_title_buttons(self, *actions):
+        """Tool buttons for ``actions`` at the right of the title line (Back,
+        Forward)."""
+        for action in actions:
+            button = QToolButton()
+            button.setDefaultAction(action)
+            button.setArrowType(action.data())  # Qt.LeftArrow / Qt.RightArrow
+            button.setAutoRaise(True)
+            self._title_row.addWidget(button)
 
     # -- the selected table -------------------------------------------------
     def current_table(self) -> str:
@@ -273,10 +288,9 @@ class ColumnSelector(QWidget):
         for column in self.ordered_columns(table):
             marks = [m for m, on in (("PK", column.is_primary_key),
                                      ("FK", bool(column.foreign_key_reference))) if on]
-            item = QTreeWidgetItem([
-                column.name, column.rendered_type(), ", ".join(marks),
-                "Yes" if column.is_nullable else "No",
-            ])
+            kind = " · ".join([", ".join(marks), column.rendered_type()] if marks
+                              else [column.rendered_type()])
+            item = QTreeWidgetItem([column.name, kind, "Yes" if column.is_nullable else "No"])
             # Checkable and draggable, but nothing drops *onto* a row (that
             # would nest it): drops land between rows.
             item.setFlags(
@@ -285,9 +299,21 @@ class ColumnSelector(QWidget):
             )
             item.setData(self._NAME, self._ROLE_NAME, column.name)
             item.setData(self._NAME, self._ROLE_KEY, bool(marks))
-            item.setToolTip(self._TYPE, column.rendered_type())
-            if column.foreign_key_reference:
-                item.setToolTip(self._KEYS, f"References {column.foreign_key_reference}")
+            item.setToolTip(
+                self._TYPE, column.rendered_type() + (
+                    f" · references {column.foreign_key_reference}"
+                    if column.foreign_key_reference else ""
+                ),
+            )
+            item.setData(
+                self._TYPE, Qt.AccessibleTextRole,
+                (" and ".join({"PK": "primary key", "FK": "foreign key"}[m] for m in marks) + ", "
+                 if marks else "") + column.rendered_type(),
+            )
+            item.setData(
+                self._NULL, Qt.AccessibleTextRole,
+                "can be null" if column.is_nullable else "not null",
+            )
             excluded = (key, column.name.lower()) in self._excluded
             item.setCheckState(self._NAME, Qt.Unchecked if excluded else Qt.Checked)
             if drawn and not excluded and column.name.lower() not in on_canvas:
@@ -295,7 +321,7 @@ class ColumnSelector(QWidget):
                 why = "Keys only" if opts.keys_only else "Hide system columns"
                 font = item.font(self._NAME)
                 font.setItalic(True)
-                for section in range(4):
+                for section in range(3):
                     item.setForeground(section, muted)
                     item.setFont(section, font)
                 item.setData(self._NAME, Qt.AccessibleTextRole, f"{column.name}, hidden by {why}")
