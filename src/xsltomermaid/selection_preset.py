@@ -113,16 +113,6 @@ def _strings(value, length: int | None = None) -> bool:
     )
 
 
-def dump_selection_toml(filename: str, selected_tables: list[str]) -> str:
-    """Return TOML text for a preset of just the ticked tables."""
-    return dump_preset(Preset(filename, selected_tables))
-
-
-def load_selection_toml(text: str) -> tuple[str, list[str]]:
-    """Parse filename + selected table list from TOML text."""
-    preset = load_preset(text)
-    return preset.filename, preset.selected_tables
-
 
 def _load_toml(text: str) -> dict:
     invalid_message = "Invalid TOML preset content."

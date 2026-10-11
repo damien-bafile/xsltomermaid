@@ -1667,6 +1667,9 @@ class MainWindow(QMainWindow):
         schema, or a user-picked subset for a large one).
         """
         self._saved_note.setVisible(False)  # that export was of the last file
+        # Back / Forward were for the last file's tables.
+        self._history, self._history_at = [], -1
+        self._sync_history_buttons()
         self._schema = schema
         self._loaded_name = os.path.basename(path)
         self._render_confirmed_sig = None  # new file: forget the prior confirmation

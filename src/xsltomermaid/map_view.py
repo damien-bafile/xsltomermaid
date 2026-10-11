@@ -7,7 +7,6 @@ focus from Qt. Every action also has a list/keyboard route in the window.
 
 from __future__ import annotations
 
-import math
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (

@@ -71,7 +71,6 @@ class ColumnSelector(QWidget):
     column_picked = Signal(str, str)  # (table, column) highlighted; ("", "") clears
 
     _ROLE_NAME = Qt.UserRole  # the column's name
-    _ROLE_KEY = Qt.UserRole + 1  # True for a PK or FK column
     _NAME, _TYPE, _NULL = range(3)  # the key marks lead the Type cell: "PK · int"
     _DRAGGED = "dragged"  # the sort value shown for a table with its own order
 
@@ -298,7 +297,6 @@ class ColumnSelector(QWidget):
                 & ~Qt.ItemIsDropEnabled
             )
             item.setData(self._NAME, self._ROLE_NAME, column.name)
-            item.setData(self._NAME, self._ROLE_KEY, bool(marks))
             item.setToolTip(
                 self._TYPE, column.rendered_type() + (
                     f" · references {column.foreign_key_reference}"
@@ -548,17 +546,6 @@ class ColumnSelector(QWidget):
             )
         self._updating = False
 
-    def set_column_included(self, table: str, column: str, included: bool):
-        """Include or leave out one column."""
-        pair = (table.lower(), column.lower())
-        if (pair not in self._excluded) == included:
-            return
-        if included:
-            self._excluded.discard(pair)
-        else:
-            self._excluded.add(pair)
-        self._sync_checks()
-        self.changed.emit()
 
     def excluded_pairs(self) -> set[tuple[str, str]]:
         return set(self._excluded)
