@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import (
+    QEvent,
     Qt,
     Signal,
 )
@@ -29,10 +30,10 @@ _FILTER_FROM = 12  # show the filter box from this many tables
 
 
 class TablesView(QWidget):
-    """The tables in the diagram, each with a Columns action.
+    """The tables in the diagram: columns drawn, links, and a Columns action.
 
     Clicking a row selects that table everywhere; Columns (or Enter) also
-    opens the Columns view on it.
+    opens the Columns view on it, Shift+Enter its Links view.
     """
 
     table_picked = Signal(str)
@@ -40,7 +41,7 @@ class TablesView(QWidget):
     relationships_requested = Signal(str)
 
     _ROLE_TABLE = Qt.UserRole
-    _SHOWN, _OPEN = 1, 2
+    _SHOWN, _LINKS, _OPEN = 1, 2, 3
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -63,36 +64,51 @@ class TablesView(QWidget):
         self._filter.textChanged.connect(self._apply_filter_text)
         self._tree = QTreeWidget()
         self._tree.setAccessibleName("Tables in the diagram")
-        self._tree.setColumnCount(3)
-        self._tree.setHeaderLabels(["Table", "Columns shown", ""])
+        self._tree.setColumnCount(4)
+        self._tree.setHeaderLabels(["Table", "Columns drawn", "Links", "Open"])
+        self._tree.headerItem().setToolTip(
+            self._LINKS, "↗ foreign keys to other tables · ↙ foreign keys from them "
+            "(audit and system links left out, as in the table list)"
+        )
         self._tree.setRootIsDecorated(False)
         self._tree.setUniformRowHeights(True)
         header = self._tree.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(self._SHOWN, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(self._OPEN, QHeaderView.ResizeToContents)
+        for section in (self._SHOWN, self._LINKS, self._OPEN):
+            header.setSectionResizeMode(section, QHeaderView.ResizeToContents)
         self._tree.currentItemChanged.connect(self._on_current)
         self._tree.itemClicked.connect(self._on_clicked)
         self._tree.itemActivated.connect(self._on_activated)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._menu)
+        self._tree.installEventFilter(self)
         for widget in (self._meta, self._empty, self._filter):
             layout.addWidget(widget)
         layout.addWidget(self._tree, 1)
         self.retheme()
         self.set_tables([])
 
-    def set_tables(self, rows: list[tuple[str, int, int]]):
-        """List ``(table, columns shown, columns)`` rows, keeping the current one."""
+    def set_tables(self, rows: list[tuple]):
+        """List ``(table, columns drawn, columns, links out, links in)`` rows
+        (the link counts optional), keeping the current one."""
         current = self.current_table()
         self._updating = True
         self._tree.clear()
         link = QColor(_link_hex(self))
-        for name, shown, total in rows:
-            item = QTreeWidgetItem([name, f"{shown:,} of {total:,}", "Columns ›"])
+        for name, shown, total, *links in rows:
+            out, in_ = (links + [0, 0])[:2]
+            item = QTreeWidgetItem(
+                [name, f"{shown:,} of {total:,}", f"↗{out:,} ↙{in_:,}", "Columns ›"]
+            )
             item.setData(0, self._ROLE_TABLE, name)
             item.setTextAlignment(self._SHOWN, Qt.AlignRight | Qt.AlignVCenter)
+            item.setTextAlignment(self._LINKS, Qt.AlignRight | Qt.AlignVCenter)
+            item.setToolTip(self._LINKS, f"{name}'s links (Shift+Enter)")
+            item.setData(
+                self._LINKS, Qt.AccessibleTextRole,
+                f"{out:,} foreign keys to other tables, {in_:,} from them",
+            )
             item.setToolTip(self._OPEN, f"Choose {name}'s columns (Enter)")
             item.setData(self._OPEN, Qt.AccessibleTextRole, f"Open {name}'s columns (Enter)")
             font = item.font(self._OPEN)
@@ -106,8 +122,8 @@ class TablesView(QWidget):
         self._empty.setVisible(not has)
         self._meta.setVisible(has)
         self._meta.setText(
-            f"{len(rows):,} table{'' if len(rows) == 1 else 's'} in the diagram. "
-            "Click one to select it; Columns opens its columns."
+            f"{len(rows):,} table{'' if len(rows) == 1 else 's'} in the diagram · "
+            "Enter: columns · Shift+Enter: links"
         )
         self._filter.setVisible(len(rows) >= _FILTER_FROM)
         self._apply_filter_text(self._filter.text())
@@ -136,6 +152,19 @@ class TablesView(QWidget):
         if column == self._OPEN:
             self.columns_requested.emit(item.data(0, self._ROLE_TABLE))
 
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt naming)
+        # Shift+Enter on the tree opens the links; the tree would otherwise
+        # take it as a plain Enter (Columns).
+        if obj is self._tree and event.type() == QEvent.KeyPress:
+            item = self._tree.currentItem()
+            if (
+                item is not None and event.modifiers() == Qt.ShiftModifier
+                and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+            ):
+                self.relationships_requested.emit(item.data(0, self._ROLE_TABLE))
+                return True
+        return super().eventFilter(obj, event)
+
     def _on_activated(self, item, _column):
         self.columns_requested.emit(item.data(0, self._ROLE_TABLE))
 
@@ -146,7 +175,7 @@ class TablesView(QWidget):
         name = item.data(0, self._ROLE_TABLE)
         menu = QMenu(self)
         menu.addAction("Columns", lambda: self.columns_requested.emit(name))
-        menu.addAction("Relationships", lambda: self.relationships_requested.emit(name))
+        menu.addAction("Links", lambda: self.relationships_requested.emit(name))
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
     def _apply_filter_text(self, text: str):

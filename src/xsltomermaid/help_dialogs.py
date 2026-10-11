@@ -44,7 +44,8 @@ def show_shortcuts_help(parent) -> None:
         ("Diagram: arrows, Enter", "Move between tables, open one"),
         ("Map: drag, Ctrl+click", "Select a region, add or remove a table"),
         ("Map: arrows, Space, Enter, Ctrl+A", "Move, select, open, select the cluster"),
-        ("Relationships view: Space", "Tick the highlighted linked table"),
+        ("Links view: Space / Enter", "Tick the highlighted table / move to it"),
+        ("Tables view: Enter / Shift+Enter", "Open a table's columns / its links"),
         ("Columns view: drag a row, or Alt+Up / Alt+Down", "Give the table its own column order"),
         ("Diagram: drag a relationship label", "Move it; drag its dot to rotate "
          "(Shift: 15° steps); double-click to reset"),

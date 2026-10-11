@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QToolButton,
     QTreeWidget,
@@ -110,12 +111,12 @@ class ColumnSelector(QWidget):
 
         sort_row = QHBoxLayout()
         self._sort = QComboBox()
-        sort_label = QLabel("Sort:")
+        sort_label = QLabel("Order, all tables:")
         sort_label.setBuddy(self._sort)
-        self._sort.setAccessibleName("Sort columns")
+        self._sort.setAccessibleName("Column order for all tables")
         self._sort.setToolTip(
-            "The order columns are listed and drawn in. Drag rows to give this "
-            "table its own order."
+            "The order columns are listed and drawn in, for every table. Drag "
+            "rows (or Alt+Up / Alt+Down) to give this table its own order."
         )
         for label, value in (
             ("Original order", "order"),
@@ -157,8 +158,14 @@ class ColumnSelector(QWidget):
         header = self._tree.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(self._NAME, QHeaderView.Stretch)
-        for section in (self._TYPE, self._KEYS, self._NULL):
+        header.setSectionResizeMode(self._TYPE, QHeaderView.Fixed)
+        for section in (self._KEYS, self._NULL):
             header.setSectionResizeMode(section, QHeaderView.ResizeToContents)
+        # Column names are what people document: they get the room, and a
+        # long type ("uniqueidentifier") is cut instead, whole in its tooltip.
+        self._tree.setColumnWidth(
+            self._TYPE, self._tree.fontMetrics().horizontalAdvance("decimal(18,2)") + 12
+        )
         self._tree.itemChanged.connect(self._on_item_changed)
         self._tree.currentItemChanged.connect(self._on_current_changed)
         self._tree.reordered.connect(self._on_reordered)
@@ -167,21 +174,26 @@ class ColumnSelector(QWidget):
         body.addWidget(self._tree, 1)
 
         button_row = QHBoxLayout()
+        tick_label = QLabel("Tick:")
+        button_row.addWidget(tick_label)
         for label, mode, tip in (
-            ("All", "all", "Show every column of this table."),
-            ("None", "none", "Leave out every column of this table."),
-            ("Keys only", "keys", "Show only this table's primary and foreign keys."),
+            ("All", "all", "Tick every column of this table."),
+            ("None", "none", "Untick every column of this table."),
+            ("Keys", "keys", "Tick only this table's primary and foreign keys "
+             "(the options bar's Keys only hides the rest in every table instead)."),
         ):
             button = QPushButton(label)
             button.setToolTip(tip)
+            button.setAccessibleName(f"Tick {label.lower()}: this table's columns")
             button.clicked.connect(lambda _c=False, m=mode: self._bulk(m))
             button_row.addWidget(button)
-        # All / None / Keys only rewrite the whole table, so the previous
-        # choice is kept for one undo.
+        # Each rewrites the whole table, so the previous ticks are kept for
+        # one undo. Always there (disabled when there's nothing to undo), so
+        # the buttons beside it don't jump.
         self._undo_btn = QPushButton("Undo")
-        self._undo_btn.setToolTip("Restore this table's columns from before the last button.")
+        self._undo_btn.setToolTip("Put this table's ticks back as they were before the last button.")
         self._undo_btn.clicked.connect(self._undo_bulk)
-        self._undo_btn.setVisible(False)
+        self._undo_btn.setEnabled(False)
         button_row.addWidget(self._undo_btn)
         button_row.addStretch(1)
         # The same moves as dragging, for the keyboard and a single click.
@@ -222,7 +234,7 @@ class ColumnSelector(QWidget):
         new = self._table is None or table is None or table.name != self._table.name
         if new:
             self._undo = None
-            self._undo_btn.setVisible(False)
+            self._undo_btn.setEnabled(False)
         self._table = table
         has = table is not None
         for widget in (self._title, self._meta, self._body):
@@ -243,7 +255,10 @@ class ColumnSelector(QWidget):
         if drawn:
             meta = f"{len(result.columns):,} of {total} drawn"
             if result.hidden:
-                why = "Keys only" if opts.keys_only else "Hide system columns"
+                why = " and ".join(
+                    w for w, on in (("Keys only", opts.keys_only),
+                                    ("Hide system columns", result.system)) if on
+                ) or "Keys only"
                 meta += f" · {result.hidden:,} ticked but hidden by {why} (greyed)"
         else:
             meta = f"{len(included):,} of {total} ticked · not in the diagram"
@@ -270,6 +285,7 @@ class ColumnSelector(QWidget):
             )
             item.setData(self._NAME, self._ROLE_NAME, column.name)
             item.setData(self._NAME, self._ROLE_KEY, bool(marks))
+            item.setToolTip(self._TYPE, column.rendered_type())
             if column.foreign_key_reference:
                 item.setToolTip(self._KEYS, f"References {column.foreign_key_reference}")
             excluded = (key, column.name.lower()) in self._excluded
@@ -364,6 +380,16 @@ class ColumnSelector(QWidget):
     def _on_sort_changed(self, index: int):
         if self._sort.itemData(index) == self._DRAGGED:
             return
+        if self._table is not None and self._table.name.lower() in self._custom:
+            answer = QMessageBox.question(
+                self,
+                "Replace the dragged order?",
+                f"{self._table.name} has its own dragged column order. Use "
+                f"“{self._sort.itemText(index)}” for it instead?",
+            )
+            if answer != QMessageBox.Yes:
+                self._sync_sort_controls()  # back to "Dragged order"
+                return
         self._shared_sort = index
         if self._table is not None:
             self._custom.pop(self._table.name.lower(), None)  # picking a sort replaces the drag
@@ -397,13 +423,25 @@ class ColumnSelector(QWidget):
         movable = row >= 0 and self._tree.dragEnabled()
         self._move_btns[0].setEnabled(movable and row > 0)
         self._move_btns[1].setEnabled(movable and row < self._tree.topLevelItemCount() - 1)
+        why = (
+            "Clear the filter to move columns." if not self._tree.dragEnabled()
+            else "Select a column to move it." if row < 0 else ""
+        )
+        for button, name, key in zip(self._move_btns, ("Move up", "Move down"), ("Up", "Down")):
+            button.setToolTip(f"{name} (Alt+{key})" + (f". {why}" if why else ""))
 
     def _on_reordered(self):
         if self._table is None:
             return
-        self._custom[self._table.name.lower()] = [
-            item.data(self._NAME, self._ROLE_NAME).lower() for item in self._rows()
-        ]
+        key = self._table.name.lower()
+        order = [item.data(self._NAME, self._ROLE_NAME).lower() for item in self._rows()]
+        custom = self._custom.pop(key, None)
+        shared = [c.name.lower() for c in self.ordered_columns(self._table)]
+        if order != shared:
+            self._custom[key] = order
+        elif custom is None:
+            return  # moved and moved back: nothing changed
+        self._sync_sort_controls()
         self._sync_sort_controls()
         self.changed.emit()
 
@@ -446,10 +484,11 @@ class ColumnSelector(QWidget):
         if self._table is None:
             return
         self._undo = (self._table.name, set(self._excluded))
-        self._undo_btn.setText(
-            {"all": "Undo all", "none": "Undo none", "keys": "Undo keys only"}[mode]
+        self._undo_btn.setEnabled(True)
+        self._undo_btn.setToolTip(
+            "Put this table's ticks back as they were before "
+            f"Tick {({'all': 'All', 'none': 'None', 'keys': 'Keys'}[mode])}."
         )
-        self._undo_btn.setVisible(True)
         key = self._table.name.lower()
         for column in self._table.columns:
             is_key = bool(column.is_primary_key or column.foreign_key_reference)
@@ -466,7 +505,7 @@ class ColumnSelector(QWidget):
             return
         _table, self._excluded = self._undo
         self._undo = None
-        self._undo_btn.setVisible(False)
+        self._undo_btn.setEnabled(False)
         self._sync_checks()
         self.changed.emit()
 
@@ -516,7 +555,7 @@ class ColumnSelector(QWidget):
             self._keys_first.setChecked(keys_first)
             self._keys_first.blockSignals(False)
         self._undo = None
-        self._undo_btn.setVisible(False)
+        self._undo_btn.setEnabled(False)
         self._sync_sort_controls()
         self._redraw_rows()
         self._sync_checks()
