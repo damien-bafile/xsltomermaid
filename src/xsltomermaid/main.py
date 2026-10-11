@@ -395,7 +395,7 @@ class MainWindow(QMainWindow):
         self._table_stack.addWidget(self._table_empty)
         self._table_stack.addWidget(self._table)
         # One table at a time: the Tables view lists the diagram's tables;
-        # Columns and Relationships show the selected one, and are disabled
+        # Columns and Links show the selected one (each says how to pick one
         # until a table is selected.
         self._tables_view = TablesView()
         self._tables_view.table_picked.connect(self._focus_table)
@@ -416,7 +416,8 @@ class MainWindow(QMainWindow):
         self._relations.add_requested.connect(self._add_tables_from_details)
         self._relations.select_requested.connect(self._focus_table)
         self._relations.reference_picked.connect(self._mark_reference)
-        tabs.addTab(self._relations, "Relationships")
+        # "Links", not "Relationships": six views fit a narrow panel.
+        tabs.addTab(self._relations, "Links")
         tabs.setTabToolTip(2, "The tables the selected table is linked to")
 
         self._mermaid_view = QPlainTextEdit()
@@ -491,6 +492,8 @@ class MainWindow(QMainWindow):
         # Six views don't fit a narrow panel: scroll arrows keep every tab
         # reachable by mouse (Ctrl+1–6 reach them from the keyboard).
         tabs.setUsesScrollButtons(True)
+        # Fusion's roomy tab padding left the sixth tab off a 340px panel.
+        tabs.tabBar().setStyleSheet("QTabBar::tab { padding: 4px 8px; }")
 
         # Diagram-first: the diagram is the centre of the window, always in
         # view; the other views sit in a Details panel on the right, closed
@@ -507,7 +510,7 @@ class MainWindow(QMainWindow):
         self._details_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._details_btn.setToolTip(
             "Show or hide the Details panel: the diagram's tables, the selected "
-            "table's columns and relationships, Mermaid, SQL and the extracted "
+            "table's columns and links, Mermaid, SQL and the extracted "
             "data (Ctrl+I; Ctrl+1–6 open a view)."
         )
         self._details_btn.setStyleSheet(
@@ -824,7 +827,7 @@ class MainWindow(QMainWindow):
             [
                 ("&Tables", self._tables_view),
                 ("&Columns", self._columns),
-                ("Relations&hips", self._relations),
+                ("&Links", self._relations),
                 ("&Mermaid source", self._mermaid_view),
                 ("&SQL query", self._sql_tab),
                 ("E&xtracted data", self._table_stack),
@@ -1243,7 +1246,7 @@ class MainWindow(QMainWindow):
         return next((e for e, t in self._entity_to_table.items() if t == table), "")
 
     def _mark_reference(self, name: str, joins: list | None = None):
-        """A connected table picked in the Relationships view: glow it orange in the
+        """A connected table picked in the Links view: glow it orange in the
         diagram, beside the blue selection, and tint the rows the two tables
         join on (nothing for tables that aren't drawn)."""
         self._diagram_view.mark_reference(self._entity_for(name))
@@ -1295,8 +1298,8 @@ class MainWindow(QMainWindow):
         self._refresh_details(name)
 
     def _refresh_details(self, name: str | None = None):
-        """Show ``name`` (default: the current one) in the Columns and
-        Relationships views, which are disabled while nothing is selected."""
+        """Show ``name`` (default: the current one) in the Columns and Links
+        views (with nothing selected, each says how to pick a table)."""
         if name is None:
             name = self._columns.current_table()
         schema = self._schema
@@ -1305,11 +1308,6 @@ class MainWindow(QMainWindow):
             table = next((t for t in schema.tables if t.name == name), None)
         final = self._drawio_schema
         drawn = {t.name.lower() for t in (final.tables if final else [])}
-        if table is None and self._tabs.currentWidget() in (self._columns, self._relations):
-            # Its view is about to be disabled: back to the list, not the next tab.
-            self._tabs.setCurrentWidget(self._tables_view)
-        for view in (self._columns, self._relations):
-            self._tabs.setTabEnabled(self._tabs.indexOf(view), table is not None)
         self._tables_view.set_current(table.name if table is not None else "")
         if table is None:
             self._columns.show_table(None)
@@ -1320,7 +1318,7 @@ class MainWindow(QMainWindow):
         self._columns.show_table(
             table, key in drawn, self._options_bar.diagram_options(), linked
         )
-        self._relations.show_table(table.name, schema.relationships, drawn)
+        self._relations.show_table(table.name, schema.relationships, drawn, table.full_name)
 
     def _refresh_tables_view(self):
         """List the diagram's tables, with how many of their columns are drawn."""
@@ -1331,9 +1329,10 @@ class MainWindow(QMainWindow):
         totals = {t.name: len(t.columns) for t in self._schema.tables}
         options = self._options_bar.diagram_options()
         linked = linked_fk_columns(final)
+        counts = getattr(self, "_link_counts", {})
         self._tables_view.set_tables([
             (t.name, len(drawn_columns(t, options, linked.get(t.name.lower(), set())).columns),
-             totals.get(t.name, len(t.columns)))
+             totals.get(t.name, len(t.columns)), *counts.get(t.name, (0, 0)))
             for t in final.tables
         ])
 
@@ -1343,7 +1342,7 @@ class MainWindow(QMainWindow):
         self.show_details(self._columns)
 
     def _add_tables_from_details(self, names: list):
-        """Tick tables from the Relationships view (undoable, auto-renders)."""
+        """Tick tables from the Links view (undoable, auto-renders)."""
         self._selector.snapshot_for_undo("add")
         if self._selector.check_tables(names):
             self._on_selection_edited()
@@ -1589,7 +1588,8 @@ class MainWindow(QMainWindow):
 
         names = [t.name for t in schema.tables]
         self._selector.set_tables(names)
-        self._selector.set_link_counts(link_counts(schema))
+        self._link_counts = link_counts(schema)  # the list's and the Tables view's
+        self._selector.set_link_counts(self._link_counts)
         self._selector.set_search_index(
             {t.name: [c.name for c in t.columns] for t in schema.tables}
         )

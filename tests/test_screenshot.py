@@ -101,7 +101,7 @@ def test_column_selector_marks_primary_and_foreign_keys():
     del app
 
 
-def test_dragging_columns_gives_the_table_its_own_order():
+def test_dragging_columns_gives_the_table_its_own_order(monkeypatch):
     from xsltomermaid.excel_to_mermaid import Column, Table
 
     app = QApplication.instance() or QApplication([])
@@ -125,7 +125,21 @@ def test_dragging_columns_gives_the_table_its_own_order():
     assert not selector._keys_first.isEnabled()  # the drag decides the order
     # Other tables keep the shared sort.
     assert [c.name for c in selector.ordered_columns(other)] == ["z", "y"]
-    # Picking a sort replaces the dragged order.
+    # Picking a sort asks first; No keeps the dragged order.
+    from xsltomermaid import column_selector
+
+    answers = [column_selector.QMessageBox.No]
+    asked = []
+    monkeypatch.setattr(
+        column_selector.QMessageBox, "question",
+        lambda *a, **k: (asked.append(a[1]), answers.pop(0))[1],
+    )
+    selector._sort.setCurrentIndex(selector._sort.findData("name"))
+    assert asked == ["Replace the dragged order?"]
+    assert selector._sort.currentData() == "dragged"
+    assert [c.name for c in selector.ordered_columns(table)] == ["a", "Id", "b"]
+    # Yes replaces it.
+    answers.append(column_selector.QMessageBox.Yes)
     selector._sort.setCurrentIndex(selector._sort.findData("name"))
     assert [c.name for c in selector.ordered_columns(table)] == ["a", "b", "Id"]
     assert [tree.topLevelItem(i).text(0) for i in range(3)] == ["a", "b", "Id"]
@@ -1243,10 +1257,12 @@ def test_column_bulk_none_is_undoable():
     selector.changed.connect(lambda: changes.append(1))
     selector._bulk("none")
     assert selector.excluded_pairs() == {("t", "id"), ("t", "name")}
-    assert selector._undo_btn.text() == "Undo none"
+    # Always in place (so the buttons beside it don't move); says what it undoes.
+    assert selector._undo_btn.text() == "Undo" and selector._undo_btn.isEnabled()
+    assert selector._undo_btn.toolTip().endswith("before Tick None.")
     selector._undo_bulk()
     assert selector.excluded_pairs() == set()
-    assert not selector._undo_btn.isVisibleTo(selector)
+    assert not selector._undo_btn.isEnabled()
     assert len(changes) == 2
     del app
 
@@ -1372,7 +1388,7 @@ def test_sql_tab_follows_the_diagram_and_its_options(tmp_path, monkeypatch):
     sql = window._sql_tab.text()
     assert sql.startswith("SELECT TOP (100)") and "JOIN" in sql
     tabs = [window._tabs.tabText(i) for i in range(window._tabs.count())]
-    assert tabs == ["Tables", "Columns", "Relationships", "Mermaid", "SQL", "Data"]  # raw rows last
+    assert tabs == ["Tables", "Columns", "Links", "Mermaid", "SQL", "Data"]  # raw rows last
 
     window._sql_tab.root.setCurrentText("OrderLine")
     window._sql_tab.join.setCurrentIndex(window._sql_tab.join.findData("LEFT"))
@@ -1649,9 +1665,9 @@ def test_table_view_shows_columns_and_both_directions_of_links(tmp_path):
     groups = [ins._links.topLevelItem(i) for i in range(ins._links.topLevelItemCount())]
     assert [g.text(0) for g in groups] == ["Has foreign keys to (1)", "Targeted by foreign keys from (1)"]
     out_row, in_row = groups[0].child(0), groups[1].child(0)
-    assert (out_row.text(0), out_row.text(1)) == ("Customer  ·  via CustomerID", "Add")
+    assert (out_row.text(0), out_row.text(1)) == ("Customer  ·  CustomerID", "Add")
     assert out_row.data(0, app_module.Qt.UserRole) == "Customer"
-    assert (in_row.text(0), in_row.text(1)) == ("OrderLine  ·  via OrderID", "Add")
+    assert (in_row.text(0), in_row.text(1)) == ("OrderLine  ·  OrderID", "Add")
     window._diagram_view.cleanup()
     del app
 
@@ -1721,8 +1737,9 @@ def test_table_view_folds_audit_and_system_links_like_the_map():
     window._schema.tables[0].columns.append(Column("", "systemuser", 1, "systemuserid", "guid"))
     window._focus_table("systemuser")
     group = window._relations._links.topLevelItem(1)  # Targeted by foreign keys from
-    assert group.text(0) == "Targeted by foreign keys from (4)"
-    assert group.child(0).text(0) == "b  ·  via approver"
+    assert group.text(0) == "Targeted by foreign keys from (1)"  # audit links apart
+    assert group.child(0).text(0) == "b  ·  approver"
+    assert window._relations._meta.text().endswith("3 audit and system links folded below")
     folded = group.child(1)
     assert folded.text(0) == "Audit and system links (3)" and not folded.isExpanded()
     window._diagram_view.cleanup()
@@ -1734,14 +1751,19 @@ def test_tables_view_lists_the_diagram_and_opens_a_tables_columns(tmp_path):
     tabs = window._tabs
     columns, relations = tabs.indexOf(window._columns), tabs.indexOf(window._relations)
     window._focus_table("")
-    # Nothing selected: Columns and Relationships are disabled.
-    assert not tabs.isTabEnabled(columns) and not tabs.isTabEnabled(relations)
+    # Nothing selected: Columns and Links stay open, and say how to pick a table.
+    assert tabs.isTabEnabled(columns) and tabs.isTabEnabled(relations)
+    assert window._columns._empty.isVisibleTo(window._columns)
+    assert window._relations._empty.text().startswith("Select a table")
     window._selector.clear_selection()
     window._selector.check_tables(["Order", "Customer"])
     window._render_selection()
     view = window._tables_view
     rows = {r.text(0): r for r in view._rows()}
-    assert set(rows) == {"Order", "Customer"} and rows["Order"].text(2) == "Columns ›"
+    assert set(rows) == {"Order", "Customer"} and rows["Order"].text(3) == "Columns ›"
+    assert rows["Order"].text(2) == "↗1 ↙1"  # the table list's link counts
+    assert [view._tree.headerItem().text(i) for i in range(4)] == [
+        "Table", "Columns drawn", "Links", "Open"]
     view._tree.itemClicked.emit(rows["Order"], view._OPEN)  # the Columns action
     assert window._columns.current_table() == "Order"
     assert not tabs.isHidden() and tabs.currentWidget() is window._columns
@@ -1773,15 +1795,128 @@ def test_relationships_view_adds_tables_linked_through_another(monkeypatch):
     view._extended.setChecked(True)
     extended = view._links.topLevelItem(2)
     assert extended.text(0) == "Through another table (1)"
-    assert [extended.child(i).text(0) for i in range(extended.childCount())] == ["via B (1)", "via C (1)"]
+    # "via" is for columns; tables in between are "through".
+    assert [extended.child(i).text(0) for i in range(extended.childCount())] == [
+        "through B (1)", "through C (1)"]
+    assert view._meta.text().endswith("1 more through another table")
     row = extended.child(0).child(0)
-    assert row.text(0) == "D  ·  via bd" and row.text(1) == "Add"
+    assert row.text(0) == "D  ·  bd" and row.text(1) == "Add"
     window._selector.clear_selection()
     view._links.itemClicked.emit(row, view._ADD_COL)  # adds D and the table between
     assert set(window._selector.selected_tables()) == {"B", "D"}
     window._focus_table("lonely")
     assert view._links.isHidden() and "has no relationships" in view._empty.text()
     assert window._tabs.isTabEnabled(window._tabs.indexOf(view))  # enabled, with the message
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_links_count_like_the_list_list_self_links_once_and_take_space_and_a_filter():
+    from PySide6.QtGui import QKeyEvent
+
+    from xsltomermaid.excel_to_mermaid import Relationship
+    from xsltomermaid.schema_map import link_counts
+
+    rels = [
+        Relationship("account", "account", "parentaccountid", ("parentaccountid",), ("accountid",)),
+        Relationship("account", "account", "masterid", ("masterid",), ("accountid",)),
+        Relationship("contact", "account", "primarycontactid", ("primarycontactid",), ("contactid",)),
+        Relationship("account", "contact", "parentcustomerid", ("parentcustomerid",), ("accountid",)),
+        Relationship("account", "opportunity", "customerid", ("customerid",), ("accountid",)),
+        Relationship("systemuser", "account", "createdby", ("createdby",), ("systemuserid",)),
+    ]
+    app, window = _window_with_schema(["account", "contact", "opportunity", "systemuser"], rels)
+    added = []
+    window._relations.add_requested.connect(added.append)
+    window._focus_table("account")
+    view = window._relations
+    out, in_ = link_counts(window._schema)["account"]
+    assert (out, in_) == (3, 2)
+    # The same numbers as the table list, as foreign keys and as tables.
+    assert view._meta.text() == (
+        "↗ 3 foreign keys to 2 tables · ↙ 2 from 2 tables · 1 audit and system links folded below"
+    )
+    outgoing = view._links.topLevelItem(0)
+    texts = [outgoing.child(i).text(0) for i in range(outgoing.childCount())]
+    assert texts[:2] == ["account (itself)  ·  masterid", "account (itself)  ·  parentaccountid"]
+    incoming = view._links.topLevelItem(1)
+    assert incoming.text(0) == "Targeted by foreign keys from (2)"
+    assert all("itself" not in incoming.child(i).text(0) for i in range(incoming.childCount()))
+    # Space on the tree adds the current row's table (the tree used to swallow it).
+    tree = view._links
+    tree.setCurrentItem(incoming.child(0))
+    tree.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, app_module.Qt.Key_Space, app_module.Qt.NoModifier, " "))
+    assert added == [["contact"]]
+    # The filter matches a table or a column, and opens folded groups with a match.
+    view._filter.setText("createdby")
+    shown = [r for r in _visible_rows(tree)]
+    assert shown == ["systemuser  ·  createdby"]
+    view._filter.setText("")
+    window._diagram_view.cleanup()
+    del app
+
+
+def _visible_rows(tree):
+    rows = []
+
+    def walk(item):
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child.isHidden():
+                continue
+            if child.childCount():
+                walk(child)
+            elif child.data(0, app_module.Qt.UserRole):
+                rows.append(child.text(0))
+
+    for i in range(tree.topLevelItemCount()):
+        top = tree.topLevelItem(i)
+        if not top.isHidden():
+            walk(top)
+    return rows
+
+
+def test_a_move_and_back_is_not_a_dragged_order_and_types_give_names_room():
+    from PySide6.QtGui import QKeyEvent
+
+    from xsltomermaid.excel_to_mermaid import Column, Table
+
+    app = QApplication.instance() or QApplication([])
+    table = Table("dbo", "T", [
+        Column("dbo", "T", 1, "preferredcontactmethodcode", "uniqueidentifier"),
+        Column("dbo", "T", 2, "b", "int"),
+    ])
+    selector = app_module.ColumnSelector()
+    selector.show_table(table)
+    tree = selector._tree
+    tree.setCurrentItem(tree.topLevelItem(0))
+    for key in (app_module.Qt.Key_Down, app_module.Qt.Key_Up):
+        tree.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, key, app_module.Qt.AltModifier))
+    assert selector._sort.currentData() == "order" and selector._keys_first.isEnabled()
+    # Type is capped; the full type is in its tooltip.
+    fm = tree.fontMetrics()  # a fixed cap, whatever the type (fonts differ by platform)
+    assert tree.columnWidth(selector._TYPE) == fm.horizontalAdvance("decimal(18,2)") + 12
+    assert tree.topLevelItem(0).toolTip(selector._TYPE) == "uniqueidentifier"
+    selector._filter.setText("b")
+    assert "Clear the filter" in selector._move_btns[0].toolTip()
+    del app
+
+
+def test_tables_view_shift_enter_opens_the_links(tmp_path):
+    from PySide6.QtGui import QKeyEvent
+
+    app, window = _inspector_window(tmp_path)
+    window._selector.clear_selection()
+    window._selector.check_tables(["Order"])
+    window._render_selection()
+    view = window._tables_view
+    view._tree.setCurrentItem(view._rows()[0])
+    asked = []
+    view.relationships_requested.connect(asked.append)
+    app_module.QApplication.sendEvent(
+        view._tree, QKeyEvent(QKeyEvent.KeyPress, app_module.Qt.Key_Return, app_module.Qt.ShiftModifier)
+    )
+    assert asked == ["Order"]
     window._diagram_view.cleanup()
     del app
 
