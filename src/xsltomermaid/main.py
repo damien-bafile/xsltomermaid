@@ -122,6 +122,8 @@ from .excel_to_mermaid import (
 )
 from .make_sample import write_sample
 from .selection_preset import Preset, dump_preset, load_preset
+from .schema_export import EXTENSIONS, FILE_FILTERS, export_schema
+from .schema_export_dialog import TableExportDialog
 from .map_view import SchemaMapView
 from .schema_map import (
     clusters_of,
@@ -771,6 +773,8 @@ class MainWindow(QMainWindow):
         presets_menu = QMenu(self._presets_btn)
         presets_menu.addAction("&Save table list…", self.save_table_selection_toml)
         presets_menu.addAction("&Load table list…", self.load_table_selection_toml)
+        presets_menu.addSeparator()
+        presets_menu.addAction("&Export tables and columns…", self.export_tables)
         self._presets_btn.setMenu(presets_menu)
         self._selector.add_header_widget(self._presets_btn)
 
@@ -870,6 +874,14 @@ class MainWindow(QMainWindow):
             act("Save &table list…", self.save_table_selection_toml, schema_only=True)
         )
         file_menu.addAction(act("Save map &image…", self.export_map, schema_only=True))
+        file_menu.addAction(
+            act(
+                "Export tables and &columns…",
+                self.export_tables,
+                QKeySequence("Ctrl+Shift+E"),
+                schema_only=True,
+            )
+        )
         file_menu.addSeparator()
         file_menu.addAction(
             act(
@@ -2337,6 +2349,53 @@ class MainWindow(QMainWindow):
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(content)
             self._report_saved(path)
+
+    def export_tables(self):
+        """Export the ticked tables and their columns as CSV, JSON or Excel."""
+        if self._schema is None:
+            return
+        names = self._selector.selected_tables()
+        if not names:
+            QMessageBox.information(
+                self,
+                "Nothing to export",
+                "Tick some tables first; there are no tables to export yet.",
+            )
+            return
+        every = self._columns.sorted_schema(filter_schema(self._schema, names))
+        ticked = filter_columns(every, self._columns.excluded_pairs())
+        dialog = TableExportDialog(
+            ticked,
+            every,
+            self._loaded_name,
+            self._options_bar.hide_system_columns(),
+            self,
+        )
+        if not dialog.exec():
+            return
+        opts = dialog.options()
+        # "_tables" so the default name never overwrites the source workbook.
+        ext = EXTENSIONS[opts.format]
+        path = self._save_path(
+            "Export tables and columns", f"_tables{ext}", FILE_FILTERS[opts.format]
+        )
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ext
+        try:
+            written = export_schema(dialog.schema(), path, opts)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                "Export failed",
+                f"Couldn't write {os.path.basename(path)}.\n\n{exc}",
+            )
+            return
+        extra = [os.path.basename(p) for p in written[1:]]
+        self._report_saved(path, f" and {', '.join(extra)}" if extra else "")
+        if dialog.open_after():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def save_table_selection_toml(self):
         if self._schema is None:
