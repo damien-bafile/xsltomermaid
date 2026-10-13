@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QStyle,
     QStyledItemDelegate,
@@ -198,6 +199,7 @@ class TableSelector(QWidget):
     path_requested = Signal()  # user asked for the shortest path between two tables
     undone = Signal(str)  # the undo button restored the selection before this action
     matches_changed = Signal(object)  # names the search matches, or None (no search)
+    export_requested = Signal(str)  # right-click › Export this table
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -289,6 +291,8 @@ class TableSelector(QWidget):
         self._list.currentItemChanged.connect(
             lambda item, _prev: self.current_table_changed.emit(item.text() if item else "")
         )
+        self._list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._list.customContextMenuRequested.connect(self._menu)
         layout.addWidget(self._list, 1)
 
         # The count gets its own line so the two checkboxes below don't
@@ -818,6 +822,15 @@ class TableSelector(QWidget):
         self._update_count()
         if self._ticked_only.isChecked():
             self._apply_filter_text(self._filter.text())
+
+    def _menu(self, pos):
+        item = self._list.itemAt(pos)
+        if item is None:
+            return
+        name = item.text()
+        menu = QMenu(self)
+        menu.addAction("Export this table…", lambda: self.export_requested.emit(name))
+        menu.exec(self._list.viewport().mapToGlobal(pos))
 
     def selected_tables(self) -> list[str]:
         return [item.text() for item in self._items() if item.checkState() == Qt.Checked]

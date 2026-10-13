@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 import html
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -474,6 +475,7 @@ class MainWindow(QMainWindow):
         self._tables_view = TablesView()
         self._tables_view.table_picked.connect(self._focus_table)
         self._tables_view.columns_requested.connect(self._open_columns)
+        self._tables_view.export_requested.connect(self.export_table)
         self._tables_view.relationships_requested.connect(
             lambda name: (self._focus_table(name), self.show_details(self._relations))
         )
@@ -684,6 +686,7 @@ class MainWindow(QMainWindow):
         self._map_view.map_rebuilt.connect(self._selector.invalidate_clusters)
         self._selector.related_requested.connect(self._add_related_tables)
         self._selector.path_requested.connect(self._find_shortest_path)
+        self._selector.export_requested.connect(self.export_table)
         self._selector.undone.connect(self._on_selection_undone)
 
     def _build_export_bar(self, outer):
@@ -709,6 +712,12 @@ class MainWindow(QMainWindow):
             action = export_menu.addAction(f"Export as {label}…")
             action.triggered.connect(lambda _checked=False, k=key: self._export_as(k))
             self._export_actions[key] = action
+        export_menu.addSeparator()
+        # Not a diagram format (it doesn't become the button's default): the
+        # ticked tables' columns as data.
+        export_menu.addAction(
+            "Export &tables and columns (CSV, JSON, Excel)…", self.export_tables
+        )
         export_menu.addSeparator()
         bg_menu = export_menu.addMenu("&Background")
         self._export_bg_group = QActionGroup(self)
@@ -2362,6 +2371,14 @@ class MainWindow(QMainWindow):
                 "Tick some tables first; there are no tables to export yet.",
             )
             return
+        self._export_table_data(names)
+
+    def export_table(self, name: str):
+        """Right-click › Export this table: one table, ticked or not."""
+        if self._schema is not None and name:
+            self._export_table_data([name], single=name)
+
+    def _export_table_data(self, names: list[str], single: str = ""):
         every = self._columns.sorted_schema(filter_schema(self._schema, names))
         ticked = filter_columns(every, self._columns.excluded_pairs())
         dialog = TableExportDialog(
@@ -2370,14 +2387,19 @@ class MainWindow(QMainWindow):
             self._loaded_name,
             self._options_bar.hide_system_columns(),
             self,
+            table_name=single,
         )
         if not dialog.exec():
             return
         opts = dialog.options()
-        # "_tables" so the default name never overwrites the source workbook.
+        # "_tables" (or "_<table>") so the default name never overwrites the
+        # source workbook.
         ext = EXTENSIONS[opts.format]
+        suffix = re.sub(r'[<>:"/\\|?*]', "_", single) if single else "tables"
         path = self._save_path(
-            "Export tables and columns", f"_tables{ext}", FILE_FILTERS[opts.format]
+            f"Export table {single}" if single else "Export tables and columns",
+            f"_{suffix}{ext}",
+            FILE_FILTERS[opts.format],
         )
         if not path:
             return

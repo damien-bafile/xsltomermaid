@@ -47,8 +47,9 @@ class TableExportDialog(QDialog):
     """Format, scope and layout for File › Export tables and columns.
 
     ``ticked`` is the selection with the user's column choices applied;
-    ``every`` is the same tables with all their columns. Choices are
-    remembered for next time.
+    ``every`` is the same tables with all their columns. ``table_name``
+    exports that one table (right-click › Export this table). Options that
+    can't change this export are greyed out; the rest are remembered.
     """
 
     def __init__(
@@ -58,9 +59,13 @@ class TableExportDialog(QDialog):
         source_name: str = "",
         hide_system: bool = False,
         parent=None,
+        table_name: str = "",
     ):
         super().__init__(parent)
-        self.setWindowTitle("Export tables and columns")
+        self._table_name = table_name
+        self.setWindowTitle(
+            f"Export table {table_name}" if table_name else "Export tables and columns"
+        )
         self._ticked = ticked
         self._every = every
         self._source = source_name
@@ -95,7 +100,9 @@ class TableExportDialog(QDialog):
         include_box = QGroupBox("Include")
         include = QVBoxLayout(include_box)
         self._ticked_only = QRadioButton("Only the ticked columns")
-        self._every_column = QRadioButton("Every column of the ticked tables")
+        self._every_column = QRadioButton(
+            "Every column of the table" if table_name else "Every column of the ticked tables"
+        )
         scope = QButtonGroup(self)
         scope.addButton(self._ticked_only)
         scope.addButton(self._every_column)
@@ -202,8 +209,39 @@ class TableExportDialog(QDialog):
         for widget in (self._every_column, self._hide_system, self._relationships):
             widget.toggled.connect(self._sync)
         self._fields.itemChanged.connect(self._sync)
+        self._disable_moot()
         self._sync()
         self.adjustSize()
+
+    def _disable(self, widget, why: str):
+        """Grey out an option that can't change this export (not remembered)."""
+        widget.setEnabled(False)
+        widget.setToolTip(why)
+        if isinstance(widget, QCheckBox):
+            widget.setChecked(False)
+
+    def _disable_moot(self):
+        def n_columns(schema: Schema) -> int:
+            return sum(len(t.columns) for t in schema.tables)
+
+        if n_columns(self._ticked) == n_columns(self._every):
+            for radio in (self._ticked_only, self._every_column):
+                self._disable(radio, "Every column is ticked, so both give the same columns.")
+        if n_columns(without_system_columns(self._every)) == n_columns(self._every):
+            self._disable(self._hide_system, "There are no system columns to leave out.")
+        if self._table_name:
+            self._relationships.setText("Links from the table to itself")
+        if not self._every.relationships:
+            self._disable(
+                self._relationships,
+                "This table has no links to itself."
+                if self._table_name
+                else "There are no relationships between these tables.",
+            )
+        if self._table_name:
+            self._sheets.setCurrentIndex(0)
+            self._disable(self._sheets, "One table fills one sheet.")
+            self._disable(self._summary_sheet, "A summary is for several tables.")
 
     def _combo(self, pairs, current) -> QComboBox:
         combo = QComboBox()
@@ -262,10 +300,11 @@ class TableExportDialog(QDialog):
         schema = self.schema()
         n_cols = sum(len(t.columns) for t in schema.tables)
         source = f" from {self._source}" if self._source else ""
-        self._summary.setText(
-            f"Exports {_plural(len(schema.tables), 'table')} "
-            f"({_plural(n_cols, 'column')}){source}."
+        what = (
+            f"{self._table_name}" if self._table_name
+            else _plural(len(schema.tables), "table")
         )
+        self._summary.setText(f"Exports {what} ({_plural(n_cols, 'column')}){source}.")
         fields = self.chosen_fields()
         self._ok.setEnabled(bool(fields) and bool(schema.tables))
         self._ok.setToolTip("" if fields else "Tick at least one field.")
@@ -273,21 +312,23 @@ class TableExportDialog(QDialog):
     def accept(self):
         settings = app_settings()
         opts = self.options()
-        for name, value in (
-            ("format", opts.format),
-            ("fields", ",".join(opts.fields)),
-            ("every_column", self._every_column.isChecked()),
-            ("hide_system", self._hide_system.isChecked()),
-            ("relationships", opts.include_relationships),
-            ("spreadsheet_headers", opts.spreadsheet_headers),
-            ("bool_style", opts.bool_style),
-            ("delimiter", opts.delimiter),
-            ("excel_bom", opts.excel_bom),
-            ("nested", opts.nested),
-            ("pretty", opts.pretty),
-            ("sheet_per_table", opts.sheet_per_table),
-            ("summary_sheet", opts.summary_sheet),
-            ("open_after", self.open_after()),
+        for name, widget, value in (
+            ("format", None, opts.format),
+            ("fields", None, ",".join(opts.fields)),
+            ("every_column", self._every_column, self._every_column.isChecked()),
+            ("hide_system", self._hide_system, self._hide_system.isChecked()),
+            ("relationships", self._relationships, opts.include_relationships),
+            ("spreadsheet_headers", None, opts.spreadsheet_headers),
+            ("bool_style", None, opts.bool_style),
+            ("delimiter", None, opts.delimiter),
+            ("excel_bom", None, opts.excel_bom),
+            ("nested", None, opts.nested),
+            ("pretty", None, opts.pretty),
+            ("sheet_per_table", self._sheets, opts.sheet_per_table),
+            ("summary_sheet", self._summary_sheet, opts.summary_sheet),
+            ("open_after", None, self.open_after()),
         ):
-            settings.setValue(_KEY + name, value)
+            # A greyed-out option was forced for this export, not chosen.
+            if widget is None or widget.isEnabled():
+                settings.setValue(_KEY + name, value)
         super().accept()

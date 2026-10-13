@@ -39,6 +39,7 @@ class TablesView(QWidget):
     table_picked = Signal(str)
     columns_requested = Signal(str)
     relationships_requested = Signal(str)
+    export_requested = Signal(str)
 
     _ROLE_TABLE = Qt.UserRole
     _SHOWN, _LINKS, _OPEN = 1, 2, 3
@@ -180,6 +181,8 @@ class TablesView(QWidget):
         menu = QMenu(self)
         menu.addAction("Columns", lambda: self.columns_requested.emit(name))
         menu.addAction("Links", lambda: self.relationships_requested.emit(name))
+        menu.addSeparator()
+        menu.addAction("Export this table…", lambda: self.export_requested.emit(name))
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
     def _apply_filter_text(self, text: str):
