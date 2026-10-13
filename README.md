@@ -176,14 +176,19 @@ selected, they say how to pick one.
   status line then offers **Show in folder**.
 - **Mermaid** copies the source or saves it as `.mmd` / `.md`. **Preview in
   browser** opens the diagram in your browser, offline.
-- **File › Export tables and columns** (Ctrl+Shift+E, also in the **Table list**
-  menu) writes the ticked tables and their columns as **CSV**, **JSON** or
+- **File › Export tables and columns** (Ctrl+Shift+E, also in the **Export**
+  button's arrow menu and the **Table list** menu) writes the ticked tables and their columns as **CSV**, **JSON** or
   **Excel**, no drawing needed. It asks first: only the ticked columns or every
   column, leave out system columns, include relationships, which fields, header
   names (the spreadsheet's own, which load straight back in, or readable labels),
   how yes/no values are written, and per format the CSV separator and UTF-8 mark,
   nested or flat JSON, or one Excel sheet versus a sheet per table plus a Tables
   summary. The choices are remembered.
+- **Right-click a table** in the table list or the Details **Tables** view and
+  choose **Export this table…** to export just that one, ticked or not. It's the
+  same dialog, with the options that can't apply to one table (sheet per table,
+  the Tables summary) greyed out; greyed-out options aren't remembered, so your
+  multi-table choices stay as they were.
 
 ### Session and updates
 

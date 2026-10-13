@@ -3341,3 +3341,56 @@ def test_export_tables_writes_the_ticked_columns(tmp_path, monkeypatch):
     assert data["relationships"][0]["childTable"] == "Order"
     assert "Exports" in seen["summary"]
     del app
+
+
+def test_export_single_table_greys_out_moot_options(tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+
+    from xsltomermaid import schema_export_dialog
+    from xsltomermaid.config import app_settings
+
+    app = QApplication.instance() or QApplication([])
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()  # right-click works on unticked tables too
+    app_settings().setValue("table_export/sheet_per_table", True)
+
+    out = tmp_path / "order.xlsx"
+    seen = {}
+
+    def fake_exec(dialog):
+        dialog._format_group.buttons()[2].setChecked(True)  # Excel
+        seen["title"] = dialog.windowTitle()
+        seen["summary"] = dialog._summary.text()
+        seen["enabled"] = {
+            name: getattr(dialog, name).isEnabled()
+            for name in ("_sheets", "_summary_sheet", "_relationships", "_hide_system",
+                         "_every_column")
+        }
+        dialog.accept()
+        return 1
+
+    monkeypatch.setattr(schema_export_dialog.TableExportDialog, "exec", fake_exec)
+    monkeypatch.setattr(
+        app_module.QFileDialog, "getSaveFileName",
+        lambda _parent, _title, default, _filter: (seen.setdefault("default", default)
+                                                  and str(out), ""),
+    )
+    window._selector.export_requested.emit("Order")
+
+    assert seen["title"] == "Export table Order"
+    assert seen["summary"].startswith("Exports Order (4 columns)")
+    assert seen["default"].endswith("sample_Order.xlsx")
+    assert not any(seen["enabled"].values())  # one sheet, no self-links, …
+    wb = load_workbook(out)
+    assert wb.sheetnames == ["Columns"]
+    assert wb["Columns"].max_row == 5
+    # The forced one-sheet layout isn't remembered over the user's choice.
+    assert app_settings().value("table_export/sheet_per_table") in (True, "true")
+
+    # The bottom Export menu offers the same exporter.
+    labels = [a.text() for a in window._export_btn.menu().actions()]
+    assert "Export &tables and columns (CSV, JSON, Excel)…" in labels
+    del app
