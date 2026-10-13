@@ -230,3 +230,4 @@ diagram.svg
 
 # Impeccable design-critique snapshots (local tool output)
 .impeccable/
+/.vscode

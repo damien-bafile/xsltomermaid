@@ -39,6 +39,7 @@ def show_shortcuts_help(parent) -> None:
         ("Ctrl+Z", "Undo the last change to the ticks"),
         ("Alt+K", "Keys only"),
         ("Ctrl+E", "Export"),
+        ("Ctrl+Shift+E", "Export the ticked tables and columns (CSV, JSON, Excel)"),
         ("Ctrl+Shift+C / Ctrl+Shift+Q", "Copy the Mermaid / the SQL query"),
         ("Ctrl+= / Ctrl+- / Ctrl+0", "Zoom in / out / 100%"),
         ("Diagram: arrows, Enter", "Move between tables, open one"),

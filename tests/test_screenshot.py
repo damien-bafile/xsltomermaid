@@ -3306,3 +3306,38 @@ def test_cluster_header_rows_are_double_height_and_sorting_keeps_the_open_table(
     assert sel._list.sizeHintForRow(header_row) >= 2 * sel._list.sizeHintForRow(plain_row) - 1
     window._diagram_view.cleanup()
     del app
+
+
+def test_export_tables_writes_the_ticked_columns(tmp_path, monkeypatch):
+    import json
+
+    from xsltomermaid import schema_export_dialog
+
+    app = QApplication.instance() or QApplication([])
+    sample = tmp_path / "sample.xlsx"
+    _ensure_sample(str(sample))
+    window = app_module.MainWindow()
+    window.load_file(str(sample))
+    window._selector.clear_selection()
+    window._selector.check_tables(["Customer", "Order"])
+
+    out = tmp_path / "tables.json"
+    seen = {}
+
+    def fake_exec(dialog):
+        dialog._format_group.buttons()[1].setChecked(True)  # JSON
+        seen["summary"] = dialog._summary.text()
+        dialog.accept()
+        return 1
+
+    monkeypatch.setattr(schema_export_dialog.TableExportDialog, "exec", fake_exec)
+    monkeypatch.setattr(
+        app_module.QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), "")
+    )
+    window.export_tables()
+
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert {t["name"] for t in data["tables"]} == {"Customer", "Order"}
+    assert data["relationships"][0]["childTable"] == "Order"
+    assert "Exports" in seen["summary"]
+    del app

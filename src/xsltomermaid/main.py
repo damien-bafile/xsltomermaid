@@ -122,6 +122,8 @@ from .excel_to_mermaid import (
 )
 from .make_sample import write_sample
 from .selection_preset import Preset, dump_preset, load_preset
+from .schema_export import EXTENSIONS, FILE_FILTERS, export_schema
+from .schema_export_dialog import TableExportDialog
 from .map_view import SchemaMapView
 from .schema_map import (
     clusters_of,
@@ -369,7 +371,9 @@ class MainWindow(QMainWindow):
         outer.addWidget(self._drop)
 
         self._status = StatusLabel("No file loaded.")
-        self._status.setTextInteractionFlags(Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard)
+        self._status.setTextInteractionFlags(
+            Qt.LinksAccessibleByMouse | Qt.LinksAccessibleByKeyboard
+        )
         self._status.linkActivated.connect(self._on_status_link)
         self._status.setAccessibleName("Status")
         self._status.setStyleSheet(f"color: {_muted_hex(self)};")
@@ -446,8 +450,11 @@ class MainWindow(QMainWindow):
             "<p>The sheet needs <b>one row per database column</b>. Only "
             "<b>TableName</b> and <b>ColumnName</b> are required; these headers "
             "are also understood, in any order and case:</p>"
-            "<p>" + " · ".join(h for h in EXPECTED_HEADERS
-                                if h not in ("TableName", "ColumnName")) + "</p>"
+            "<p>"
+            + " · ".join(
+                h for h in EXPECTED_HEADERS if h not in ("TableName", "ColumnName")
+            )
+            + "</p>"
             "<p>Foreign keys come from <b>ForeignKeyReference</b>, written as "
             "<i>dbo.Customer.CustomerID</i>, <i>Customer.CustomerID</i>, "
             "<i>Customer(CustomerID)</i> or just <i>Customer</i>. Running "
@@ -477,7 +484,9 @@ class MainWindow(QMainWindow):
         self._columns.changed.connect(self._on_selection_edited)
         self._columns.column_picked.connect(self._mark_column)
         tabs.addTab(self._columns, "Columns")
-        tabs.setTabToolTip(1, "The selected table's columns: which show, and their order")
+        tabs.setTabToolTip(
+            1, "The selected table's columns: which show, and their order"
+        )
 
         self._relations = RelationshipsView()
         self._relations.add_requested.connect(self._add_tables_from_details)
@@ -507,7 +516,9 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._sql_tab, "SQL")
         # The raw rows are a reference, not where work happens: last.
         tabs.addTab(self._table_stack, "Data")
-        tabs.setTabToolTip(tabs.indexOf(self._table_stack), "The rows read from the spreadsheet")
+        tabs.setTabToolTip(
+            tabs.indexOf(self._table_stack), "The rows read from the spreadsheet"
+        )
         # Six views don't fit a narrow panel: scroll arrows keep every tab
         # reachable by mouse (Ctrl+1–6 reach them from the keyboard).
         tabs.setUsesScrollButtons(True)
@@ -578,7 +589,9 @@ class MainWindow(QMainWindow):
         self._diagram_view.render_error.connect(self._on_render_error)
         self._diagram_view.entity_clicked.connect(self._on_entity_clicked)
         self._diagram_view.row_clicked.connect(self._on_row_clicked)
-        self._diagram_view.render_finished.connect(lambda _ok: self._set_rendering(False))
+        self._diagram_view.render_finished.connect(
+            lambda _ok: self._set_rendering(False)
+        )
         self._diagram_view.render_finished.connect(self._arrive_after_draw)
         diagram_tab = QWidget()
         diagram_layout = QVBoxLayout(diagram_tab)
@@ -615,7 +628,9 @@ class MainWindow(QMainWindow):
         self._diagram_view_btn.setText("Diagram")
         self._diagram_view_btn.setCheckable(True)
         self._diagram_view_btn.setChecked(True)
-        self._diagram_view_btn.setToolTip("Show the ER diagram of the ticked tables (Ctrl+M switches)")
+        self._diagram_view_btn.setToolTip(
+            "Show the ER diagram of the ticked tables (Ctrl+M switches)"
+        )
         switch_row.addWidget(self._diagram_view_btn)
         self._view_group.addButton(self._diagram_view_btn)
         self._map_btn = QToolButton()
@@ -634,7 +649,9 @@ class MainWindow(QMainWindow):
         # Equal, fixed segments: never squeezed to "…", text centred in each.
         for button in (self._diagram_view_btn, self._map_btn):
             button.ensurePolished()
-        width = max(b.sizeHint().width() for b in (self._diagram_view_btn, self._map_btn))
+        width = max(
+            b.sizeHint().width() for b in (self._diagram_view_btn, self._map_btn)
+        )
         for button in (self._diagram_view_btn, self._map_btn):
             button.setFixedWidth(width)
         # Fixed at its size hint (both segments plus the layout's margin), so the
@@ -647,7 +664,9 @@ class MainWindow(QMainWindow):
         self._map_view.table_activated.connect(self._on_map_table_activated)
         self._map_view.draw_requested.connect(self._draw_from_map)
         # The list is built after the canvas, so look it up when the signal fires.
-        self._map_view.selection_changed.connect(lambda names: self._selector.mark_map_selection(names))
+        self._map_view.selection_changed.connect(
+            lambda names: self._selector.mark_map_selection(names)
+        )
         self._map_view.show_diagram_requested.connect(lambda: self.show_map(False))
         self._map_view.export_requested.connect(self.export_map)
         self._map_view._hide.toggled.connect(self._options_bar._hide_audit.setChecked)
@@ -688,9 +707,7 @@ class MainWindow(QMainWindow):
         self._export_actions: dict[str, QAction] = {}
         for key, label, *_rest in EXPORT_FORMATS:
             action = export_menu.addAction(f"Export as {label}…")
-            action.triggered.connect(
-                lambda _checked=False, k=key: self._export_as(k)
-            )
+            action.triggered.connect(lambda _checked=False, k=key: self._export_as(k))
             self._export_actions[key] = action
         export_menu.addSeparator()
         bg_menu = export_menu.addMenu("&Background")
@@ -705,8 +722,10 @@ class MainWindow(QMainWindow):
         if self._export_bg_group.checkedAction() is None:
             self._export_bg_group.actions()[0].setChecked(True)
         self._export_bg_group.triggered.connect(
-            lambda a: (app_settings().setValue("export/background", a.data()),
-                       self._sync_export_caption())
+            lambda a: (
+                app_settings().setValue("export/background", a.data()),
+                self._sync_export_caption(),
+            )
         )
         scale_menu = export_menu.addMenu("PNG &scale")
         self._png_scale_group = QActionGroup(self)
@@ -723,8 +742,10 @@ class MainWindow(QMainWindow):
         if self._png_scale_group.checkedAction() is None:
             self._png_scale_group.actions()[1].setChecked(True)
         self._png_scale_group.triggered.connect(
-            lambda a: (app_settings().setValue("export/png_scale", a.data()),
-                       self._sync_export_caption())
+            lambda a: (
+                app_settings().setValue("export/png_scale", a.data()),
+                self._sync_export_caption(),
+            )
         )
         self._export_btn.setMenu(export_menu)
         _apply_primary_button_style(self._export_btn)
@@ -746,10 +767,14 @@ class MainWindow(QMainWindow):
         # Table-list presets are about the selection, so they live with it.
         self._presets_btn = QPushButton("Table &list")
         self._presets_btn.setFlat(True)
-        self._presets_btn.setToolTip("Save or load the ticked tables as a .toml preset.")
+        self._presets_btn.setToolTip(
+            "Save or load the ticked tables as a .toml preset."
+        )
         presets_menu = QMenu(self._presets_btn)
         presets_menu.addAction("&Save table list…", self.save_table_selection_toml)
         presets_menu.addAction("&Load table list…", self.load_table_selection_toml)
+        presets_menu.addSeparator()
+        presets_menu.addAction("&Export tables and columns…", self.export_tables)
         self._presets_btn.setMenu(presets_menu)
         self._selector.add_header_widget(self._presets_btn)
 
@@ -819,18 +844,28 @@ class MainWindow(QMainWindow):
         self._schema_actions: list[QAction] = []
 
         file_menu = bar.addMenu("&File")
-        file_menu.addAction(act("&Open…", self.open_file_dialog, QKeySequence.StandardKey.Open))
+        file_menu.addAction(
+            act("&Open…", self.open_file_dialog, QKeySequence.StandardKey.Open)
+        )
         self._recent_menu = file_menu.addMenu("Open &Recent")
         self._recent_menu.aboutToShow.connect(self._rebuild_recent_menu)
         self._rebuild_recent_menu()
         file_menu.addAction(
-            act("&Load table list…", self.load_table_selection_toml,
-                QKeySequence("Ctrl+L"), schema_only=True)
+            act(
+                "&Load table list…",
+                self.load_table_selection_toml,
+                QKeySequence("Ctrl+L"),
+                schema_only=True,
+            )
         )
         file_menu.addSeparator()
         file_menu.addAction(
-            act("&Save Mermaid (.mmd)…", self.save_mmd,
-                QKeySequence.StandardKey.Save, schema_only=True)
+            act(
+                "&Save Mermaid (.mmd)…",
+                self.save_mmd,
+                QKeySequence.StandardKey.Save,
+                schema_only=True,
+            )
         )
         file_menu.addAction(
             act("Save Mark&down (.md)…", self.save_md, schema_only=True)
@@ -838,34 +873,59 @@ class MainWindow(QMainWindow):
         file_menu.addAction(
             act("Save &table list…", self.save_table_selection_toml, schema_only=True)
         )
+        file_menu.addAction(act("Save map &image…", self.export_map, schema_only=True))
         file_menu.addAction(
-            act("Save map &image…", self.export_map, schema_only=True)
+            act(
+                "Export tables and &columns…",
+                self.export_tables,
+                QKeySequence("Ctrl+Shift+E"),
+                schema_only=True,
+            )
         )
         file_menu.addSeparator()
         file_menu.addAction(
-            act("E&xit", self.close,
-                QKeySequence.keyBindings(QKeySequence.StandardKey.Quit) + [QKeySequence("Ctrl+Q")])
+            act(
+                "E&xit",
+                self.close,
+                QKeySequence.keyBindings(QKeySequence.StandardKey.Quit)
+                + [QKeySequence("Ctrl+Q")],
+            )
         )
-
 
         view_menu = bar.addMenu("&View")
         view_menu.addAction(
             # Ctrl+= too: on most layouts Ctrl++ needs Shift.
-            act("Zoom &in", lambda: self._diagram_view.zoom_by(1.25),
+            act(
+                "Zoom &in",
+                lambda: self._diagram_view.zoom_by(1.25),
                 QKeySequence.keyBindings(QKeySequence.StandardKey.ZoomIn)
-                + [QKeySequence("Ctrl+=")], schema_only=True)
+                + [QKeySequence("Ctrl+=")],
+                schema_only=True,
+            )
         )
         view_menu.addAction(
-            act("Zoom &out", lambda: self._diagram_view.zoom_by(0.8),
-                QKeySequence.StandardKey.ZoomOut, schema_only=True)
+            act(
+                "Zoom &out",
+                lambda: self._diagram_view.zoom_by(0.8),
+                QKeySequence.StandardKey.ZoomOut,
+                schema_only=True,
+            )
         )
         view_menu.addAction(
-            act("&Actual size", self._diagram_view.reset_zoom,
-                QKeySequence("Ctrl+0"), schema_only=True)
+            act(
+                "&Actual size",
+                self._diagram_view.reset_zoom,
+                QKeySequence("Ctrl+0"),
+                schema_only=True,
+            )
         )
         view_menu.addSeparator()
-        self._map_action = act("Schema ma&p", lambda: self.show_map(not self.map_visible()),
-                               QKeySequence("Ctrl+M"), schema_only=True)
+        self._map_action = act(
+            "Schema ma&p",
+            lambda: self.show_map(not self.map_visible()),
+            QKeySequence("Ctrl+M"),
+            schema_only=True,
+        )
         view_menu.addAction(self._map_action)
         self._details_action = QAction("Details pa&nel", self)
         self._details_action.setCheckable(True)
@@ -893,8 +953,12 @@ class MainWindow(QMainWindow):
         diagram_menu = bar.addMenu("&Diagram")
         # Undo the last change to the ticks (clear, add, path, draw). Here
         # rather than an Edit menu, whose Alt+E would take Export's.
-        self._undo_action = act("&Undo", self._selector.undo_last_change,
-                                QKeySequence.StandardKey.Undo, schema_only=True)
+        self._undo_action = act(
+            "&Undo",
+            self._selector.undo_last_change,
+            QKeySequence.StandardKey.Undo,
+            schema_only=True,
+        )
         diagram_menu.addAction(self._undo_action)
         diagram_menu.aboutToShow.connect(self._sync_undo_action)
         self._reset_labels_action = act(
@@ -906,34 +970,59 @@ class MainWindow(QMainWindow):
         diagram_menu.addAction(self._reset_labels_action)
         diagram_menu.addSeparator()
         diagram_menu.addAction(
-            act("&Draw ticked", self._render_selection,
-                QKeySequence("F5"), schema_only=True)
+            act(
+                "&Draw ticked",
+                self._render_selection,
+                QKeySequence("F5"),
+                schema_only=True,
+            )
         )
         # Enabled only while a render is in flight (see _set_rendering).
-        self._stop_action = act("&Stop drawing", self.cancel_render, QKeySequence("Esc"))
+        self._stop_action = act(
+            "&Stop drawing", self.cancel_render, QKeySequence("Esc")
+        )
         self._stop_action.setEnabled(False)
         diagram_menu.addAction(self._stop_action)
         diagram_menu.addSeparator()
         diagram_menu.addAction(
-            act("&Copy Mermaid", self.copy_mermaid,
-                QKeySequence("Ctrl+Shift+C"), schema_only=True)
+            act(
+                "&Copy Mermaid",
+                self.copy_mermaid,
+                QKeySequence("Ctrl+Shift+C"),
+                schema_only=True,
+            )
         )
         diagram_menu.addAction(
-            act("Copy S&QL query", self.copy_sql,
-                QKeySequence("Ctrl+Shift+Q"), schema_only=True)
+            act(
+                "Copy S&QL query",
+                self.copy_sql,
+                QKeySequence("Ctrl+Shift+Q"),
+                schema_only=True,
+            )
         )
         diagram_menu.addAction(
-            act("&Export diagram…", self.export_diagram,
-                QKeySequence("Ctrl+E"), schema_only=True)
+            act(
+                "&Export diagram…",
+                self.export_diagram,
+                QKeySequence("Ctrl+E"),
+                schema_only=True,
+            )
         )
         diagram_menu.addAction(
             act("&Preview in browser", self.preview_browser, schema_only=True)
         )
 
         help_menu = bar.addMenu("&Help")
-        help_menu.addAction(act("&Spreadsheet format", lambda: show_format_help(self),
-                                QKeySequence.StandardKey.HelpContents))
-        help_menu.addAction(act("&Keyboard shortcuts", lambda: show_shortcuts_help(self)))
+        help_menu.addAction(
+            act(
+                "&Spreadsheet format",
+                lambda: show_format_help(self),
+                QKeySequence.StandardKey.HelpContents,
+            )
+        )
+        help_menu.addAction(
+            act("&Keyboard shortcuts", lambda: show_shortcuts_help(self))
+        )
         help_menu.addSeparator()
         self._update_action = act("Check for &updates…", self.check_for_updates)
         help_menu.addAction(self._update_action)
@@ -1108,7 +1197,9 @@ class MainWindow(QMainWindow):
                 highlighter.retheme()
         if hasattr(self, "_sql_tab"):
             self._sql_tab.retheme()
-        _apply_primary_button_style(self._export_btn)  # its focus ring follows the text colour
+        _apply_primary_button_style(
+            self._export_btn
+        )  # its focus ring follows the text colour
         # The diagram's own theme and background follow the switch too (unless
         # the user picked them); changed() redraws it in the new colours.
         app = QApplication.instance()
@@ -1131,7 +1222,8 @@ class MainWindow(QMainWindow):
             f" border-color: {_ACCENT_FILL}; }}"
         )
         self._diagram_view_btn.setStyleSheet(
-            segment + "QToolButton { border-top-left-radius: 5px; border-bottom-left-radius: 5px; }"
+            segment
+            + "QToolButton { border-top-left-radius: 5px; border-bottom-left-radius: 5px; }"
         )
         self._map_btn.setStyleSheet(
             segment
@@ -1201,7 +1293,10 @@ class MainWindow(QMainWindow):
         """Switch the canvas between the map and the ER diagram."""
         visible = bool(visible) and self._schema is not None
         self._canvas.setCurrentWidget(self._map_view if visible else self._diagram_view)
-        for button, on in ((self._map_btn, visible), (self._diagram_view_btn, not visible)):
+        for button, on in (
+            (self._map_btn, visible),
+            (self._diagram_view_btn, not visible),
+        ):
             if button.isChecked() != on:
                 button.blockSignals(True)
                 button.setChecked(on)
@@ -1210,7 +1305,9 @@ class MainWindow(QMainWindow):
         if visible:
             self._map_view.set_ticked(self._selector.selected_tables())
             self._map_view.set_matches(
-                set(self._selector._matches) if self._selector._matches is not None else None
+                set(self._selector._matches)
+                if self._selector._matches is not None
+                else None
             )
 
     def _on_map_table_activated(self, name: str, double: bool):
@@ -1268,8 +1365,11 @@ class MainWindow(QMainWindow):
         # Arrive somewhere: once drawn, select the busiest table (centred and
         # outlined in the diagram, scrolled to in the list, open in the Table
         # view) instead of leaving the list at its top.
-        hub = self._entity_to_table.get(self._hub_entity(self._drawio_schema), "") if (
-            self._drawio_schema is not None) else ""
+        hub = (
+            self._entity_to_table.get(self._hub_entity(self._drawio_schema), "")
+            if (self._drawio_schema is not None)
+            else ""
+        )
         self._focus_after_render = hub or (names[0] if names else "")
         schema = self._drawio_schema
         keys = self._options_bar._keys_only
@@ -1330,7 +1430,9 @@ class MainWindow(QMainWindow):
         for rel in self._schema.relationships:
             if rel.child_table.lower() != key:
                 continue
-            columns = rel.child_columns or tuple(c.strip() for c in rel.label.split(","))
+            columns = rel.child_columns or tuple(
+                c.strip() for c in rel.label.split(",")
+            )
             if any(c.lower() == col for c in columns):
                 return rel
         return None
@@ -1339,12 +1441,20 @@ class MainWindow(QMainWindow):
         """A row clicked in the diagram: pick that column in the Columns view
         (which tints the row). The click has already selected the table."""
         table = self._entity_to_table.get(entity_id)
-        schema_table = next((t for t in self._schema.tables if t.name == table), None) if (
-            table and self._schema is not None) else None
+        schema_table = (
+            next((t for t in self._schema.tables if t.name == table), None)
+            if (table and self._schema is not None)
+            else None
+        )
         if schema_table is None:
             return
         column = next(
-            (c.name for c in schema_table.columns if drawn_column_name(c.name) == drawn_name), ""
+            (
+                c.name
+                for c in schema_table.columns
+                if drawn_column_name(c.name) == drawn_name
+            ),
+            "",
         )
         if column and self._columns.select_column(column) and not self._tabs.isHidden():
             self.show_details(self._columns)
@@ -1354,13 +1464,17 @@ class MainWindow(QMainWindow):
         if ok and name:
             self._focus_table(name)
 
-    def _focus_table(self, name: str, from_diagram: bool = False, from_map: bool = False):
+    def _focus_table(
+        self, name: str, from_diagram: bool = False, from_map: bool = False
+    ):
         """Make ``name`` the selected table everywhere ("" clears)."""
         self._selector.focus_table(name)
         if not from_diagram:
             # Picked from the list, map or Details panel: zoom to it if the
             # diagram is drawn too small to read.
-            entity = next((e for e, t in self._entity_to_table.items() if t == name), "")
+            entity = next(
+                (e for e, t in self._entity_to_table.items() if t == name), ""
+            )
             if entity:
                 self._diagram_view.focus_entity(entity)
             else:
@@ -1392,7 +1506,9 @@ class MainWindow(QMainWindow):
         self._columns.show_table(
             table, key in drawn, self._options_bar.diagram_options(), linked
         )
-        self._relations.show_table(table.name, schema.relationships, drawn, table.full_name)
+        self._relations.show_table(
+            table.name, schema.relationships, drawn, table.full_name
+        )
 
     def _remember(self, name: str):
         """Add a newly shown table to the Back / Forward history."""
@@ -1400,9 +1516,12 @@ class MainWindow(QMainWindow):
             return
         if not any(t.name == name for t in self._schema.tables):
             return
-        if 0 <= self._history_at < len(self._history) and self._history[self._history_at] == name:
+        if (
+            0 <= self._history_at < len(self._history)
+            and self._history[self._history_at] == name
+        ):
             return
-        del self._history[self._history_at + 1:]  # a new path drops the forward steps
+        del self._history[self._history_at + 1 :]  # a new path drops the forward steps
         self._history.append(name)
         self._history = self._history[-50:]
         self._history_at = len(self._history) - 1
@@ -1421,8 +1540,10 @@ class MainWindow(QMainWindow):
         self._sync_history_buttons()
 
     def _sync_history_buttons(self):
-        for action, step, word, key in ((self._back_action, -1, "Back", "Alt+Left"),
-                                        (self._forward_action, 1, "Forward", "Alt+Right")):
+        for action, step, word, key in (
+            (self._back_action, -1, "Back", "Alt+Left"),
+            (self._forward_action, 1, "Forward", "Alt+Right"),
+        ):
             at = self._history_at + step
             ok = 0 <= at < len(self._history)
             action.setEnabled(ok)
@@ -1440,11 +1561,21 @@ class MainWindow(QMainWindow):
         options = self._options_bar.diagram_options()
         linked = linked_fk_columns(final)
         counts = getattr(self, "_link_counts", {})
-        self._tables_view.set_tables([
-            (t.name, len(drawn_columns(t, options, linked.get(t.name.lower(), set())).columns),
-             totals.get(t.name, len(t.columns)), *counts.get(t.name, (0, 0)))
-            for t in final.tables
-        ])
+        self._tables_view.set_tables(
+            [
+                (
+                    t.name,
+                    len(
+                        drawn_columns(
+                            t, options, linked.get(t.name.lower(), set())
+                        ).columns
+                    ),
+                    totals.get(t.name, len(t.columns)),
+                    *counts.get(t.name, (0, 0)),
+                )
+                for t in final.tables
+            ]
+        )
 
     def _open_columns(self, name: str):
         """Columns picked for a table in the Tables view: select it, then show them."""
@@ -1481,7 +1612,11 @@ class MainWindow(QMainWindow):
         the canvas, which shrinks better, so names fit. A width the user
         chose is left alone."""
         sizes = self._body.sizes()
-        if len(sizes) != 3 or self._tabs.isHidden() or sizes[2] > self._tabs.minimumWidth() + 8:
+        if (
+            len(sizes) != 3
+            or self._tabs.isHidden()
+            or sizes[2] > self._tabs.minimumWidth() + 8
+        ):
             return
         take = min(want - sizes[2], max(0, sizes[1] - canvas_floor))
         if take > 0:
@@ -1503,11 +1638,16 @@ class MainWindow(QMainWindow):
     def _remember_recent(self, path: str):
         """Put ``path`` at the top of File → Open Recent (not the temp sample)."""
         path = os.path.abspath(path)
-        sample = os.path.abspath(os.path.join(tempfile.gettempdir(), "sample_schema.xlsx"))
+        sample = os.path.abspath(
+            os.path.join(tempfile.gettempdir(), "sample_schema.xlsx")
+        )
         if os.path.normcase(path) == os.path.normcase(sample):
             return
-        files = [f for f in self.recent_files()
-                 if os.path.normcase(f) != os.path.normcase(path)]
+        files = [
+            f
+            for f in self.recent_files()
+            if os.path.normcase(f) != os.path.normcase(path)
+        ]
         app_settings().setValue("recent/files", [path, *files][:RECENT_FILES_MAX])
 
     def _rebuild_recent_menu(self):
@@ -1554,7 +1694,10 @@ class MainWindow(QMainWindow):
         split = settings.value("window/splitter3")
         if split is not None:
             self._body.restoreState(split)
-        open_ = str(settings.value("window/details_open", "false")).lower() in ("true", "1")
+        open_ = str(settings.value("window/details_open", "false")).lower() in (
+            "true",
+            "1",
+        )
         self.set_details_visible(open_)
         # By name: the views' order has changed between versions.
         view = str(settings.value("window/details_view", ""))
@@ -1567,7 +1710,9 @@ class MainWindow(QMainWindow):
         settings = app_settings()
         settings.setValue("window/geometry", self.saveGeometry())
         settings.setValue("window/splitter3", self._body.saveState())
-        settings.setValue("window/details_view", self._tabs.tabText(self._tabs.currentIndex()))
+        settings.setValue(
+            "window/details_view", self._tabs.tabText(self._tabs.currentIndex())
+        )
         self._map_view.wait_for_build()  # a running worker thread can't outlive the window
         # The view's temp folder (a copy of mermaid.js) and the preview's.
         self._diagram_view.cleanup()
@@ -1685,7 +1830,9 @@ class MainWindow(QMainWindow):
         self._export_btn.setEnabled(True)
         self._rendering = False
 
-    def _apply_loaded(self, path: str, rows: list[dict], schema: Schema, mermaid_text: str):
+    def _apply_loaded(
+        self, path: str, rows: list[dict], schema: Schema, mermaid_text: str
+    ):
         """Push a loaded schema into the widgets (must run on the UI thread).
 
         The passed-in ``mermaid_text`` is for the full schema; the diagram we
@@ -1758,8 +1905,7 @@ class MainWindow(QMainWindow):
         dangling = unresolved_foreign_keys(schema)
         if dangling:
             self._status.setText(
-                self._status.text()
-                + f'  <span style="color:{_muted_hex(self)}">· '
+                self._status.text() + f'  <span style="color:{_muted_hex(self)}">· '
                 f"{_plural(len(dangling), 'foreign key')} reference a table not "
                 "in this sheet</span>"
             )
@@ -1769,7 +1915,6 @@ class MainWindow(QMainWindow):
         self._sync_export_enabled()
         for action in self._schema_actions:
             action.setEnabled(True)
-
 
     def _add_related_tables(self):
         """Add the one-hop FK neighbours of the checked tables.
@@ -1961,7 +2106,9 @@ class MainWindow(QMainWindow):
                 relationships=[r for r in final.relationships if not is_hidden_link(r)],
             )
         self._drawio_schema = final
-        self._sql_tab.set_schema(final, self._schema, self._options_bar.hide_system_columns())
+        self._sql_tab.set_schema(
+            final, self._schema, self._options_bar.hide_system_columns()
+        )
         self._refresh_tables_view()
         self._refresh_details()
         self._map_view.set_ticked(self._selector.selected_tables())
@@ -2059,10 +2206,15 @@ class MainWindow(QMainWindow):
             )
             return
         self._diagram_view.set_diagram(
-            mermaid_text, self._options_bar.render_style(), self._hub_entity(final),
+            mermaid_text,
+            self._options_bar.render_style(),
+            self._hub_entity(final),
             # Names each drawn relationship label (rel1, rel2, ... in the order
             # generate_mermaid writes them), so moved/rotated labels are kept.
-            [f"{r.parent_table}|{r.child_table}|{r.label}" for r in final.relationships],
+            [
+                f"{r.parent_table}|{r.child_table}|{r.label}"
+                for r in final.relationships
+            ],
         )
         # A brighter, scannable success summary: dim the "Loaded <file> —" lead
         # (the name is already in the file chip) and give the counts full contrast.
@@ -2072,14 +2224,17 @@ class MainWindow(QMainWindow):
         )
         # Dynamics tables run to hundreds of columns; at that width the
         # relationships are lost in the attribute lists.
-        if col_count / max(shown, 1) > 50 and not self._options_bar.diagram_options().keys_only:
+        if (
+            col_count / max(shown, 1) > 50
+            and not self._options_bar.diagram_options().keys_only
+        ):
             stats += (
                 f" · about {col_count // max(shown, 1)} columns per table: "
                 "try Keys only (Alt+K) to see the relationships"
             )
         self._status.setText(
             f'<span style="color:{_muted_hex(self)}">Loaded '
-            f'{html.escape(self._loaded_name)} —</span> '
+            f"{html.escape(self._loaded_name)} —</span> "
             f'<span style="color:{_text_hex(self)}">{stats}</span>'
         )
 
@@ -2097,7 +2252,11 @@ class MainWindow(QMainWindow):
     def _fill_data_if_shown(self, *_args):
         """Fill the Data view from the loaded rows once it's on screen."""
         rows = getattr(self, "_pending_rows", None)
-        if rows is None or self._tabs.isHidden() or self._tabs.currentWidget() is not self._table_stack:
+        if (
+            rows is None
+            or self._tabs.isHidden()
+            or self._tabs.currentWidget() is not self._table_stack
+        ):
             return
         self._pending_rows = None
         # Up to a second for a big file: say so, with a busy cursor.
@@ -2108,7 +2267,9 @@ class MainWindow(QMainWindow):
             self._populate_table(rows)
         finally:
             QApplication.restoreOverrideCursor()
-        self._status.setText(f"Data view: {len(rows):,} rows read from the spreadsheet.")
+        self._status.setText(
+            f"Data view: {len(rows):,} rows read from the spreadsheet."
+        )
 
     def _populate_table(self, rows: list[dict]):
         # Build a plain 2-D grid of strings (loose header matching so extra or
@@ -2125,7 +2286,9 @@ class MainWindow(QMainWindow):
             for k, v in row.items():
                 if k not in where:
                     key = self._key(k)
-                    where[k] = keyed_headers.index(key) if key in keyed_headers else None
+                    where[k] = (
+                        keyed_headers.index(key) if key in keyed_headers else None
+                    )
                 at = where[k]
                 if at is not None and v is not None:
                     line[at] = str(v)
@@ -2167,7 +2330,9 @@ class MainWindow(QMainWindow):
     def save_mmd(self):
         if not self._ensure_current():
             return
-        path = self._save_path("Save Mermaid file", ".mmd", "Mermaid (*.mmd);;All files (*)")
+        path = self._save_path(
+            "Save Mermaid file", ".mmd", "Mermaid (*.mmd);;All files (*)"
+        )
         if path:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(self._mermaid_text)
@@ -2176,12 +2341,61 @@ class MainWindow(QMainWindow):
     def save_md(self):
         if not self._ensure_current():
             return
-        path = self._save_path("Save Markdown file", ".md", "Markdown (*.md);;All files (*)")
+        path = self._save_path(
+            "Save Markdown file", ".md", "Markdown (*.md);;All files (*)"
+        )
         if path:
             content = f"# Database ER Diagram\n\n```mermaid\n{self._mermaid_text.strip()}\n```\n"
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(content)
             self._report_saved(path)
+
+    def export_tables(self):
+        """Export the ticked tables and their columns as CSV, JSON or Excel."""
+        if self._schema is None:
+            return
+        names = self._selector.selected_tables()
+        if not names:
+            QMessageBox.information(
+                self,
+                "Nothing to export",
+                "Tick some tables first; there are no tables to export yet.",
+            )
+            return
+        every = self._columns.sorted_schema(filter_schema(self._schema, names))
+        ticked = filter_columns(every, self._columns.excluded_pairs())
+        dialog = TableExportDialog(
+            ticked,
+            every,
+            self._loaded_name,
+            self._options_bar.hide_system_columns(),
+            self,
+        )
+        if not dialog.exec():
+            return
+        opts = dialog.options()
+        # "_tables" so the default name never overwrites the source workbook.
+        ext = EXTENSIONS[opts.format]
+        path = self._save_path(
+            "Export tables and columns", f"_tables{ext}", FILE_FILTERS[opts.format]
+        )
+        if not path:
+            return
+        if not os.path.splitext(path)[1]:
+            path += ext
+        try:
+            written = export_schema(dialog.schema(), path, opts)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                "Export failed",
+                f"Couldn't write {os.path.basename(path)}.\n\n{exc}",
+            )
+            return
+        extra = [os.path.basename(p) for p in written[1:]]
+        self._report_saved(path, f" and {', '.join(extra)}" if extra else "")
+        if dialog.open_after():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def save_table_selection_toml(self):
         if self._schema is None:
@@ -2202,15 +2416,17 @@ class MainWindow(QMainWindow):
         # The ticked tables, and the work done on them: column choices and
         # moved relationship labels.
         custom, sort, keys_first = self._columns.column_state()
-        text = dump_preset(Preset(
-            self._loaded_name,
-            self._selector.selected_tables(),
-            hidden_columns=self._columns.excluded_pairs(),
-            column_order=custom,
-            column_sort=sort,
-            keys_first=keys_first,
-            label_layout=self._diagram_view.label_edits(),
-        ))
+        text = dump_preset(
+            Preset(
+                self._loaded_name,
+                self._selector.selected_tables(),
+                hidden_columns=self._columns.excluded_pairs(),
+                column_order=custom,
+                column_sort=sort,
+                keys_first=keys_first,
+                label_layout=self._diagram_view.label_edits(),
+            )
+        )
         try:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(text)
@@ -2287,7 +2503,10 @@ class MainWindow(QMainWindow):
         # Column choices and label moves, when the preset has them (older
         # presets only list tables, and leave these as they are).
         self._columns.restore(
-            preset.hidden_columns, preset.column_order, preset.column_sort, preset.keys_first
+            preset.hidden_columns,
+            preset.column_order,
+            preset.column_sort,
+            preset.keys_first,
         )
         if preset.label_layout is not None:
             self._diagram_view.set_label_edits(preset.label_layout)
@@ -2505,21 +2724,30 @@ class MainWindow(QMainWindow):
     def _export_summary(self) -> str:
         """What the next export writes, e.g. "PNG · 2× · white page · Keys only"."""
         name = next(
-            (label.split(" (")[0].replace(" image", "") for k, label, *_ in EXPORT_FORMATS
-             if k == self._export_kind),
+            (
+                label.split(" (")[0].replace(" image", "")
+                for k, label, *_ in EXPORT_FORMATS
+                if k == self._export_kind
+            ),
             "",
         )
         parts = [name]
         if self._export_kind in ("drawio", "excalidraw"):
-            parts.append("dark shapes" if self._export_style().theme == "dark" else "light shapes")
+            parts.append(
+                "dark shapes"
+                if self._export_style().theme == "dark"
+                else "light shapes"
+            )
         else:
             if self._export_kind == "png":
                 parts.append(f"{self.png_scale():g}×")
-            parts.append({
-                "white": "white page",
-                "transparent": "transparent",
-                "match": "as on screen",
-            }.get(self.export_background(), "white page"))
+            parts.append(
+                {
+                    "white": "white page",
+                    "transparent": "transparent",
+                    "match": "as on screen",
+                }.get(self.export_background(), "white page")
+            )
         if self._options_bar.diagram_options().keys_only:
             parts.append("Keys only")
         return " · ".join(p for p in parts if p)
@@ -2538,13 +2766,21 @@ class MainWindow(QMainWindow):
             self._options_bar._keys_only.setChecked(False)
             return
         if href == "show-in-folder" and getattr(self, "_last_saved", ""):
-            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(self._last_saved)))
+            QDesktopServices.openUrl(
+                QUrl.fromLocalFile(os.path.dirname(self._last_saved))
+            )
 
     def _sync_export_enabled(self):
         """Export/Preview/Mermaid only when there's a selection to output."""
-        has_tables = bool(self._drawio_schema is not None and self._drawio_schema.tables)
-        for widget in (self._export_btn, self._preview_btn, self._mermaid_btn,
-                       self._export_caption):
+        has_tables = bool(
+            self._drawio_schema is not None and self._drawio_schema.tables
+        )
+        for widget in (
+            self._export_btn,
+            self._preview_btn,
+            self._mermaid_btn,
+            self._export_caption,
+        ):
             widget.setEnabled(has_tables)
         self._export_btn.setToolTip(
             "Export the diagram. Use the arrow to pick another format, the "
@@ -2559,7 +2795,10 @@ class MainWindow(QMainWindow):
 
     def _sync_export_label(self):
         """Name the export button after the format it will produce."""
-        names = {k: label.split(" (")[0].replace(" image", "") for k, label, *_ in EXPORT_FORMATS}
+        names = {
+            k: label.split(" (")[0].replace(" image", "")
+            for k, label, *_ in EXPORT_FORMATS
+        }
         name = names.get(self._export_kind)
         text = f"&Export {name}…" if name else "&Export…"
         self._export_btn.setText(text)
@@ -2612,7 +2851,11 @@ class MainWindow(QMainWindow):
         style = self._export_style()
         try:
             if export_kind in {"drawio", "excalidraw"}:
-                build = schema_to_drawio if export_kind == "drawio" else schema_to_excalidraw
+                build = (
+                    schema_to_drawio
+                    if export_kind == "drawio"
+                    else schema_to_excalidraw
+                )
                 content = build(schema, dark=style.theme == "dark")
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(content)
@@ -2643,7 +2886,9 @@ class MainWindow(QMainWindow):
                 self._diagram_view.save_pdf(path, background=style.background)
                 return ""
             scale = self.png_scale()
-            used = self._diagram_view.save_png(path, scale=scale, background=style.background)
+            used = self._diagram_view.save_png(
+                path, scale=scale, background=style.background
+            )
             if used < scale - 1e-6:
                 return f" (scaled to {used:.2f}× to stay within size limits)"
             return ""

@@ -46,6 +46,7 @@ testpaths = ["tests"]
 
 [tool.pyright]
 extraPaths = ["src"]
+typeCheckingMode = "standard"
 
 [tool.setuptools.dynamic]
 version = { attr = "xsltomermaid.__version__" }

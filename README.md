@@ -176,6 +176,14 @@ selected, they say how to pick one.
   status line then offers **Show in folder**.
 - **Mermaid** copies the source or saves it as `.mmd` / `.md`. **Preview in
   browser** opens the diagram in your browser, offline.
+- **File › Export tables and columns** (Ctrl+Shift+E, also in the **Table list**
+  menu) writes the ticked tables and their columns as **CSV**, **JSON** or
+  **Excel**, no drawing needed. It asks first: only the ticked columns or every
+  column, leave out system columns, include relationships, which fields, header
+  names (the spreadsheet's own, which load straight back in, or readable labels),
+  how yes/no values are written, and per format the CSV separator and UTF-8 mark,
+  nested or flat JSON, or one Excel sheet versus a sheet per table plus a Tables
+  summary. The choices are remembered.
 
 ### Session and updates
 
@@ -204,6 +212,7 @@ selected, they say how to pick one.
 | Ctrl++ · Ctrl+- · Ctrl+0 | Zoom in · out · true 100% (until **Fit**) |
 | Arrows · Enter | Move between tables · open one (diagram or map) |
 | Ctrl+E | Export the diagram |
+| Ctrl+Shift+E | Export the ticked tables and columns (CSV, JSON, Excel) |
 | Ctrl+Shift+C · Ctrl+Shift+Q | Copy Mermaid · copy SQL |
 | Ctrl+S · Ctrl+L | Save as `.mmd` · load a table list |
 | Ctrl+Q | Exit |
@@ -275,6 +284,8 @@ erDiagram
 | `src/xsltomermaid/schema_map.py` | Clusters and lays out a whole schema for the map. No Qt. |
 | `src/xsltomermaid/sql_query.py` | Writes the T-SQL `SELECT … JOIN` for the SQL view. No Qt. |
 | `src/xsltomermaid/selection_preset.py` | Reads and writes `.toml` table-list presets. No Qt. |
+| `src/xsltomermaid/schema_export.py` | Writes the ticked tables and columns as CSV, JSON or Excel. No Qt. |
+| `src/xsltomermaid/schema_export_dialog.py` | The options asked before that export. |
 | `src/xsltomermaid/updates.py` | Checks the GitHub API for a newer release. No Qt. |
 | `src/xsltomermaid/main.py` | The main window, which wires everything together, and the CLI modes. |
 | `src/xsltomermaid/table_list.py` | The table list: filters, sorting, link counts, cluster headers. |
