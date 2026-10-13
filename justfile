@@ -1,6 +1,6 @@
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
-py := "3.13"
+py := "3.14"
 uv := "uv --system-certs"
 
 default:
