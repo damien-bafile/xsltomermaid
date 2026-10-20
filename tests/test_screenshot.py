@@ -2420,6 +2420,52 @@ def test_map_selection_dims_all_but_its_direct_links():
     del app
 
 
+def test_clearing_the_map_selection_clears_the_current_table():
+    """Esc or a click on empty map clears the table shown in the list and the
+    Details panel, as clearing the diagram's selection does."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    app, window = _big_window()
+    window.resize(1200, 800)
+    window.show()
+    window.show_map(True)
+    mv, view = window._map_view, window._map_view._view
+    sel = window._selector
+
+    def pick(name):
+        mv.select([name])
+        mv._on_selection_changed()  # as a user click would
+        assert window._columns.current_table() == name
+        assert sel._list.currentItem() is not None and sel._list.currentItem().text() == name
+
+    def cleared():
+        return window._columns.current_table() == "" and sel._list.currentItem() is None
+
+    pick("C7")
+    view.setFocus()
+    QTest.keyClick(view, Qt.Key_Escape)
+    assert mv.selected() == [] and cleared()
+
+    pick("C7")
+    empty = next(
+        QPoint(x, y)
+        for x in range(5, view.viewport().width(), 15)
+        for y in range(5, view.viewport().height(), 15)
+        if view.itemAt(QPoint(x, y)) is None
+    )
+    QTest.mouseClick(view.viewport(), Qt.LeftButton, Qt.NoModifier, empty)
+    assert mv.selected() == [] and cleared()
+
+    # A map rebuilt while the diagram is on screen leaves the current table alone.
+    window.show_map(False)
+    window._focus_table("C7")
+    mv.set_schema(window._schema)
+    assert window._columns.current_table() == "C7"
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_map_redraw_keeps_the_selection_and_its_dimming():
     """A theme switch redraws the map; the selection, and the dimming that
     goes with it, must survive, or the map and the list disagree."""

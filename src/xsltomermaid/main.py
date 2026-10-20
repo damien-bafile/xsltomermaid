@@ -677,10 +677,7 @@ class MainWindow(QMainWindow):
         self._options_bar.add_trailing_widget(self._details_btn)
         self._map_view.table_activated.connect(self._on_map_table_activated)
         self._map_view.draw_requested.connect(self._draw_from_map)
-        # The list is built after the canvas, so look it up when the signal fires.
-        self._map_view.selection_changed.connect(
-            lambda names: self._selector.mark_map_selection(names)
-        )
+        self._map_view.selection_changed.connect(self._on_map_selection_changed)
         self._map_view.show_diagram_requested.connect(lambda: self.show_map(False))
         self._map_view.export_requested.connect(self.export_map)
         self._map_view._hide.toggled.connect(self._options_bar._hide_audit.setChecked)
@@ -1335,6 +1332,15 @@ class MainWindow(QMainWindow):
                 if self._selector._matches is not None
                 else None
             )
+
+    def _on_map_selection_changed(self, names: list[str]):
+        """Tint the list rows selected on the map. A map selection cleared on
+        screen (Esc, a click on empty space) clears the current table
+        everywhere, as clearing the diagram's does, so the list and the
+        Details panel don't keep showing a table nothing has selected."""
+        self._selector.mark_map_selection(names)
+        if not names and self.map_visible() and self._columns.current_table():
+            self._focus_table("", from_map=True)
 
     def _on_map_table_activated(self, name: str, double: bool):
         self._focus_table(name, from_map=True)
