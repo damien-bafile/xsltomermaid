@@ -2908,37 +2908,95 @@ def test_map_names_tables_once_zoomed_in_and_selected_ones_always(tmp_path):
     del app
 
 
-def test_sql_and_mermaid_text_is_coloured_by_token():
+def _highlighted(grammar, text):
+    """Colour `text` with `grammar`; return ({run text: colour}, palette colours, edit)."""
     from PySide6.QtGui import QPalette
     from PySide6.QtWidgets import QPlainTextEdit
 
-    from xsltomermaid.highlight import _COLOURS, MermaidHighlighter, SqlHighlighter
+    from xsltomermaid.highlight import _COLOURS, RuleHighlighter
+
+    edit = QPlainTextEdit()
+    edit.highlighter = RuleHighlighter(edit.document(), edit, grammar)
+    edit.setPlainText(text)
+    edit.highlighter.rehighlight()
+    dark = edit.palette().color(QPalette.Base).lightness() < 128
+    return _runs(edit), _COLOURS["dark" if dark else "light"], edit
+
+
+def _runs(edit):
+    found = {}
+    block = edit.document().begin()
+    while block.isValid():
+        for r in block.layout().formats():
+            found[block.text()[r.start:r.start + r.length]] = r.format.foreground().color().name()
+        block = block.next()
+    return found
+
+
+def test_sql_and_mermaid_text_is_coloured_by_token():
+    from xsltomermaid.highlight import MERMAID, SQL
 
     app = QApplication.instance() or QApplication([])
-
-    def colours(highlighter_cls, text):
-        edit = QPlainTextEdit()
-        highlighter = highlighter_cls(edit.document(), edit)
-        edit.setPlainText(text)
-        highlighter.rehighlight()
-        found = {}
-        block = edit.document().begin()
-        while block.isValid():
-            for r in block.layout().formats():
-                found[block.text()[r.start:r.start + r.length]] = r.format.foreground().color().name()
-            block = block.next()
-        dark = edit.palette().color(QPalette.Base).lightness() < 128
-        return found, _COLOURS["dark" if dark else "light"]
-
-    sql, c = colours(SqlHighlighter, "SELECT TOP (100)\n    [o].[Name] -- note\n"
-                                     "FROM [dbo].[Order] AS [o]\n/* a\nb */")
+    sql, c, _ = _highlighted(SQL, "SELECT TOP (100)\n    [o].[Name] -- note\n"
+                                  "FROM [dbo].[Order] AS [o]\n/* a\nb */")
     assert sql["SELECT"] == c["keyword"] and sql["100"] == c["number"]
     assert sql["[Name]"] == c["name"] and sql["-- note"] == c["comment"]
     assert sql["b */"] == c["comment"]  # a block comment over two lines
-    mmd, c = colours(MermaidHighlighter,
-                     'erDiagram\n    A ||--o{ B : "fk"\n    A {\n        int id PK\n    }')
+    mmd, c, _ = _highlighted(MERMAID,
+                             'erDiagram\n    A ||--o{ B : "fk"\n    A {\n        int id PK\n    }')
     assert mmd["erDiagram"] == c["keyword"] and mmd["||--o{"] == c["keyword"]
     assert mmd['"fk"'] == c["string"] and mmd["PK"] == c["keyword"] and mmd["A"] == c["name"]
+    del app
+
+
+def test_comment_markers_inside_strings_names_and_comments_are_inert():
+    from xsltomermaid.highlight import SQL
+
+    app = QApplication.instance() or QApplication([])
+    sql, c, _ = _highlighted(SQL, "SELECT 'a--b', [x/*y] FROM t -- see /* below\n"
+                                  "WHERE [Path] LIKE '/*%'\nORDER BY 1")
+    assert sql["'a--b'"] == c["string"] and sql["[x/*y]"] == c["name"]
+    assert sql["FROM"] == c["keyword"]  # not swallowed by a comment from the string
+    assert sql["-- see /* below"] == c["comment"]
+    assert sql["'/*%'"] == c["string"]
+    assert sql["ORDER"] == c["keyword"]  # no block comment opened on the line above
+    del app
+
+
+def test_grammar_regions_honour_opener_length_and_tokens_are_checked():
+    import pytest
+
+    from xsltomermaid.highlight import Grammar
+
+    app = QApplication.instance() or QApplication([])
+    pascal = Grammar.compile([(r"\bend\b", "keyword")], [(r"\{", r"\}", "comment")])
+    runs, c, _ = _highlighted(pascal, "{} end {a\nb} end")
+    assert runs["{}"] == c["comment"] and runs["b}"] == c["comment"]
+    assert runs["end"] == c["keyword"]  # both closed, so the keywords show
+    with pytest.raises(ValueError, match="variable"):
+        Grammar.compile([(r"@\w+", "variable")])
+    del app
+
+
+def test_crossing_the_size_limit_by_an_edit_redoes_every_block():
+    from PySide6.QtGui import QTextCursor
+
+    from xsltomermaid.highlight import SQL
+
+    app = QApplication.instance() or QApplication([])
+    runs, c, edit = _highlighted(SQL, "SELECT 1\nx")
+    assert runs["SELECT"] == c["keyword"]
+    edit.highlighter.MAX_CHARS = 30
+    cursor = QTextCursor(edit.document())
+    cursor.movePosition(QTextCursor.End)
+    cursor.insertText("y" * 40)  # an edit to the last line only
+    app.processEvents()
+    assert _runs(edit) == {}  # over the limit: the first line went plain too
+    cursor.movePosition(QTextCursor.End)
+    cursor.movePosition(QTextCursor.Left, QTextCursor.KeepAnchor, 40)
+    cursor.removeSelectedText()
+    app.processEvents()
+    assert _runs(edit)["SELECT"] == c["keyword"]  # back under: coloured again
     del app
 
 
