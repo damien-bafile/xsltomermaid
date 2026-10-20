@@ -1354,6 +1354,156 @@ def test_recent_files_are_remembered_newest_first(tmp_path, monkeypatch):
     del app
 
 
+def test_start_screen_lists_recent_files_beside_the_drop_area(tmp_path, monkeypatch):
+    """Before a file is loaded the top bar is split: the drop area, and the
+    recent files (one click to open), which hide once a file is in."""
+    from PySide6.QtCore import Qt
+
+    _fresh_settings(tmp_path, monkeypatch)
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    window.resize(1200, 800)
+    window.show()
+    panel = window._recent_panel
+    assert panel.files() == [] and panel._empty.isVisibleTo(panel)
+
+    a, b = tmp_path / "one" / "a.xlsx", tmp_path / "two" / "a.xlsx"  # same name
+    for path in (a, b):
+        path.parent.mkdir()
+        _ensure_sample(str(path))
+        window._remember_recent(str(path))
+    assert panel.files() == [str(b), str(a)]  # newest first, refreshed as remembered
+    assert not panel._empty.isVisibleTo(panel)
+    folders = [panel._tree.topLevelItem(i).text(1) for i in range(2)]
+    assert folders == [str(b.parent), str(a.parent)]  # the folder tells them apart
+    # Side by side, sharing the bar's width.
+    assert abs(panel.width() - window._drop.width()) <= 2
+    assert panel.geometry().top() == window._drop.geometry().top()
+
+    opened = []
+    monkeypatch.setattr(window, "load_file_async", opened.append)
+    item = panel._tree.topLevelItem(1)
+    panel._tree.itemClicked.emit(item, 0)  # a click
+    panel._tree.setCurrentItem(panel._tree.topLevelItem(0))
+    from PySide6.QtTest import QTest
+
+    QTest.keyClick(panel._tree, Qt.Key_Return)  # or the keyboard
+    assert opened == [str(a), str(b)]
+
+    # A vanished file is dropped from the panel as well as the menu.
+    os.remove(a)
+    monkeypatch.setattr(app_module.QMessageBox, "information", lambda *x, **k: None)
+    panel._tree.itemClicked.emit(panel._tree.topLevelItem(1), 0)
+    assert panel.files() == [str(b)]
+
+    monkeypatch.undo()  # load for real: the panel makes way for the file chip
+    _fresh_settings(tmp_path, monkeypatch)
+    window.load_file(str(b))
+    assert not panel.isVisibleTo(window)
+    window._clear_recent()
+    assert panel.files() == []
+    window._diagram_view.cleanup()
+    del app
+
+
+def _start_screen_state(window):
+    """What a user sees of the window, for comparing against a fresh one."""
+    sel = window._selector
+    bar = window._options_bar
+    return {
+        "drop": (window._drop.text(), window._drop._compact),
+        "recent shown": window._recent_panel.isVisibleTo(window),
+        "onboarding shown": window._onboard.isVisibleTo(window),
+        "status": window._status.text(),
+        "tables listed": sel._list.count(),
+        "list title": sel._title.text(),
+        "list count": sel._count.text(),
+        "draw button": sel._render_btn.text(),
+        # Switched on or off, whether or not the diagram's strip is up.
+        "chips shown": [
+            not chip.isHidden()
+            for chip in (bar._audit_chip, bar._system_chip, bar._keys_chip)
+        ],
+        "list ready": sel._filter.isEnabled(),
+        "filter text": sel._filter.text(),
+        "map drawn": window._map_view.schema_map() is not None,
+        "on the map": window.map_visible(),
+        "buttons": [b.isEnabled() for b in window._action_buttons],
+        "menu items": [a.isEnabled() for a in window._schema_actions],
+        "close enabled": window._close_action.isEnabled(),
+        "back/forward": (window._back_action.isEnabled(), window._forward_action.isEnabled()),
+        "mermaid": window._mermaid_view.toPlainText(),
+        "sql": window._sql_tab.text(),
+        "data view": window._table_stack.currentWidget() is window._table_empty,
+        "data rows": window._table_model.rowCount(),
+        "export enabled": window._export_btn.isEnabled(),
+    }
+
+
+def test_file_close_returns_to_the_start_screen(tmp_path, monkeypatch):
+    """File → Close (Ctrl+W) puts the schema away: the window looks as it
+    did when the app opened, and another file loads normally after it."""
+    from PySide6.QtGui import QKeySequence
+
+    _fresh_settings(tmp_path, monkeypatch)
+    app = QApplication.instance() or QApplication([])
+    fresh = app_module.MainWindow()
+    fresh.resize(1200, 800)
+    fresh.show()
+    start = _start_screen_state(fresh)
+    assert not start["close enabled"]  # nothing to close yet
+    fresh._diagram_view.cleanup()
+
+    window = app_module.MainWindow()
+    window.resize(1200, 800)
+    window.show()
+    sample = tmp_path / "s.xlsx"
+    _ensure_sample(str(sample))
+    window.load_file(str(sample))
+    # Use the file a little: a table focused, the map, the Data view filled.
+    window._focus_table("Customer")
+    window.show_map(True)
+    window._map_view.select(["Customer"])
+    window.show_details(window._table_stack)
+    # As a Dynamics export does: audit links hidden, with their chip showing.
+    window._options_bar._hide_audit.setChecked(True)
+    window._options_bar.set_audit_share(0.74)
+    assert not window._options_bar._audit_chip.isHidden()
+    assert window._selector._title.text() != "Tables"  # "Tables (n)"
+    assert window._close_action.isEnabled()
+    assert window._close_action.shortcut() == QKeySequence("Ctrl+W")
+    assert window._close_action.text().replace("&", "") == "Close"
+
+    window._close_action.trigger()
+    assert window._schema is None
+    assert _start_screen_state(window) == start
+    assert window._recent_panel.files() == [str(sample)]  # and it's one click away
+
+    window.load_file(str(sample))  # a file loads as usual after a close
+    assert window._schema is not None and window._drop._compact
+    assert window._mermaid_view.toPlainText()
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_a_file_with_no_tables_can_still_be_closed(tmp_path, monkeypatch):
+    from openpyxl import Workbook
+
+    _fresh_settings(tmp_path, monkeypatch)
+    app = QApplication.instance() or QApplication([])
+    window = app_module.MainWindow()
+    empty = tmp_path / "empty.xlsx"
+    book = Workbook()
+    book.active.append(["TableName", "ColumnName"])  # headers, no rows
+    book.save(empty)
+    window.load_file(str(empty))
+    assert window._schema is not None and window._close_action.isEnabled()
+    window.close_file()
+    assert window._schema is None and not window._close_action.isEnabled()
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_ticked_only_filter_shows_just_the_selection():
     app, window = _window_with_schema(*_diamond())
     sel = window._selector

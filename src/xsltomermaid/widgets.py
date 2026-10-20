@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
+from typing import Callable
+
 from PySide6.QtCore import (
     QAbstractTableModel,
+    QEvent,
     QModelIndex,
     Qt,
     QThread,
@@ -11,17 +15,25 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
+    QColor,
     QTextDocumentFragment,
 )
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QSizePolicy,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
     QWidget,
 )
 
 from .config import _ACCEPTED_SUFFIXES
+
+QWIDGETSIZE_MAX = (1 << 24) - 1  # Qt's "no maximum" size
 from .services import SchemaImportService, describe_load_error
 from .theme import (
     _ACCENT,
@@ -88,6 +100,14 @@ class DropArea(QLabel):
         self.setText(f"{name}     ·     drop or click to load another file")
         self.setMinimumHeight(0)
         self.setMaximumHeight(46)
+        self._reset_style()
+
+    def set_idle(self):
+        """Back to the big start-screen target (File → Close)."""
+        self._compact = False
+        self.setText(self._IDLE_TEXT)
+        self.setMaximumHeight(QWIDGETSIZE_MAX)
+        self.setMinimumHeight(120)
         self._reset_style()
 
     def mousePressEvent(self, event):  # noqa: N802 (Qt naming)
@@ -170,6 +190,107 @@ class DropArea(QLabel):
     def retheme(self):
         """Re-apply the idle style for the current palette (light/dark)."""
         self._reset_style()
+
+
+class RecentFilesPanel(QFrame):
+    """The start screen's other half, beside the drop area: recent files, one
+    click (or Enter) to open.
+
+    ``list_files`` gives the paths, newest first, and ``on_open`` opens one, so
+    the panel keeps no list of its own and always matches File → Open Recent.
+    """
+
+    def __init__(
+        self,
+        list_files: Callable[[], list[str]],
+        on_open: Callable[[str], None],
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._list_files, self._on_open = list_files, on_open
+        self.setObjectName("recentFiles")
+        # As tall as the drop area beside it; a longer list scrolls.
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Ignored)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setSpacing(4)
+        self._title = QLabel("Recent files")
+        layout.addWidget(self._title)
+
+        self._tree = QTreeWidget()
+        self._tree.setColumnCount(2)  # name, folder
+        self._tree.setHeaderHidden(True)
+        self._tree.setRootIsDecorated(False)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setFrameShape(QFrame.NoFrame)
+        self._tree.setTextElideMode(Qt.ElideMiddle)  # a folder keeps its start and end
+        self._tree.setAccessibleName("Recent files")
+        self._tree.setAccessibleDescription("Click a file, or press Enter, to open it.")
+        self._tree.viewport().setCursor(Qt.PointingHandCursor)
+        self._tree.itemClicked.connect(lambda item, _column: self._open(item))
+        self._tree.installEventFilter(self)  # Enter opens the current file
+        layout.addWidget(self._tree, 1)
+
+        self._empty = QLabel("No recent files yet. Files you open are listed here.")
+        self._empty.setWordWrap(True)
+        layout.addWidget(self._empty)
+        layout.addStretch(0)
+        self.refresh()
+
+    def refresh(self):
+        """Re-read the list (after a file is opened, dropped from it, or the list cleared)."""
+        files = self._list_files()
+        self._tree.clear()
+        for path in files:
+            item = QTreeWidgetItem([os.path.basename(path), os.path.dirname(path)])
+            item.setData(0, Qt.UserRole, path)
+            item.setToolTip(0, path)
+            item.setToolTip(1, path)
+            self._tree.addTopLevelItem(item)
+        self._tree.resizeColumnToContents(0)
+        if files:
+            self._tree.setCurrentItem(self._tree.topLevelItem(0))
+        self._tree.setVisible(bool(files))
+        self._empty.setVisible(not files)
+        self.retheme()
+
+    def files(self) -> list[str]:
+        """The paths listed, top to bottom."""
+        return [
+            self._tree.topLevelItem(i).data(0, Qt.UserRole)
+            for i in range(self._tree.topLevelItemCount())
+        ]
+
+    def eventFilter(self, watched, event):  # noqa: N802 (Qt naming)
+        if (
+            watched is self._tree
+            and event.type() == QEvent.KeyPress
+            and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+        ):
+            self._open(self._tree.currentItem())
+            return True
+        return super().eventFilter(watched, event)
+
+    def _open(self, item):
+        if item is not None:
+            self._on_open(item.data(0, Qt.UserRole))
+
+    def retheme(self):
+        """Re-apply the colours for the current palette (light/dark)."""
+        muted = _muted_hex(self)
+        self.setStyleSheet(
+            "#recentFiles {"
+            f"  border: 1px solid {_control_border_hex(self)};"
+            "  border-radius: 12px;"
+            "}"
+            "#recentFiles QTreeWidget { background: transparent; }"
+        )
+        self._title.setStyleSheet(f"color: {muted}; {_font_size(1.08)} font-weight: 600;")
+        self._empty.setStyleSheet(f"color: {muted};")
+        folder = QColor(muted)
+        for i in range(self._tree.topLevelItemCount()):
+            self._tree.topLevelItem(i).setForeground(1, folder)
 
 
 class StatusLabel(QLabel):

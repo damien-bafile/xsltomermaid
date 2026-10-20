@@ -322,6 +322,14 @@ class DiagramOptionsBar(QWidget):
         self._audit_share = share
         self._sync_chips()
 
+    def forget_file(self):
+        """The file was closed: drop what the app worked out from it (the
+        hidden-link and system-column shares, an automatic Keys only), so its
+        chips go. The options themselves stay as the user left them."""
+        self._audit_share = self._system_share = 0.0
+        self._keys_auto = False
+        self._sync_chips()
+
     def set_keys_only_auto(self):
         """Switch Keys only on for the user, marked as the app's choice."""
         self._keys_only.setChecked(True)  # re-renders via changed

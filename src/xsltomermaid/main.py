@@ -166,6 +166,7 @@ from .widgets import (
     DropArea,
     ExtractedDataModel,
     LoadWorker,
+    RecentFilesPanel,
     RenderStatus,
     StatusLabel,
     UpdateCheckWorker,
@@ -318,7 +319,14 @@ class MainWindow(QMainWindow):
         if app is not None:
             self._options_bar.apply_system_defaults(system_is_dark(app))
         self._restore_session()
-        # The canvas is the first thing anyone sees, so it says what to do.
+        self._show_start_message()
+        save_options = lambda *_: self._options_bar.save_state(app_settings())  # noqa: E731
+        self._options_bar.changed.connect(save_options)
+        self._options_bar._more.toggled.connect(save_options)
+        self.retheme()
+
+    def _show_start_message(self):
+        """The canvas is the first thing anyone sees, so with no file in it says what to do."""
         self._diagram_view.show_message(
             "No spreadsheet loaded yet.\n\n"
             "Drop an Excel schema file on the bar above, or click it to browse. "
@@ -327,10 +335,6 @@ class MainWindow(QMainWindow):
             "(Ctrl+I) shows the selected table, the extracted rows, columns, "
             "Mermaid and SQL."
         )
-        save_options = lambda *_: self._options_bar.save_state(app_settings())  # noqa: E731
-        self._options_bar.changed.connect(save_options)
-        self._options_bar._more.toggled.connect(save_options)
-        self.retheme()
 
     def _init_state(self):
         """The window's data: what's loaded, what's drawn, what's selected."""
@@ -367,9 +371,17 @@ class MainWindow(QMainWindow):
         self._audit_share = 0.0
 
     def _build_top_bar(self, outer):
-        """The drop zone, the status line, the first-run nudge and the load progress."""
+        """The drop zone with recent files beside it, the status line, the
+        first-run nudge and the load progress."""
         self._drop = DropArea(self.load_file_async)
-        outer.addWidget(self._drop)
+        # Until a file is in, the top bar is split: drop or browse on the left,
+        # one click to reopen a recent file on the right.
+        self._recent_panel = RecentFilesPanel(self.recent_files, self._open_recent)
+        drop_row = QHBoxLayout()
+        drop_row.setSpacing(12)
+        drop_row.addWidget(self._drop, 1)
+        drop_row.addWidget(self._recent_panel, 1)
+        outer.addLayout(drop_row)
 
         self._status = StatusLabel("No file loaded.")
         self._status.setTextInteractionFlags(
@@ -859,6 +871,10 @@ class MainWindow(QMainWindow):
         self._recent_menu = file_menu.addMenu("Open &Recent")
         self._recent_menu.aboutToShow.connect(self._rebuild_recent_menu)
         self._rebuild_recent_menu()
+        # Enabled whenever a file is in, even one with no tables to draw.
+        self._close_action = act("Clos&e", self.close_file, QKeySequence("Ctrl+W"))
+        self._close_action.setEnabled(False)
+        file_menu.addAction(self._close_action)
         file_menu.addAction(
             act(
                 "&Load table list…",
@@ -1194,6 +1210,7 @@ class MainWindow(QMainWindow):
         for sep in self._button_seps:
             sep.setStyleSheet(line)
         self._drop.retheme()
+        self._recent_panel.retheme()
         self._selector.retheme()
         self._columns.retheme()
         self._options_bar.retheme()
@@ -1658,6 +1675,7 @@ class MainWindow(QMainWindow):
             if os.path.normcase(f) != os.path.normcase(path)
         ]
         app_settings().setValue("recent/files", [path, *files][:RECENT_FILES_MAX])
+        self._recent_panel.refresh()
 
     def _rebuild_recent_menu(self):
         menu = self._recent_menu
@@ -1688,11 +1706,13 @@ class MainWindow(QMainWindow):
             app_settings().setValue(
                 "recent/files", [f for f in self.recent_files() if f != path]
             )
+            self._recent_panel.refresh()
             return
         self.load_file_async(path)
 
     def _clear_recent(self):
         app_settings().remove("recent/files")
+        self._recent_panel.refresh()
 
     def _restore_session(self):
         """Window size, panel split and diagram options from the last session."""
@@ -1812,6 +1832,7 @@ class MainWindow(QMainWindow):
         """Toggle the progress bar and block re-entrant loads while running."""
         self._progress.setVisible(loading)
         self._drop.setEnabled(not loading)
+        self._recent_panel.setEnabled(not loading)
         if loading:
             self._progress.setRange(0, 100)
             self._progress.setValue(0)
@@ -1853,6 +1874,7 @@ class MainWindow(QMainWindow):
         self._history, self._history_at = [], -1
         self._sync_history_buttons()
         self._schema = schema
+        self._close_action.setEnabled(True)
         self._loaded_name = os.path.basename(path)
         self._render_confirmed_sig = None  # new file: forget the prior confirmation
         # The Data view is filled the first time it's shown: most loads never
@@ -1865,6 +1887,8 @@ class MainWindow(QMainWindow):
         # The big drop target has done its job; shrink it to a file chip so the
         # tabs get the height, and wake up the (until now inert) table picker.
         self._drop.set_loaded(self._loaded_name)
+        # The slim chip has no room for the list; File → Open Recent has it.
+        self._recent_panel.setVisible(False)
         self._onboard.setVisible(False)  # onboarding is a first-run nudge only
         self._selector.set_ready(True)
 
@@ -1924,6 +1948,61 @@ class MainWindow(QMainWindow):
         self._sync_export_enabled()
         for action in self._schema_actions:
             action.setEnabled(True)
+
+    def close_file(self):
+        """File → Close: put the loaded schema away and go back to the start
+        screen, as if the app had just opened (the drop area, recent files,
+        and every view empty)."""
+        if self._schema is None or self._worker is not None:
+            return
+        self._auto_render_timer.stop()
+        self._schema = None
+        self._mermaid_text = ""
+        self._loaded_name = ""
+        self._render_confirmed_sig = None
+        self._stale = False
+        self._pending_rows = None
+        self._drawio_schema = None
+        self._diagram_rendered = False
+        self._entity_to_table = {}
+        self._link_counts = {}
+        self._focus_after_render = ""
+        self._audit_share = 0.0
+        self._history, self._history_at = [], -1
+        self._sync_history_buttons()
+
+        self._options_bar.forget_file()
+        self.show_map(False)  # with no schema, the canvas is the diagram
+        self._map_view.set_schema(None)
+        self._selector.clear_filters()
+        self._selector.set_tables([])
+        self._selector.set_link_counts({})
+        self._selector.set_search_index({})
+        self._selector.mark_map_selection([])
+        self._selector.cluster_provider = None
+        self._selector.set_draw_pending(False)
+        self._selector.set_ready(False)
+        self._sql_tab.set_schema(Schema(tables=[], relationships=[]))
+        self._mermaid_view.setPlainText("")
+        self._tables_view.set_tables([])
+        self._refresh_details()  # no schema: the Columns and Links views say how to start
+        self._table_model.set_rows([])
+        self._table_stack.setCurrentWidget(self._table_empty)
+        self._render_status.clear()
+        self._saved_note.setVisible(False)
+        self._sync_export_enabled()
+        for btn in self._action_buttons:
+            btn.setEnabled(False)
+        for action in self._schema_actions:
+            action.setEnabled(False)
+        self._close_action.setEnabled(False)
+
+        self._drop.set_idle()
+        self._recent_panel.refresh()
+        self._recent_panel.setVisible(True)
+        self._onboard.setVisible(True)
+        self._show_start_message()
+        self._status.setText("No file loaded.")
 
     def _add_related_tables(self):
         """Add the one-hop FK neighbours of the checked tables.

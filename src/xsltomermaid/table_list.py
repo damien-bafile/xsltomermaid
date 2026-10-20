@@ -865,7 +865,10 @@ class TableSelector(QWidget):
         total = self._list.count()
         if total == 0:
             # Empty state: orient a newcomer instead of a bare "0 of 0 selected".
+            # The title and Draw go back to their start-up text too (File → Close).
             self._count.setText("No tables loaded yet")
+            self._title.setText("Tables")
+            self._render_btn.setText("D&raw ticked")
             return
         selected = sum(1 for item in self._items() if item.checkState() == Qt.Checked)
         self._count.setText(f"{selected:,} of {total:,} ticked for the diagram")

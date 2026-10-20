@@ -31,6 +31,7 @@ def show_shortcuts_help(parent) -> None:
     """Help › Keyboard shortcuts, in one place."""
     rows = [
         ("Ctrl+O", "Open a spreadsheet"),
+        ("Ctrl+W", "Close it and go back to the start screen"),
         ("Ctrl+M", "Switch between the diagram and the map"),
         ("Ctrl+I / Ctrl+1–6", "Show the Details panel / one of its views"),
         ("Ctrl+F", "Find tables by name or column (fuzzy)"),
