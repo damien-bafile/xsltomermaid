@@ -7,6 +7,7 @@ focus from Qt. Every action also has a list/keyboard route in the window.
 
 from __future__ import annotations
 
+import math
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import (
@@ -31,6 +32,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QStyle,
+    QStyleOptionGraphicsItem,
     QVBoxLayout,
     QWidget,
 )
@@ -38,7 +41,7 @@ from PySide6.QtWidgets import (
 from .excel_to_mermaid import Schema
 from .schema_map import HIDDEN_BY_DEFAULT, SchemaMap, build_map
 from .schema_map import node_radius as _node_radius
-from .theme import _ACCENT, _muted_hex
+from .theme import _ACCENT, _HIGHLIGHT, _muted_hex
 
 # Categorical colours for the largest clusters (Tableau 10); smaller clusters
 # share a neutral grey so colour stays meaningful. Points are non-text marks
@@ -68,6 +71,17 @@ class _TableLabel(QGraphicsSimpleTextItem):
         painter.setPen(Qt.NoPen)
         painter.setBrush(self.backing)
         painter.drawRoundedRect(self.boundingRect().adjusted(-3, -1, 3, 1), 3, 3)
+        super().paint(painter, option, widget)
+
+
+class _TableDot(QGraphicsEllipseItem):
+    """A table's point on the map. Its outline shows selection, so Qt's dashed
+    selection box is left out: the box covered the outline and looked like the
+    dashed outline of a ticked table."""
+
+    def paint(self, painter, option, widget=None):  # noqa: D401 (Qt naming)
+        option = QStyleOptionGraphicsItem(option)
+        option.state &= ~QStyle.StateFlag.State_Selected
         super().paint(painter, option, widget)
 
 
@@ -171,6 +185,38 @@ class _MapBuilder(QThread):
         self.built.emit(self._generation, build_map(self._schema, self._hidden))
 
 
+def _label_spot(centre: QPointF, radius: float, w: float, h: float, screen: QRectF, taken):
+    """Where a table's name goes, in screen pixels, or None if nowhere fits.
+
+    Beside the dot (right, left, below, above), else on the dot itself when
+    the dot is big enough to hold it. On the dot, the name sits as near the
+    middle of the dot's on-screen part as the circle allows, so a dot zoomed
+    larger than the view still shows its name. The returned rect includes a
+    2 x 1 px padding; it is wholly on screen and clear of every rect in ``taken``.
+    """
+    x, y = centre.x(), centre.y()
+    spots = [
+        QPointF(x + radius + 4, y - h / 2),
+        QPointF(x - radius - 4 - w, y - h / 2),
+        QPointF(x - w / 2, y + radius + 2),
+        QPointF(x - w / 2, y - radius - 2 - h),
+    ]
+    reach = radius - math.hypot(w / 2 + 2, h / 2 + 1)  # how far off-centre the name can sit
+    if reach >= 0:
+        dot = QRectF(x - radius, y - radius, 2 * radius, 2 * radius)
+        middle = dot.intersected(screen).center()
+        dx, dy = middle.x() - x, middle.y() - y
+        distance = math.hypot(dx, dy)
+        if distance > reach:
+            dx, dy = dx * reach / distance, dy * reach / distance
+        spots.append(QPointF(x + dx - w / 2, y + dy - h / 2))
+    for spot in spots:
+        rect = QRectF(spot.x(), spot.y(), w, h).adjusted(-2, -1, 2, 1)
+        if screen.contains(rect) and not any(rect.intersects(other) for other in taken):
+            return rect
+    return None
+
+
 class SchemaMapView(QWidget):
     """Summary bar, the map, and the list of unconnected tables."""
 
@@ -261,6 +307,9 @@ class SchemaMapView(QWidget):
         # (label, cluster) pairs, biggest cluster first.
         self._labels: list[tuple[QGraphicsSimpleTextItem, object]] = []
         self._edges = None
+        self._focus_edges = None  # the selected tables' links, drawn over the rest
+        self._neighbours: dict[str, set[str]] = {}  # name -> tables linked to it on the map
+        self._lit: set[str] | None = None  # tables at full strength; None = none dimmed
         self._node_labels: dict = {}  # name -> (label, node, radius)
         self._drawn = False  # the computed map is in the scene
         layout.addWidget(self._view, 1)
@@ -350,8 +399,7 @@ class SchemaMapView(QWidget):
         self._generation += 1  # a build still running is for the old schema
         self._map = None
         self._drawn = False
-        self._scene.clear()
-        self._items = {}
+        self._clear_scene()
         if self.isVisible():
             self._rebuild()
 
@@ -421,8 +469,7 @@ class SchemaMapView(QWidget):
         """Say the map is being computed: the summary, and a busy cursor over it."""
         self._building = on
         if on:
-            self._scene.clear()
-            self._items = {}
+            self._clear_scene()
             self._summary.setText("Building the map…")
             # Said where the eye is too: the middle of the (empty) canvas.
             note = self._scene.addSimpleText("Building the map…")
@@ -456,14 +503,28 @@ class SchemaMapView(QWidget):
         self._view.fit()
         self._declutter_labels()
 
+    def _clear_scene(self):
+        """Empty the scene and drop every reference to the items it deleted."""
+        self._scene.clear()
+        self._items = {}
+        self._edges = self._focus_edges = None
+        self._labels = []
+        self._node_labels = {}
+
     def _draw(self):
         m = self._map
         scene = self._scene
+        # A redraw (a theme switch, or the audit-link setting) keeps the
+        # selection, and with it the dimming, for the tables still on the map.
+        keep = set(self.selected())
         scene.blockSignals(True)
-        scene.clear()
-        self._items = {}
+        self._clear_scene()
+        self._neighbours = {}
+        for a, b in m.edges:
+            self._neighbours.setdefault(a, set()).add(b)
+            self._neighbours.setdefault(b, set()).add(a)
         text = self.palette().color(QPalette.WindowText)
-        surface = "dark" if self.palette().color(QPalette.Base).lightness() < 128 else "light"
+        surface = self._surface()
         palette = _CLUSTER_COLOURS[surface]
 
         colours = {}
@@ -492,7 +553,7 @@ class SchemaMapView(QWidget):
 
         for node in m.nodes.values():
             r = _node_radius(node.degree)
-            item = QGraphicsEllipseItem(node.x - r, node.y - r, 2 * r, 2 * r)
+            item = _TableDot(node.x - r, node.y - r, 2 * r, 2 * r)
             item.setBrush(QBrush(colours[node.community]))
             item.setPen(QPen(Qt.NoPen))
             item.setFlag(QGraphicsItem.ItemIsSelectable, True)
@@ -502,6 +563,7 @@ class SchemaMapView(QWidget):
                 f" · cluster: {m.communities[node.community].hub}"
             )
             scene.addItem(item)
+            item.setSelected(node.name in keep)
             self._items[node.name] = item
 
         # A name beside each table, shown once zoomed in far enough to read
@@ -592,12 +654,17 @@ class SchemaMapView(QWidget):
         zoom), then filter matches, then the most connected. A label that
         would cover another (or a cluster name) is left out, so zooming in
         further names more of them.
+
+        A table counts as on screen when any part of its dot is, and its name
+        is kept inside the view: zoomed in, dots grow past the edges, and a
+        name tied to the dot's centre or its right side would be off screen.
         """
         labels = self._node_labels
         if not labels:
             return
         zoomed = self._view.zoom_level() >= self.TABLE_LABEL_ZOOM
-        visible = self._view.mapToScene(self._view.viewport().rect()).boundingRect()
+        screen = QRectF(self._view.viewport().rect())
+        to_scene, _invertible = transform.inverted()
         scale = transform.m11()
 
         def rank(name):
@@ -617,19 +684,24 @@ class SchemaMapView(QWidget):
             label, node, r = labels[name]
             item = self._items[name]
             marked = item.isSelected() or name == self._current or name in self._ticked
-            if not (zoomed or marked) or not visible.contains(node.x, node.y):
+            if not (zoomed or marked):
                 continue
-            if self._filter and not self._is_match(name) and not item.isSelected():
-                continue  # dimmed tables stay unnamed while filtering
-            w, h = label.boundingRect().width(), label.boundingRect().height()
-            offset = r * scale + 4  # just right of the dot, in screen pixels
+            if self._lit is not None and name not in self._lit:
+                continue  # dimmed tables stay unnamed
             centre = transform.map(QPointF(node.x, node.y))
-            rect = QRectF(centre.x() + offset, centre.y() - h / 2, w, h).adjusted(-2, -1, 2, 1)
-            if any(rect.intersects(other) for other in taken):
+            radius = r * scale  # in screen pixels
+            dot = QRectF(centre.x() - radius, centre.y() - radius, 2 * radius, 2 * radius)
+            if not dot.intersects(screen):
+                continue
+            w, h = label.boundingRect().width(), label.boundingRect().height()
+            rect = _label_spot(centre, radius, w, h, screen, taken)
+            if rect is None:
                 continue
             taken.append(rect)
-            label.setPos(node.x, node.y)
-            label.setTransform(QTransform.fromTranslate(offset, -h / 2))
+            # The label ignores the zoom, so its position is the scene point
+            # under the spot's top-left corner (inside the 2 x 1 px padding).
+            label.setPos(to_scene.map(rect.topLeft() + QPointF(2, 1)))
+            label.setTransform(QTransform())
             label.setVisible(True)
 
     # -- selection, ticks and filter highlights ---------------------------------
@@ -738,14 +810,70 @@ class SchemaMapView(QWidget):
             if len(names) == 1:
                 self.table_activated.emit(names[0], False)
 
+    def _linked_to(self, names: set[str]) -> set[str]:
+        """The tables linked straight to any of ``names`` on the map, not counting them."""
+        linked = set()
+        for name in names:
+            linked |= self._neighbours.get(name, set())
+        return linked - names
+
+    def _lit_tables(self, selected: set[str], linked: set[str]) -> set[str] | None:
+        """The tables drawn at full strength, or None when none are dimmed.
+
+        A selection lights itself and the tables directly linked to it, so its
+        connections stand out; the list's search lights its matches. With both,
+        either one lights a table.
+        """
+        if not selected and not self._filter:
+            return None
+        lit = selected | linked
+        if self._filter:
+            lit |= {name for name in self._items if self._is_match(name)}
+        return lit
+
+    def _surface(self) -> str:
+        """Which set of map and highlight colours applies: "dark" or "light"."""
+        return "dark" if self.palette().color(QPalette.Base).lightness() < 128 else "light"
+
+    def _draw_focus_edges(self, text, selected: set[str]):
+        """Draw the selected tables' links over the rest, stronger than the
+        faint web of every link, so a selection's connections can be followed."""
+        if self._focus_edges is not None:
+            self._scene.removeItem(self._focus_edges)
+            self._focus_edges = None
+        if not selected or self._map is None:
+            return
+        path = QPainterPath()
+        for a, b in self._map.edges:
+            if a in selected or b in selected:
+                na, nb = self._map.nodes.get(a), self._map.nodes.get(b)
+                if na and nb:
+                    path.moveTo(na.x, na.y)
+                    path.lineTo(nb.x, nb.y)
+        colour = QColor(text)
+        colour.setAlphaF(0.55)
+        pen = QPen(colour, 1.25)
+        pen.setCosmetic(True)
+        self._focus_edges = self._scene.addPath(path, pen)
+        self._focus_edges.setZValue(-0.5)  # over the other links, under the dots
+
     def _restyle(self):
         text = self.palette().color(QPalette.WindowText)
         accent = QColor(_ACCENT)
+        selected = set(self.selected())
+        linked = self._linked_to(selected)
+        self._lit = self._lit_tables(selected, linked)
         # Cosmetic pens keep a constant screen width at any zoom (a scene-unit
-        # pen vanished at the default fit). Selection uses the text colour,
-        # which contrasts with every cluster colour; ticks a dashed accent.
-        selected_pen = QPen(text, 2.5)
+        # pen vanished at the default fit). Selection and its direct links use
+        # the diagram's highlight colours: a solid blue outline for selected
+        # tables, a dashed orange one for the tables linked straight to them.
+        # The outline straddles the dot's edge, so it's wide enough that part
+        # of it always sits on the canvas, even round a dot of the same hue.
+        highlight = _HIGHLIGHT[self._surface()]
+        selected_pen = QPen(QColor(highlight["select"]), 3.0)
         selected_pen.setCosmetic(True)
+        linked_pen = QPen(QColor(highlight["reference"]), 2.5, Qt.DashLine)
+        linked_pen.setCosmetic(True)
         ticked_pen = QPen(accent, 1.5, Qt.DashLine)
         ticked_pen.setCosmetic(True)
         current_pen = QPen(accent, 3.5)
@@ -753,19 +881,22 @@ class SchemaMapView(QWidget):
         for name, item in self._items.items():
             if name == self._current and self._view.hasFocus():
                 item.setPen(current_pen)
-            elif item.isSelected():
+            elif name in selected:
                 item.setPen(selected_pen)
+            elif name in linked:
+                item.setPen(linked_pen)
             elif name in self._ticked:
                 item.setPen(ticked_pen)
             else:
                 item.setPen(QPen(Qt.NoPen))
-            match = self._is_match(name)
             # A selected table is never dimmed, even when it isn't a match.
-            item.setOpacity(1.0 if (match or item.isSelected()) else 0.15)
-            item.setZValue(1 if (item.isSelected() or (self._filter and match)) else 0)
+            lit = self._lit is None or name in self._lit
+            item.setOpacity(1.0 if lit else 0.15)
+            item.setZValue(1 if (self._lit is not None and lit) else 0)
         if self._edges is not None:
-            # Links would drown the matches while filtering.
-            self._edges.setOpacity(0.35 if self._filter else 1.0)
+            # Links would drown the lit tables while a selection or search dims the rest.
+            self._edges.setOpacity(0.35 if self._lit is not None else 1.0)
+        self._draw_focus_edges(text, selected)
         if self._labels or self._node_labels:
             self._declutter_labels()
 

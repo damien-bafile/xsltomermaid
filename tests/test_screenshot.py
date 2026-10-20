@@ -2229,6 +2229,64 @@ def test_map_single_selection_focuses_the_table_and_filter_dims_others():
     del app
 
 
+def test_map_selection_dims_all_but_its_direct_links():
+    """Selecting a table keeps it and the tables linked straight to it at full
+    strength, darkens the rest, and draws its links over the others."""
+    app, window = _big_window()
+    window.show()
+    window.show_map(True)
+    mv = window._map_view
+    items = mv._items
+    assert all(item.opacity() == 1.0 for item in items.values())
+    assert mv._focus_edges is None
+
+    mv.select(["C7"])
+    mv._on_selection_changed()  # as a user click would
+    assert items["C7"].opacity() == 1.0 and items["H"].opacity() == 1.0  # C7 -> H
+    assert items["C8"].opacity() < 0.5  # linked only through H: not direct
+    assert mv._focus_edges is not None and not mv._focus_edges.path().isEmpty()
+    # The diagram's colours: the selection outlined in solid blue, its direct
+    # links in dashed orange.
+    from PySide6.QtCore import Qt
+
+    from xsltomermaid.theme import _HIGHLIGHT
+
+    highlight = _HIGHLIGHT[mv._surface()]
+    assert items["C7"].pen().color().name() == highlight["select"]
+    assert items["C7"].pen().style() == Qt.SolidLine
+    assert items["H"].pen().color().name() == highlight["reference"]
+    assert items["H"].pen().style() == Qt.DashLine
+    assert items["C8"].pen().style() == Qt.NoPen
+
+    mv.select(["H"])  # the hub links to every child
+    mv._on_selection_changed()
+    assert all(item.opacity() == 1.0 for item in items.values())
+
+    mv.select([])
+    mv._on_selection_changed()
+    assert all(item.opacity() == 1.0 for item in items.values())
+    assert mv._focus_edges is None
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_map_redraw_keeps_the_selection_and_its_dimming():
+    """A theme switch redraws the map; the selection, and the dimming that
+    goes with it, must survive, or the map and the list disagree."""
+    app, window = _big_window()
+    window.show()
+    window.show_map(True)
+    mv = window._map_view
+    mv.select(["C7"])
+    mv._on_selection_changed()
+    mv.retheme()  # what a light/dark switch does to the map
+    assert mv.selected() == ["C7"]
+    assert mv._items["C8"].opacity() < 0.5 and mv._items["H"].opacity() == 1.0
+    assert mv._focus_edges is not None
+    window._diagram_view.cleanup()
+    del app
+
+
 def test_big_schema_opens_on_the_diagram_pointing_at_the_map(tmp_path):
     app, window = _big_window()
     window.show_map(True)  # left on the map from the last file
@@ -3193,8 +3251,66 @@ def test_map_table_names_follow_a_scroll():
     mv._label_timer.timeout.emit()  # as the timer would
     after = named()
     assert after and after != before  # the names moved with the view
-    visible = view.mapToScene(view.viewport().rect()).boundingRect()
-    assert all(visible.contains(mv._node_labels[n][1].x, mv._node_labels[n][1].y) for n in after)
+    # Every name is for a table at least partly on screen, and is itself on screen.
+    from PySide6.QtCore import QRectF
+
+    from xsltomermaid.schema_map import node_radius
+
+    screen = QRectF(view.viewport().rect())
+    transform = view.viewportTransform()
+    for name in after:
+        label, node, _r = mv._node_labels[name]
+        r = node_radius(node.degree)
+        dot = transform.mapRect(QRectF(node.x - r, node.y - r, 2 * r, 2 * r))
+        assert dot.intersects(screen)
+        assert screen.contains(label.deviceTransform(transform).mapRect(label.boundingRect()))
+    window._diagram_view.cleanup()
+    del app
+
+
+def test_map_names_tables_whose_dots_reach_past_the_edge():
+    """Zoomed in, dots grow past the view's edges. A table whose dot is only
+    partly on screen is still named, and its name is wholly on screen: beside
+    the dot when there's room, else on the dot itself."""
+    from PySide6.QtCore import QRectF
+
+    from xsltomermaid.schema_map import node_radius
+
+    app, window = _big_window()
+    window.resize(1200, 800)
+    window.show()
+    window.show_map(True)
+    mv = window._map_view
+    view = mv._view
+    app.processEvents()
+    hub = mv.schema_map().nodes["H"]
+    radius = node_radius(hub.degree)
+    label = mv._node_labels["H"][0]
+
+    def named_on_screen():
+        mv._declutter_labels()
+        screen = QRectF(view.viewport().rect())
+        shown = label.deviceTransform(view.viewportTransform()).mapRect(label.boundingRect())
+        return label.isVisible() and screen.contains(shown)
+
+    view.scale(8, 8)
+    view.user_zoomed = True
+    # Room to scroll past the map's edge, as a big map gives in the middle.
+    mv._scene.setSceneRect(mv._scene.itemsBoundingRect().adjusted(-5000, -5000, 5000, 5000))
+    # The hub's centre half a radius past the right edge, its dot still reaching in.
+    half_width = view.viewport().width() / 2 / view.transform().m11()
+    view.centerOn(hub.x - half_width - radius / 2, hub.y)
+    centre = view.mapFromScene(hub.x, hub.y)
+    assert centre.x() > view.viewport().width()  # the centre is off screen
+    assert named_on_screen()
+
+    # So close that the dot is bigger than the view: the name goes on the dot.
+    longest = max(view.viewport().width(), view.viewport().height())
+    factor = 1.5 * longest / radius / view.transform().m11()
+    view.scale(factor, factor)
+    view.centerOn(hub.x, hub.y)
+    assert radius * view.transform().m11() > longest
+    assert named_on_screen()
     window._diagram_view.cleanup()
     del app
 
