@@ -2874,6 +2874,13 @@ def test_map_scrolls_sideways_instead_of_zooming_out():
     moved = bar.value()
     wheel(0, 120, app_module.Qt.ShiftModifier)  # Shift+wheel up: left
     assert bar.value() < moved and view.transform().m11() == zoom
+    vbar = view.verticalScrollBar()
+    vbar.setValue((vbar.minimum() + vbar.maximum()) // 2)
+    top = vbar.value()
+    wheel(0, -120, app_module.Qt.ControlModifier)  # Ctrl+wheel down: down
+    assert vbar.value() > top and view.transform().m11() == zoom
+    wheel(0, 240, app_module.Qt.ControlModifier)  # Ctrl+wheel up: back up past it
+    assert vbar.value() < top and view.transform().m11() == zoom
     wheel(0, 120)  # the plain wheel still zooms
     assert view.transform().m11() > zoom
     window._diagram_view.cleanup()

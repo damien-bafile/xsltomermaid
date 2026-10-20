@@ -45,6 +45,7 @@ def show_shortcuts_help(parent) -> None:
         ("Ctrl+= / Ctrl+- / Ctrl+0", "Zoom in / out / 100%"),
         ("Diagram: arrows, Enter", "Move between tables, open one"),
         ("Map: drag, Ctrl+click", "Select a region, add or remove a table"),
+        ("Map: wheel / Ctrl+wheel / Shift+wheel", "Zoom / scroll up and down / scroll sideways"),
         ("Map: arrows, Space, Enter, Ctrl+A", "Move, select, open, select the cluster"),
         ("Links view: Space / Enter", "Tick the highlighted table / move to it"),
         ("Tables view: Enter / Shift+Enter", "Open a table's columns / its links"),

@@ -86,8 +86,8 @@ class _TableDot(QGraphicsEllipseItem):
 
 
 class _MapGraphicsView(QGraphicsView):
-    """Wheel zooms (no modifier needed on a map) and sideways scrolling pans;
-    drag draws a selection box."""
+    """Wheel zooms (no modifier needed on a map), Ctrl+wheel scrolls up and
+    down, and sideways scrolling pans; drag draws a selection box."""
 
     double_clicked = Signal(str)
     zoomed = Signal()
@@ -117,10 +117,20 @@ class _MapGraphicsView(QGraphicsView):
             super().keyPressEvent(event)
 
     def wheelEvent(self, event):  # noqa: N802 (Qt naming)
-        """The wheel zooms; sideways scrolling (a trackpad, a tilt wheel, or
-        Shift+wheel) pans left and right instead of being read as a zoom out."""
+        """The wheel zooms; Ctrl+wheel scrolls up and down; sideways scrolling
+        (a trackpad, a tilt wheel, or Shift+wheel) pans left and right instead
+        of being read as a zoom out."""
         angle, pixels = event.angleDelta(), event.pixelDelta()
         sideways = abs(angle.x()) > abs(angle.y())
+        if not sideways and event.modifiers() & Qt.ControlModifier:
+            if not pixels.isNull():
+                delta = pixels.y()
+            else:
+                delta = round(angle.y() / 120 * self.verticalScrollBar().singleStep() * 3)
+            bar = self.verticalScrollBar()
+            bar.setValue(bar.value() - delta)
+            event.accept()
+            return
         if sideways or event.modifiers() & Qt.ShiftModifier:
             # Some platforms report Shift+wheel on y, others already on x.
             if not pixels.isNull():
