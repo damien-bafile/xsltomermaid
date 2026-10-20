@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from .excel_to_mermaid import Schema, without_system_columns
-from .highlight import SqlHighlighter
+from .highlight import SQL, RuleHighlighter
 from .sql_query import generate_select
 
 
@@ -112,7 +112,7 @@ class SqlTab(QWidget):
         self.view.setFont(QFont("Menlo, Consolas, monospace"))
         self.view.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.view.setAccessibleName("SQL query")
-        self.highlighter = SqlHighlighter(self.view.document(), self.view)
+        self.highlighter = RuleHighlighter(self.view.document(), self.view, SQL)
         self.view.setPlaceholderText(
             "A SELECT joining the diagram's tables on their foreign keys "
             "appears here once tables are selected."

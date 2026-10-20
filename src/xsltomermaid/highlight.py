@@ -8,7 +8,10 @@ brightness and clear 4.5:1 on the editor background in both schemes.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -49,21 +52,101 @@ _SQL_KEYWORDS = (
 _MERMAID_KEYWORDS = ("erDiagram", "PK", "FK", "UK", "direction", "LR", "RL", "TB", "BT")
 
 
-class _RuleHighlighter(QSyntaxHighlighter):
-    """Colours tokens by regex rules, plus one multi-line comment form."""
+_TOKENS = frozenset(_COLOURS["light"])
 
-    # (pattern, token) pairs, applied in order; later rules win overlaps.
-    RULES: list[tuple[str, str]] = []
-    BLOCK_COMMENT: tuple[str, str] | None = None  # (start, end) regexes
+
+@dataclass(frozen=True)
+class Region:
+    """A string, quoted name or comment: nothing inside it is other syntax.
+
+    With no `end`, `start` matches the whole region on one line. With an
+    `end`, `start` is only the opener and the region runs on, over later
+    lines if need be, to the first `end` after it.
+    """
+
+    start: re.Pattern
+    token: str
+    end: re.Pattern | None = None
+
+
+@dataclass(frozen=True)
+class Grammar:
+    """What to colour, in two passes.
+
+    `rules` are (pattern, token) pairs applied in order, later rules winning
+    overlaps; a pattern with a group colours just its last group. `regions`
+    then scan left to right: the earliest one to open wins and covers any
+    rule inside it, so `'a--b'` stays a string and `-- see /*` stays a
+    comment.
+    """
+
+    rules: tuple[tuple[re.Pattern, str], ...]
+    regions: tuple[Region, ...] = ()
+
+    def __post_init__(self):
+        tokens = {t for _, t in self.rules} | {r.token for r in self.regions}
+        if unknown := tokens - _TOKENS:
+            raise ValueError(f"no colour for token(s) {sorted(unknown)}")
+
+    @classmethod
+    def compile(
+        cls,
+        rules: Sequence[tuple[str, str]],
+        regions: Sequence[tuple[str, str | None, str]] = (),  # (start, end, token)
+    ) -> Grammar:
+        return cls(
+            tuple((re.compile(p), t) for p, t in rules),
+            tuple(
+                Region(re.compile(s), t, re.compile(e) if e else None)
+                for s, e, t in regions
+            ),
+        )
+
+
+# T-SQL as the app writes it: keywords, [bracketed] names, literals, comments.
+SQL = Grammar.compile(
+    [
+        (r"\b\d+(?:\.\d+)?\b", "number"),
+        (r"[(),.;=*]", "punct"),
+        (r"(?i)\b(?:" + "|".join(_SQL_KEYWORDS) + r")\b", "keyword"),
+    ],
+    [
+        (r"\[(?:[^\]]|\]\])*\]", None, "name"),
+        (r"N?'(?:[^']|'')*'", None, "string"),
+        (r"--.*$", None, "comment"),
+        (r"/\*", r"\*/", "comment"),
+    ],
+)
+
+# Mermaid erDiagram source: keywords, relationship arrows, keys, notes.
+MERMAID = Grammar.compile(
+    [
+        (r"[{}:]", "punct"),
+        (r"[|}o]{1,2}(?:--|\.\.)[|{o]{1,2}", "keyword"),
+        (r"\b(?:" + "|".join(_MERMAID_KEYWORDS) + r")\b", "keyword"),
+        (r"^\s*([A-Za-z_][\w]*)\s*(?:\{|[|}o]{1,2}(?:--|\.\.))", "name"),
+        (r"\b([A-Za-z_]\w*)\s*:", "name"),
+    ],
+    [
+        (r'"[^"]*"', None, "string"),
+        (r"%%.*$", None, "comment"),
+    ],
+)
+
+
+class RuleHighlighter(QSyntaxHighlighter):
+    """Colours tokens by the rules of a Grammar, themed from a widget's palette."""
+
     # Past this size the text stays plain: colouring a whole-schema dump of
     # several MB would stall the window for little benefit.
     MAX_CHARS = 400_000
 
-    def __init__(self, document, widget):
+    def __init__(self, document, widget, grammar: Grammar):
         super().__init__(document)
         self._widget = widget
-        self._rules = [(re.compile(p), t) for p, t in self.RULES]
+        self._grammar = grammar
         self._formats: dict[str, QTextCharFormat] = {}
+        self._over_limit = False
         self.retheme()
 
     def retheme(self):
@@ -82,59 +165,53 @@ class _RuleHighlighter(QSyntaxHighlighter):
         self.rehighlight()
 
     def highlightBlock(self, text):  # noqa: N802 (Qt naming)
-        if self.document().characterCount() > self.MAX_CHARS:
+        over = self.document().characterCount() > self.MAX_CHARS
+        if over != self._over_limit:
+            # An edit that crosses the limit only re-runs the edited blocks;
+            # redo them all so none keeps colours or state from before.
+            self._over_limit = over
+            QTimer.singleShot(0, self.rehighlight)
+        self.setCurrentBlockState(0)
+        if over:
             return
-        for pattern, token in self._rules:
+        for pattern, token in self._grammar.rules:
             for match in pattern.finditer(text):
                 start, end = match.span(match.lastindex or 0)
                 self.setFormat(start, end - start, self._formats[token])
-        if self.BLOCK_COMMENT:
-            self._block_comments(text)
+        self._regions(text)
 
-    def _block_comments(self, text):
-        """/* ... */ across lines: block state 1 means "inside a comment"."""
-        opening, closing = (re.compile(p) for p in self.BLOCK_COMMENT)
-        fmt = self._formats["comment"]
-        self.setCurrentBlockState(0)
-        if self.previousBlockState() == 1:
-            start, skip = 0, 0
-        else:
-            m = opening.search(text)
-            start, skip = (m.start(), 2) if m else (-1, 0)
-        while start >= 0:
-            m = closing.search(text, start + skip)
-            if m is None:
-                self.setCurrentBlockState(1)
-                self.setFormat(start, len(text) - start, fmt)
+    def _regions(self, text):
+        """Colour regions left to right; block state n > 0 means the line
+        ends inside regions[n - 1], which the next line carries on."""
+        regions = self._grammar.regions
+        pos = 0
+        if (state := self.previousBlockState()) > 0:
+            pos = self._close(text, 0, 0, state - 1)
+        while pos is not None:
+            first = None
+            for index, region in enumerate(regions):
+                m = region.start.search(text, pos)
+                if m and (first is None or m.start() < first[1].start()):
+                    first = (index, m)
+            if first is None:
                 return
-            self.setFormat(start, m.end() - start, fmt)
-            nxt = opening.search(text, m.end())
-            start, skip = (nxt.start(), 2) if nxt else (-1, 0)
+            index, m = first
+            if regions[index].end is None:
+                self.setFormat(m.start(), m.end() - m.start(), self._formats[regions[index].token])
+                pos = max(m.end(), m.start() + 1)
+            else:
+                pos = self._close(text, m.start(), m.end(), index)
 
-
-class SqlHighlighter(_RuleHighlighter):
-    """T-SQL as the app writes it: keywords, [bracketed] names, literals, comments."""
-
-    RULES = [
-        (r"\b\d+(?:\.\d+)?\b", "number"),
-        (r"[(),.;=*]", "punct"),
-        (r"(?i)\b(?:" + "|".join(_SQL_KEYWORDS) + r")\b", "keyword"),
-        (r"\[(?:[^\]]|\]\])*\]", "name"),
-        (r"N?'(?:[^']|'')*'", "string"),
-        (r"--.*$", "comment"),
-    ]
-    BLOCK_COMMENT = (r"/\*", r"\*/")
-
-
-class MermaidHighlighter(_RuleHighlighter):
-    """Mermaid erDiagram source: keywords, relationship arrows, keys, notes."""
-
-    RULES = [
-        (r"[{}:]", "punct"),
-        (r"[|}o]{1,2}(?:--|\.\.)[|{o]{1,2}", "keyword"),
-        (r"\b(?:" + "|".join(_MERMAID_KEYWORDS) + r")\b", "keyword"),
-        (r"^\s*([A-Za-z_][\w]*)\s*(?:\{|[|}o]{1,2}(?:--|\.\.))", "name"),
-        (r"\b([A-Za-z_]\w*)\s*:", "name"),
-        (r'"[^"]*"', "string"),
-        (r"%%.*$", "comment"),
-    ]
+    def _close(self, text, start, search_from, index):
+        """Colour regions[index] from start to its end; return where it ends,
+        or None when it runs past this line."""
+        region = self._grammar.regions[index]
+        assert region.end is not None
+        fmt = self._formats[region.token]
+        m = region.end.search(text, search_from)
+        if m is None:
+            self.setCurrentBlockState(index + 1)
+            self.setFormat(start, len(text) - start, fmt)
+            return None
+        self.setFormat(start, m.end() - start, fmt)
+        return max(m.end(), start + 1)

@@ -194,7 +194,7 @@ from .options_bar import (
     DiagramOptionsBar,
 )
 from .help_dialogs import show_format_help, show_shortcuts_help
-from .highlight import MermaidHighlighter, SqlHighlighter
+from .highlight import MERMAID, SQL, RuleHighlighter
 from .sql_tab import SqlTab
 from .services import SchemaImportService, describe_load_error
 from . import __version__
@@ -507,8 +507,8 @@ class MainWindow(QMainWindow):
         self._mermaid_view.setPlaceholderText(
             "The generated Mermaid erDiagram will appear here."
         )
-        self._mermaid_highlighter = MermaidHighlighter(
-            self._mermaid_view.document(), self._mermaid_view
+        self._mermaid_highlighter = RuleHighlighter(
+            self._mermaid_view.document(), self._mermaid_view, MERMAID
         )
         tabs.addTab(self._mermaid_view, "Mermaid")
 
@@ -1068,8 +1068,8 @@ class MainWindow(QMainWindow):
         self._sql_query_view.setFont(QFont("Menlo, Consolas, monospace"))
         self._sql_query_view.setLineWrapMode(QPlainTextEdit.NoWrap)
         self._sql_query_view.setPlainText(SQL_SERVER_SCHEMA_QUERY)
-        self._sql_query_highlighter = SqlHighlighter(
-            self._sql_query_view.document(), self._sql_query_view
+        self._sql_query_highlighter = RuleHighlighter(
+            self._sql_query_view.document(), self._sql_query_view, SQL
         )
         layout.addWidget(self._sql_query_view, 1)
 
