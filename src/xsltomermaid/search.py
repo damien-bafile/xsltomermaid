@@ -46,16 +46,27 @@ def fuzzy_score(term: str, text: str) -> int | None:
     if not term:
         return 0
     low_term, low = term.lower(), text.lower()
+    # Tiers that never overlap, so a long fuzzy run can't outrank a real
+    # match: exact, then prefix, then contained at a word start, then
+    # contained anywhere, then letters in order. Within a tier, the name
+    # closest to the term (fewest extra letters, earliest) comes first.
     if low_term == low:
-        return 1000
+        return _EXACT
+    extra = min(len(low) - len(low_term), 99)
     at = low.find(low_term)
-    if at >= 0:
-        score = 600 + 10 * len(low_term) - min(at, 50)
-        if at == 0:
-            score += 150
-        elif _boundary(text, at):
-            score += 80
-        return score
+    if at == 0:
+        return _PREFIX - extra
+    if at > 0:
+        tier = _WORD if _boundary(text, at) else _CONTAINS
+        return tier - min(at, 50) - extra
+    return _fuzzy(low_term, low, text)
+
+
+_EXACT, _PREFIX, _WORD, _CONTAINS, _FUZZY_MAX = 5000, 4000, 3000, 2000, 1000
+
+
+def _fuzzy(low_term: str, low: str, text: str) -> int | None:
+    """Letters of ``low_term`` in order in ``low``, scored below 1,000."""
     if len(low_term) < 2:
         return None
     # Letters in order, greedily, preferring word starts.
@@ -86,7 +97,8 @@ def fuzzy_score(term: str, text: str) -> int | None:
     span = last - first + 1
     if span > max(3 * len(low_term), len(low_term) + 8):
         return None
-    return score
+    # Above column matches (at most 150), below anything contained.
+    return max(151, min(score, _FUZZY_MAX - 1))
 
 
 def match_table(

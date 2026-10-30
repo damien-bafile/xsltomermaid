@@ -3269,6 +3269,27 @@ def test_search_finds_tables_by_fuzzy_name_or_column_best_first():
     assert fuzzy_score("bkhdr", "msdyn_bookingheader") is not None  # letters in order
     assert fuzzy_score("zq", "account") is None
     assert fuzzy_score("acc", "account") > fuzzy_score("acc", "msdyn_account")  # prefix wins
+    # A full name typed out: the exact table first, then longer names that
+    # start with it, then ones containing it, and long fuzzy runs last.
+    term = "msdyn_transactioncategory"
+    ranked = sorted(
+        [
+            "msdyn_orderlinetransactioncategory",
+            "invoicedetail",
+            "msdyn_transactioncategoryclassification",
+            "msdyn_transactioncategory",
+            "msdyn_transactioncategorypricelevel",
+        ],
+        key=lambda n: -(fuzzy_score(term, n) or 0),
+    )
+    assert ranked == [
+        "msdyn_transactioncategory",
+        "msdyn_transactioncategorypricelevel",
+        "msdyn_transactioncategoryclassification",
+        "msdyn_orderlinetransactioncategory",
+        "invoicedetail",
+    ]
+    assert fuzzy_score("account", "msdyn_account") > fuzzy_score("account", "msdyn_xaccount")
     hit = match_table(["parentcustomerid"], "contact", ["contactid", "parentcustomerid"])
     assert hit.column == "parentcustomerid"
     assert match_table(["id"], "contact", ["contactid"]) is None  # short words: names only
