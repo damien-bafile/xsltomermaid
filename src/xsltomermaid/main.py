@@ -196,6 +196,7 @@ from .options_bar import (
 )
 from .help_dialogs import show_format_help, show_shortcuts_help
 from .highlight import MERMAID, SQL, RuleHighlighter
+from .query_designer import QueryDesignerView
 from .sql_tab import SqlTab
 from .services import SchemaImportService, describe_load_error
 from . import __version__
@@ -626,9 +627,17 @@ class MainWindow(QMainWindow):
             self._diagram_view.add_status_chip(chip)
         # The canvas shows either the ER diagram or, for big schemas, the map.
         self._map_view = SchemaMapView()
+        # ...or the Query designer, building a SELECT by hand (query_designer.py).
+        self._query_view = QueryDesignerView()
+        self._query_view.ticked_tables = lambda: self._selector.selected_tables()
+        self._query_view.message.connect(lambda text: self._status.setText(html.escape(text)))
+        self._options_bar.changed.connect(
+            lambda: self._query_view.set_hide_system(self._options_bar.hide_system_columns())
+        )
         self._canvas = QStackedWidget()
         self._canvas.addWidget(self._diagram_view)
         self._canvas.addWidget(self._map_view)
+        self._canvas.addWidget(self._query_view)
         diagram_layout.addWidget(self._canvas, 1)
         self._diagram_tab = diagram_tab
         # One switch for one choice: the canvas shows the diagram or the map.
@@ -655,18 +664,26 @@ class MainWindow(QMainWindow):
         )
         switch_row.addWidget(self._map_btn)
         self._view_group.addButton(self._map_btn)
-        self._map_btn.toggled.connect(self.show_map)
+        self._query_btn = QToolButton()
+        self._query_btn.setText("Query")
+        self._query_btn.setCheckable(True)
+        self._query_btn.setToolTip(
+            "Design a SQL query: place tables, join them, pick the columns (Ctrl+J)"
+        )
+        switch_row.addWidget(self._query_btn)
+        self._view_group.addButton(self._query_btn)
+        segments = (self._diagram_view_btn, self._map_btn, self._query_btn)
+        views = dict(zip(segments, ("diagram", "map", "query")))
+        self._view_group.buttonClicked.connect(lambda button: self.show_view(views[button]))
         switch.setAccessibleName("Canvas view")
-        self._diagram_view_btn.setAccessibleDescription("Canvas view, 1 of 2")
-        self._map_btn.setAccessibleDescription("Canvas view, 2 of 2")
+        for number, button in enumerate(segments, start=1):
+            button.setAccessibleDescription(f"Canvas view, {number} of {len(segments)}")
         self._style_view_switch()
         # Equal, fixed segments: never squeezed to "…", text centred in each.
-        for button in (self._diagram_view_btn, self._map_btn):
+        for button in segments:
             button.ensurePolished()
-        width = max(
-            b.sizeHint().width() for b in (self._diagram_view_btn, self._map_btn)
-        )
-        for button in (self._diagram_view_btn, self._map_btn):
+        width = max(b.sizeHint().width() for b in segments)
+        for button in segments:
             button.setFixedWidth(width)
         # Fixed at its size hint (both segments plus the layout's margin), so the
         # bar can never squeeze it into its neighbours.
@@ -696,6 +713,7 @@ class MainWindow(QMainWindow):
         self._selector.related_requested.connect(self._add_related_tables)
         self._selector.path_requested.connect(self._find_shortest_path)
         self._selector.export_requested.connect(self.export_table)
+        self._selector.query_requested.connect(self.add_to_query)
         self._selector.undone.connect(self._on_selection_undone)
 
     def _build_export_bar(self, outer):
@@ -949,6 +967,13 @@ class MainWindow(QMainWindow):
             schema_only=True,
         )
         view_menu.addAction(self._map_action)
+        self._query_action = act(
+            "&Query designer",
+            lambda: self.show_query(not self.query_visible()),
+            QKeySequence("Ctrl+J"),
+            schema_only=True,
+        )
+        view_menu.addAction(self._query_action)
         self._details_action = QAction("Details pa&nel", self)
         self._details_action.setCheckable(True)
         self._details_action.setShortcut(QKeySequence("Ctrl+I"))
@@ -977,7 +1002,7 @@ class MainWindow(QMainWindow):
         # rather than an Edit menu, whose Alt+E would take Export's.
         self._undo_action = act(
             "&Undo",
-            self._selector.undo_last_change,
+            self.undo,
             QKeySequence.StandardKey.Undo,
             schema_only=True,
         )
@@ -1050,8 +1075,22 @@ class MainWindow(QMainWindow):
         help_menu.addAction(self._update_action)
         help_menu.addAction(act("&About", self.show_about))
 
+    def undo(self):
+        """Ctrl+Z: the Query designer's last change while it's showing,
+        otherwise the last change to the ticks."""
+        if self.query_visible():
+            self._query_view.undo()
+        else:
+            self._selector.undo_last_change()
+
     def _sync_undo_action(self):
         """Name the Edit › Undo item after the change it undoes."""
+        if self.query_visible():
+            # Kept enabled: a disabled action's Ctrl+Z wouldn't reach the
+            # designer, and undoing nothing does nothing.
+            self._undo_action.setText("&Undo query change")
+            self._undo_action.setEnabled(True)
+            return
         label = self._selector._undo_btn.text().replace("&Undo", "").strip()
         self._undo_action.setText(f"&Undo {label}" if label else "&Undo")
         self._undo_action.setEnabled(
@@ -1234,6 +1273,7 @@ class MainWindow(QMainWindow):
         self._refresh_details()
         self._map_view.retheme()
         self._diagram_view.retheme()
+        self._query_view.retheme()
 
     def _style_view_switch(self):
         """The Diagram | Map segments, in the current palette's colours."""
@@ -1248,7 +1288,8 @@ class MainWindow(QMainWindow):
             segment
             + "QToolButton { border-top-left-radius: 5px; border-bottom-left-radius: 5px; }"
         )
-        self._map_btn.setStyleSheet(
+        self._map_btn.setStyleSheet(segment + "QToolButton { border-left: none; }")
+        self._query_btn.setStyleSheet(
             segment
             + "QToolButton { border-top-right-radius: 5px; border-bottom-right-radius: 5px;"
             " border-left: none; }"
@@ -1312,26 +1353,49 @@ class MainWindow(QMainWindow):
     def map_visible(self) -> bool:
         return self._canvas.currentWidget() is self._map_view
 
+    def query_visible(self) -> bool:
+        return self._canvas.currentWidget() is self._query_view
+
     def show_map(self, visible: bool):
         """Switch the canvas between the map and the ER diagram."""
-        visible = bool(visible) and self._schema is not None
-        self._canvas.setCurrentWidget(self._map_view if visible else self._diagram_view)
-        for button, on in (
-            (self._map_btn, visible),
-            (self._diagram_view_btn, not visible),
+        self.show_view("map" if visible else "diagram")
+
+    def show_query(self, visible: bool):
+        """Switch the canvas between the Query designer and the ER diagram."""
+        self.show_view("query" if visible else "diagram")
+
+    def show_view(self, view: str):
+        """Show ``"diagram"``, ``"map"`` or ``"query"`` on the canvas. The map
+        and the designer need a spreadsheet; without one it's the diagram."""
+        if self._schema is None:
+            view = "diagram"
+        widgets = {"diagram": self._diagram_view, "map": self._map_view,
+                   "query": self._query_view}
+        self._canvas.setCurrentWidget(widgets.get(view, self._diagram_view))
+        for button, name in (
+            (self._diagram_view_btn, "diagram"),
+            (self._map_btn, "map"),
+            (self._query_btn, "query"),
         ):
-            if button.isChecked() != on:
+            if button.isChecked() != (name == view):
                 button.blockSignals(True)
-                button.setChecked(on)
+                button.setChecked(name == view)
                 button.blockSignals(False)
-        self._options_bar.set_diagram_controls_visible(not visible)
-        if visible:
+        if view == "query":
+            self._sync_undo_action()  # Ctrl+Z now undoes the designer's changes
+        self._options_bar.set_diagram_controls_visible(view == "diagram")
+        if view == "map":
             self._map_view.set_ticked(self._selector.selected_tables())
             self._map_view.set_matches(
                 set(self._selector._matches)
                 if self._selector._matches is not None
                 else None
             )
+
+    def add_to_query(self, name: str):
+        """Table list › Add to query: open the designer with the table placed."""
+        self.show_query(True)
+        self._query_view.add_table(name)
 
     def _on_map_selection_changed(self, names: list[str]):
         """Tint the list rows selected on the map. A map selection cleared on
@@ -1913,6 +1977,8 @@ class MainWindow(QMainWindow):
         self._auto_hide_audit(schema)
         self._auto_hide_system(schema)
         self._map_view.set_schema(schema if names else None)
+        self._query_view.set_schema(schema if names else None)
+        self._query_view.set_hide_system(self._options_bar.hide_system_columns())
 
         # The file parsed but yielded no tables — every row was missing a
         # TableName or ColumnName. Say so plainly instead of "0 tables / select
@@ -1980,6 +2046,7 @@ class MainWindow(QMainWindow):
         self._options_bar.forget_file()
         self.show_map(False)  # with no schema, the canvas is the diagram
         self._map_view.set_schema(None)
+        self._query_view.set_schema(None)
         self._selector.clear_filters()
         self._selector.set_tables([])
         self._selector.set_link_counts({})
@@ -2406,6 +2473,9 @@ class MainWindow(QMainWindow):
 
     # -- actions -----------------------------------------------------------
     def copy_sql(self):
+        if self.query_visible():  # the designed query, which needs no drawing
+            self._query_view.copy_sql()
+            return
         if not self._ensure_current():
             return
         text = self._sql_tab.text()
@@ -2532,6 +2602,8 @@ class MainWindow(QMainWindow):
                 column_sort=sort,
                 keys_first=keys_first,
                 label_layout=self._diagram_view.label_edits(),
+                # The Query view's design, when there is one.
+                query=self._query_view.state() if self._query_view.design.tables else None,
             )
         )
         try:
@@ -2598,6 +2670,8 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 return
 
+        if preset.query is not None:  # a saved query design (Undo brings back the one before)
+            self._query_view.restore(preset.query)
         available = {table.name.lower() for table in self._schema.tables}
         matched = [name for name in selected if name.lower() in available]
         if not matched:

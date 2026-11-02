@@ -118,3 +118,34 @@ def test_preset_rejects_bad_column_values():
     ):
         with pytest.raises(ValueError, match=key):
             load_preset(head + line + "\n")
+
+
+def test_preset_keeps_a_query_design():
+    import pytest
+
+    from xsltomermaid import selection_preset
+
+    query = {
+        "design": {"tables": [{"table": "Order", "alias": "o"}],
+                   "where": {"mode": "AND", "negate": False, "items": [
+                       {"alias": "o", "column": "Note", "op": "=",
+                        "value": 'say "hi" \\ O\'Brien\tZoë 😀', "value2": ""}]}},
+        "positions": {"o": [10.5, -20.0]},
+        "quote_all": True,
+    }
+    text = dump_preset(Preset("x.xlsx", ["Order"], query=query))
+    line = next(l for l in text.splitlines() if l.startswith("query = "))
+    assert "\n" not in line and "\ud83d" not in line  # one line; no surrogate escapes (not TOML)
+    assert load_preset(text).query == query
+    # The Python 3.10 fallback reader reads it too.
+    real = selection_preset.tomllib
+    try:
+        selection_preset.tomllib = None
+        assert load_preset(text).query == query
+    finally:
+        selection_preset.tomllib = real
+    # Older presets have no query; a malformed one is named.
+    assert load_preset(dump_preset(Preset("x.xlsx", ["Order"]))).query is None
+    for bad in ('query = 3', 'query = "not json"', 'query = "[1, 2]"'):
+        with pytest.raises(ValueError, match="'query'"):
+            load_preset('filename = "x.xlsx"\nselected_tables = []\n' + bad + "\n")

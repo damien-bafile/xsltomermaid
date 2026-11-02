@@ -2227,6 +2227,9 @@ def test_columns_move_with_the_keyboard_and_hidden_ones_are_marked_beyond_colour
 def test_a_narrow_canvas_wraps_the_options_and_scrolls_the_tabs():
     app = QApplication.instance() or QApplication([])
     window = app_module.MainWindow()
+    # Wide enough for the bar's 1600 px below: once it re-lays out, the bar
+    # takes the window's width, not the width it was resized to.
+    window.resize(2000, 800)
     window.show()  # the bar measures its row only while it's shown
     app.processEvents()
     assert window._tabs.usesScrollButtons()  # every view reachable by mouse

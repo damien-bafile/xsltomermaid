@@ -100,6 +100,47 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
   table (its top, when the table is taller than the view), not the top-left
   corner.
 
+### Designing a query: the Query view
+
+The **Diagram | Map | Query** switch (Ctrl+J for Query) opens a canvas for
+building a T-SQL `SELECT` by hand. Nothing is run: it writes the query for you
+to copy into SQL Server, Synapse or Fabric.
+
+- **Add tables** from the box above the canvas, with **Add ticked tables**, or
+  by right-clicking a table in the list › **Add to query**. A table can be
+  added twice (an employee and their manager) under its own alias.
+- **Tables join on their foreign keys** as they're added (composite keys
+  included; **Auto-join** turns that off). Drag from a column to a column of
+  another table to join them yourself, or right-click a table › **Join to…**
+  for the foreign keys it has. Click a join line, or use the **Joins** tab, to
+  make it inner, left, right or full outer, or delete it.
+- **Click a column** to put it in the result. The **Output** tab sets each
+  one's aggregate (count, count distinct, sum, average, min, max) and sort,
+  and double-clicking names it (`AS …`); plain columns are grouped on when any
+  is aggregated. Right-click a column to count its distinct values or group by
+  it and count rows.
+- **Filters** build the `WHERE` clause as a tree. Each group combines what's
+  in it as *All of these* (AND), *Any of these* (OR), *None of these* or *Not
+  all of these*, and **+ Group** nests another, as deep as needed:
+  `Name = X AND (Total > 100 OR Status IN (1, 2))`. A condition is a column,
+  one of 15 operators (`=`, `<>`, `>`, `>=`, `<`, `<=`, contains, does not
+  contain, starts with, ends with, in, not in, between, is null, is not null)
+  and a value, written to suit the column's type (`N'…'` for Unicode text, bare
+  numbers, 1/0 for `bit`, LIKE wildcards escaped). Drag a condition or group by
+  its ⠿ grip to reorder it or move it into another group. Right-click a column
+  on the canvas › **Filter on this column**; filtered columns are marked ⏷.
+- **Undo / Redo** in the designer's toolbar, or Ctrl+Z (Ctrl+Y or
+  Ctrl+Shift+Z to redo) while it's open; Clear can be undone too. The
+  **Table list › Save table list** preset keeps the query and its layout, and
+  loading the preset brings it back.
+- **The SQL** under the panel is rewritten on every change, with the start
+  table, a row limit, Distinct, Quote all names, and the Dynamics *Latest
+  version only* and *Active records only* options. **Copy SQL**
+  (Ctrl+Shift+Q while the designer is open) copies it. A table no join
+  reaches is left out and named in a comment, never cross-joined.
+- Tables with more than 12 columns show their keys and the columns the query
+  uses, with a row to show the rest.
+
 ### Dynamics 365 / Dataverse exports
 
 - **Audit and system links are hidden automatically** when they make up more
@@ -148,8 +189,9 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
   with foreign keys to it, and **●** marks a table in the diagram.
 - **Clear** and the bulk actions can be undone (**Undo**, or Ctrl+Z). The
   **Table list** menu saves and loads the ticked tables as `.toml` presets, with
-  the column choices (left-out columns, dragged orders, the sort) and moved
-  relationship labels. Older presets still load; they leave those as they are.
+  the column choices (left-out columns, dragged orders, the sort), moved
+  relationship labels and the Query designer's query. Older presets still
+  load; they leave those as they are.
 
 ### The Details panel
 
@@ -208,9 +250,11 @@ selected, they say how to pick one.
 | Ctrl+F | Find tables (by name or column) |
 | F5 · Ctrl+Enter | Draw the ticked tables now |
 | Esc | Stop drawing · clear the diagram selection |
-| Ctrl+Z | Undo the last change to the ticks |
+| Ctrl+Z | Undo the last change to the ticks (in the Query designer: to the query) |
+| Ctrl+Y · Ctrl+Shift+Z | Redo, in the Query designer |
 | F1 | The spreadsheet format |
 | Ctrl+M | Switch between diagram and map |
+| Ctrl+J | Open or close the Query designer |
 | Ctrl+I | Show or hide the Details panel |
 | Ctrl+1 … Ctrl+6 | Details: Tables · Columns · Links · Mermaid · SQL · Data |
 | Alt+Left · Alt+Right | Details: back and forward through the tables shown |
@@ -288,6 +332,7 @@ erDiagram
 | `src/xsltomermaid/excel_to_mermaid.py` | The core: read the sheet, build the schema model, emit Mermaid. No Qt. |
 | `src/xsltomermaid/schema_map.py` | Clusters and lays out a whole schema for the map. No Qt. |
 | `src/xsltomermaid/sql_query.py` | Writes the T-SQL `SELECT … JOIN` for the SQL view. No Qt. |
+| `src/xsltomermaid/query_model.py` | A query designed by hand (tables, joins, nested filters, output columns) and its T-SQL. No Qt. |
 | `src/xsltomermaid/selection_preset.py` | Reads and writes `.toml` table-list presets. No Qt. |
 | `src/xsltomermaid/schema_export.py` | Writes the ticked tables and columns as CSV, JSON or Excel. No Qt. |
 | `src/xsltomermaid/schema_export_dialog.py` | The options asked before that export. |
@@ -299,6 +344,8 @@ erDiagram
 | `src/xsltomermaid/relationships_view.py` | The Details panel's Links view. |
 | `src/xsltomermaid/options_bar.py` | The diagram options bar. |
 | `src/xsltomermaid/map_view.py` | The schema map (`QGraphicsView`). |
+| `src/xsltomermaid/query_designer.py` | The Query view: table cards, joins, output columns, undo and the designed SQL. |
+| `src/xsltomermaid/query_filters.py` | The Query view's Filters tab: nested condition groups, moved by drag and drop. |
 | `src/xsltomermaid/highlight.py` | Syntax colouring for the SQL and Mermaid text (`QSyntaxHighlighter`). |
 | `src/xsltomermaid/diagram_view.py` | Renders Mermaid in a `QWebEngineView`; SVG/PNG/PDF/Draw.io/Excalidraw export. |
 | `src/xsltomermaid/widgets.py` | Small pieces: drop area, status line, render status, data model, workers. |
@@ -309,7 +356,7 @@ erDiagram
 | `src/xsltomermaid/__init__.py` | `__version__`, the single source of the app version. |
 | `src/xsltomermaid/vendor/mermaid.min.js` | Bundled Mermaid (MIT), so rendering works offline. |
 | `src/xsltomermaid/assets/` | Application icons. |
-| `tests/` | Core, map, SQL, preset and update tests (no display needed), plus headless GUI tests in `test_screenshot.py`. |
+| `tests/` | Core, map, SQL, query, preset and update tests (no display needed), plus headless GUI tests in `test_screenshot.py` and `test_query_designer.py`. |
 | `xsltomermaid.spec` | PyInstaller build definition. |
 
 ## Tests
