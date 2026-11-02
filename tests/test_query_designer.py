@@ -382,3 +382,115 @@ def test_removing_filters_tables_and_clearing(app):
     assert view.design.where.items[0].column == "CustomerID"
     view.filters.clear()
     assert view.design.where.items == [] and view.filters.rows() == []
+
+
+# ---------------------------------------------------------------------------
+# Saving and undo
+# ---------------------------------------------------------------------------
+def _settle(view):
+    """Record the pending undo step now, as if the half second had passed."""
+    _pump(view)
+    view._history_timer.stop()
+    view._record()
+
+
+def test_state_round_trips_with_the_layout(app):
+    view = _designer(app, _shop())
+    view.add_table("Customer")
+    view.add_table("Order")
+    view.toggle_output("c", "Name")
+    view.add_filter("o", "Total").value = "5"
+    view.set_join_kind(view.design.joins[0], "FULL")
+    view.cards["o"].setPos(QPointF(400, 250))
+    view.quote_all.setChecked(True)
+    _pump(view)
+    sql, state = view.sql_text(), view.state()
+    assert state["positions"]["o"] == [400.0, 250.0]
+
+    other = _designer(app, _shop())
+    other.restore(state)
+    _pump(other)
+    assert other.sql_text() == sql
+    assert other.cards["o"].pos() == QPointF(400, 250)
+    assert other.quote_all.isChecked()
+    assert [r.condition.value for r in other.filters.rows()] == ["5"]
+
+
+def test_a_saved_design_without_a_layout_is_laid_out(app):
+    view = _designer(app, _shop())
+    view.restore({"design": {"tables": [{"table": "Customer", "alias": "c"},
+                                        {"table": "Order", "alias": "o"}]}})
+    xs = [view.cards[a].pos().x() for a in ("c", "o")]
+    assert xs[0] < xs[1]  # side by side, not stacked at the origin
+
+
+def test_undo_and_redo(app):
+    view = _designer(app, _shop())
+    assert not view.can_undo() and not view.can_redo()
+    view.add_table("Customer")
+    _settle(view)
+    view.add_table("Order")
+    _settle(view)
+    view.toggle_output("c", "Name")
+    _settle(view)
+    view.undo()
+    _settle(view)  # the refresh after an undo isn't a new step
+    assert view.design.outputs == [] and len(view.design.tables) == 2 and view.can_redo()
+    view.undo()
+    assert [t.alias for t in view.design.tables] == ["c"] and set(view.cards) == {"c"}
+    view.redo()
+    _pump(view)
+    assert [t.alias for t in view.design.tables] == ["c", "o"] and len(view.edges) == 1
+    # A change after undoing drops the redo steps.
+    view.clear()
+    _settle(view)
+    assert view.design.tables == [] and not view.can_redo()
+    view.undo()  # Clear is undone like any change
+    assert [t.alias for t in view.design.tables] == ["c", "o"]
+    # Typing a value is one step, however many keys.
+    view.add_filter("c", "Name")
+    _settle(view)
+    row = view.filters.rows()[0]
+    for text in ("A", "Ad", "Ada"):
+        row.value.setText(text)
+        _pump(view)  # within the half second: no step yet
+    _settle(view)
+    view.undo()
+    assert view.design.where.items[0].value == ""
+    # A new file starts a new history.
+    view.set_schema(_shop())
+    assert not view.can_undo() and not view.can_redo()
+
+
+def test_the_window_saves_and_loads_the_query_in_presets(app, tmp_path, monkeypatch):
+    window = app_module.MainWindow()
+    window.load_file(_sample(tmp_path / "sample.xlsx"))
+    window.show_query(True)
+    view = window._query_view
+    view.add_table("Customer")
+    view.add_table("Order")
+    view.group_and_count("c", "Name")
+    _pump(view)
+    sql = view.sql_text()
+    path = tmp_path / "preset.toml"
+    monkeypatch.setattr(app_module.QFileDialog, "getSaveFileName", lambda *a, **k: (str(path), ""))
+    window.save_table_selection_toml()
+    assert "query = " in path.read_text(encoding="utf-8")
+
+    view.clear()
+    _pump(view)
+    assert view.sql_text() == ""
+    monkeypatch.setattr(app_module.QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
+    window.load_table_selection_toml()
+    _pump(view)
+    assert view.sql_text() == sql
+
+    # Ctrl+Z undoes the designer's change while it's showing.
+    _settle(view)
+    view.toggle_output("o", "Total")
+    _settle(view)
+    window._sync_undo_action()
+    assert window._undo_action.isEnabled() and "query" in window._undo_action.text()
+    window._undo_action.trigger()
+    assert not any(o.column == "Total" for o in view.design.outputs)
+    window._diagram_view.cleanup()

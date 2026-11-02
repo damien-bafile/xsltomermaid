@@ -2,9 +2,11 @@
 
 A preset holds the ticked tables and, since 1.3, the column choices (which
 columns are left out, each table's dragged order, the shared sort) and the
-moved relationship labels. Every value is written as one line of JSON that
-is also valid TOML, so the Python 3.10 fallback reader handles it too. A
-preset without the newer keys leaves those choices as they are.
+moved relationship labels, and since 1.9 the Query view's design. Every
+value is written as one line of JSON that is also valid TOML, so the Python
+3.10 fallback reader handles it too. (The design is a JSON object, which
+isn't TOML, so it's written as a string holding that JSON.) A preset without
+the newer keys leaves those choices as they are.
 """
 
 from __future__ import annotations
@@ -29,6 +31,8 @@ class Preset:
     column_sort: str | None = None  # "order", "name", "name_desc" or "type"
     keys_first: bool | None = None
     label_layout: dict[str, list[float]] | None = None  # label key -> [angle, dx, dy]
+    # The Query view's design and card layout (QueryDesignerView.state()).
+    query: dict | None = None
 
 
 def dump_preset(preset: Preset) -> str:
@@ -57,6 +61,11 @@ def dump_preset(preset: Preset) -> str:
     if preset.label_layout is not None:
         rows = [[k, *(float(x) for x in v)] for k, v in sorted(preset.label_layout.items())]
         lines.append(f"label_layout = {json.dumps(rows)}")
+    if preset.query is not None:
+        # A TOML string holding the JSON. ensure_ascii=False: TOML strings
+        # can't hold the \ud83d-style surrogate escapes JSON would use.
+        inner = json.dumps(preset.query, ensure_ascii=False, separators=(",", ":"))
+        lines.append(f"query = {json.dumps(inner, ensure_ascii=False)}")
     return "\n".join(lines) + "\n"
 
 
@@ -102,6 +111,17 @@ def load_preset(text: str) -> Preset:
         ):
             raise ValueError("'label_layout' must be [label, angle, dx, dy] rows in the TOML preset.")
         preset.label_layout = {r[0]: [float(v) for v in r[1:]] for r in rows}
+    if "query" in data:
+        message = "'query' must be a JSON object, written as a string, in the TOML preset."
+        if not isinstance(data["query"], str):
+            raise ValueError(message)
+        try:
+            query = json.loads(data["query"])
+        except json.JSONDecodeError as exc:
+            raise ValueError(message) from exc
+        if not isinstance(query, dict):
+            raise ValueError(message)
+        preset.query = query
     return preset
 
 

@@ -1002,7 +1002,7 @@ class MainWindow(QMainWindow):
         # rather than an Edit menu, whose Alt+E would take Export's.
         self._undo_action = act(
             "&Undo",
-            self._selector.undo_last_change,
+            self.undo,
             QKeySequence.StandardKey.Undo,
             schema_only=True,
         )
@@ -1075,8 +1075,22 @@ class MainWindow(QMainWindow):
         help_menu.addAction(self._update_action)
         help_menu.addAction(act("&About", self.show_about))
 
+    def undo(self):
+        """Ctrl+Z: the Query designer's last change while it's showing,
+        otherwise the last change to the ticks."""
+        if self.query_visible():
+            self._query_view.undo()
+        else:
+            self._selector.undo_last_change()
+
     def _sync_undo_action(self):
         """Name the Edit › Undo item after the change it undoes."""
+        if self.query_visible():
+            # Kept enabled: a disabled action's Ctrl+Z wouldn't reach the
+            # designer, and undoing nothing does nothing.
+            self._undo_action.setText("&Undo query change")
+            self._undo_action.setEnabled(True)
+            return
         label = self._selector._undo_btn.text().replace("&Undo", "").strip()
         self._undo_action.setText(f"&Undo {label}" if label else "&Undo")
         self._undo_action.setEnabled(
@@ -1367,6 +1381,8 @@ class MainWindow(QMainWindow):
                 button.blockSignals(True)
                 button.setChecked(name == view)
                 button.blockSignals(False)
+        if view == "query":
+            self._sync_undo_action()  # Ctrl+Z now undoes the designer's changes
         self._options_bar.set_diagram_controls_visible(view == "diagram")
         if view == "map":
             self._map_view.set_ticked(self._selector.selected_tables())
@@ -2586,6 +2602,8 @@ class MainWindow(QMainWindow):
                 column_sort=sort,
                 keys_first=keys_first,
                 label_layout=self._diagram_view.label_edits(),
+                # The Query view's design, when there is one.
+                query=self._query_view.state() if self._query_view.design.tables else None,
             )
         )
         try:
@@ -2652,6 +2670,8 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 return
 
+        if preset.query is not None:  # a saved query design (Undo brings back the one before)
+            self._query_view.restore(preset.query)
         available = {table.name.lower() for table in self._schema.tables}
         matched = [name for name in selected if name.lower() in available]
         if not matched:

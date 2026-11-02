@@ -12,16 +12,20 @@ edits it.
 
 from __future__ import annotations
 
+import json
+
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QKeySequence,
     QPainter,
     QPainterPath,
     QPainterPathStroker,
     QPalette,
     QPen,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -78,6 +82,9 @@ _JOIN_TEXT = {
 _SORT_LABELS = (("", ""), ("↑ Asc", "ASC"), ("↓ Desc", "DESC"))
 # New cards are laid out in rows of this many.
 _CARDS_PER_ROW = 3
+# Undo: a step is recorded once changes pause this long; this many are kept.
+HISTORY_SETTLE_MS = 500
+HISTORY_LIMIT = 100
 
 
 def _join_colour(kind: str, widget) -> QColor:
@@ -491,11 +498,20 @@ class QueryDesignerView(QWidget):
         fit_btn.setToolTip("Fit every table into view.")
         fit_btn.clicked.connect(lambda: self.canvas.fit())
         clear_btn = QPushButton("Clear")
-        clear_btn.setToolTip("Remove every table from the query.")
+        clear_btn.setToolTip("Remove every table from the query (Undo brings them back).")
         clear_btn.clicked.connect(self.clear)
+        self.undo_btn = QPushButton("Undo")
+        self.undo_btn.setToolTip("Undo the last change to the query (Ctrl+Z).")
+        self.undo_btn.clicked.connect(self.undo)
+        self.redo_btn = QPushButton("Redo")
+        self.redo_btn.setToolTip("Redo the change just undone (Ctrl+Y or Ctrl+Shift+Z).")
+        self.redo_btn.clicked.connect(self.redo)
+        for keys in ("Ctrl+Y", "Ctrl+Shift+Z"):
+            QShortcut(QKeySequence(keys), self, self.redo, context=Qt.WidgetWithChildrenShortcut)
         bar = QHBoxLayout()
         bar.setContentsMargins(8, 6, 8, 0)
-        for w in (self.add_box, add_btn, self.add_ticked_btn, self.auto_join, fit_btn, clear_btn):
+        for w in (self.add_box, add_btn, self.add_ticked_btn, self.auto_join,
+                  self.undo_btn, self.redo_btn, fit_btn, clear_btn):
             bar.addWidget(w)
         bar.addStretch()
 
@@ -637,6 +653,12 @@ class QueryDesignerView(QWidget):
 
         self._refresh_timer = QTimer(self, singleShot=True, interval=0)
         self._refresh_timer.timeout.connect(self._refresh_now)
+        # Undo history: a snapshot of state() once changes settle, so typing
+        # a value is one step, not one per key.
+        self._history: list[str] = []
+        self._history_at = -1
+        self._history_timer = QTimer(self, singleShot=True, interval=HISTORY_SETTLE_MS)
+        self._history_timer.timeout.connect(self._record)
         self.set_schema(None)
 
     # --- the window's side ----------------------------------------------------
@@ -652,6 +674,93 @@ class QueryDesignerView(QWidget):
         self.add_box.setEnabled(schema is not None)
         self.add_ticked_btn.setEnabled(schema is not None)
         self.clear()
+        self._history_timer.stop()
+        self._history, self._history_at = [self._snapshot()], 0  # a new file: a new history
+        self._sync_history_buttons()
+
+    # --- saving and undo ------------------------------------------------------------
+
+    def state(self) -> dict:
+        """The design and its card layout, as plain values (for a preset)."""
+        return {
+            "design": self.design.to_dict(),
+            "positions": {a: [round(p.x(), 1), round(p.y(), 1)] for a, p in self.positions.items()
+                          if self.design.ref(a) is not None},
+            "expanded": sorted(a for a in self.expanded if self.design.ref(a) is not None),
+            "quote_all": self.quote_all.isChecked(),
+        }
+
+    def restore(self, state: dict):
+        """Show a saved :meth:`state`. Tables no longer in the spreadsheet stay
+        in the design and are named in the SQL's comments."""
+        design = QueryDesign.from_dict(state.get("design", {}) if isinstance(state, dict) else {})
+        positions = {}
+        for alias, xy in (state.get("positions") or {}).items():
+            if (isinstance(xy, list) and len(xy) == 2
+                    and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in xy)):
+                positions[str(alias)] = QPointF(float(xy[0]), float(xy[1]))
+        scene = self.canvas.scene()
+        for card in self.cards.values():  # aliases may now name other tables
+            scene.removeItem(card)
+        self.cards.clear()
+        self.design = design
+        self.positions = positions
+        self.expanded = {str(a) for a in state.get("expanded", []) if isinstance(a, str)}
+        self.quote_all.blockSignals(True)
+        self.quote_all.setChecked(bool(state.get("quote_all", False)))
+        self.quote_all.blockSignals(False)
+        # Tables saved without a position (a hand-written design): a grid
+        # below any that have one.
+        missing = [ref.alias for ref in design.tables if ref.alias not in positions]
+        top = max((p.y() for p in positions.values()), default=-320.0) + 320
+        for i, alias in enumerate(missing):
+            positions[alias] = QPointF((i % _CARDS_PER_ROW) * 320, top + (i // _CARDS_PER_ROW) * 320)
+        self._filter_shape = None
+        self._changed()
+
+    def _snapshot(self) -> str:
+        return json.dumps(self.state(), sort_keys=True)
+
+    def _record(self):
+        snap = self._snapshot()
+        # Unchanged (as after an undo, which restores this very snapshot): no step.
+        if self._history and self._history[self._history_at] == snap:
+            return
+        del self._history[self._history_at + 1:]
+        self._history.append(snap)
+        if len(self._history) > HISTORY_LIMIT:
+            del self._history[0]
+        self._history_at = len(self._history) - 1
+        self._sync_history_buttons()
+
+    def can_undo(self) -> bool:
+        return self._history_at > 0 or (self._history_timer.isActive() and self._history_at >= 0)
+
+    def can_redo(self) -> bool:
+        return self._history_at < len(self._history) - 1
+
+    def undo(self):
+        if self._history_timer.isActive():  # a change still settling counts
+            self._history_timer.stop()
+            self._record()
+        if self._history_at > 0:
+            self._history_at -= 1
+            self._go_to(self._history[self._history_at])
+            self.message.emit("Undid the last change to the query.")
+
+    def redo(self):
+        if self._history_at < len(self._history) - 1:
+            self._history_at += 1
+            self._go_to(self._history[self._history_at])
+            self.message.emit("Redid the change to the query.")
+
+    def _go_to(self, snap: str):
+        self.restore(json.loads(snap))
+        self._sync_history_buttons()
+
+    def _sync_history_buttons(self):
+        self.undo_btn.setEnabled(self.can_undo())
+        self.redo_btn.setEnabled(self.can_redo())
 
     def set_hide_system(self, hide: bool):
         """Follow the options bar's Hide system columns (on the cards only:
@@ -1061,6 +1170,8 @@ class QueryDesignerView(QWidget):
             self._sql = generate_designed_select(self.design, self.schema, self.quote_all.isChecked())
             self.sql_view.setPlainText(self._sql)
         self.sql_changed.emit(self._sql)
+        self._history_timer.start()  # record this state once changes settle
+        self._sync_history_buttons()
 
     def _fill_start(self):
         self.start.blockSignals(True)
