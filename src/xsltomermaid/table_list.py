@@ -200,6 +200,7 @@ class TableSelector(QWidget):
     undone = Signal(str)  # the undo button restored the selection before this action
     matches_changed = Signal(object)  # names the search matches, or None (no search)
     export_requested = Signal(str)  # right-click › Export this table
+    query_requested = Signal(str)  # right-click › Add to query
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -830,6 +831,7 @@ class TableSelector(QWidget):
         name = item.text()
         menu = QMenu(self)
         menu.addAction("Export this table…", lambda: self.export_requested.emit(name))
+        menu.addAction("Add to query", lambda: self.query_requested.emit(name))
         menu.exec(self._list.viewport().mapToGlobal(pos))
 
     def selected_tables(self) -> list[str]:

@@ -33,6 +33,7 @@ def show_shortcuts_help(parent) -> None:
         ("Ctrl+O", "Open a spreadsheet"),
         ("Ctrl+W", "Close it and go back to the start screen"),
         ("Ctrl+M", "Switch between the diagram and the map"),
+        ("Ctrl+J", "Open or close the Query designer"),
         ("Ctrl+I / Ctrl+1–6", "Show the Details panel / one of its views"),
         ("Ctrl+F", "Find tables by name or column (fuzzy)"),
         ("F5 or Ctrl+Enter", "Draw the ticked tables"),

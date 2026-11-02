@@ -100,6 +100,33 @@ at the **map**, and the **Diagram | Map** switch (Ctrl+M) changes view.
   table (its top, when the table is taller than the view), not the top-left
   corner.
 
+### Designing a query: the Query view
+
+The **Diagram | Map | Query** switch (Ctrl+J for Query) opens a canvas for
+building a T-SQL `SELECT` by hand. Nothing is run: it writes the query for you
+to copy into SQL Server, Synapse or Fabric.
+
+- **Add tables** from the box above the canvas, with **Add ticked tables**, or
+  by right-clicking a table in the list › **Add to query**. A table can be
+  added twice (an employee and their manager) under its own alias.
+- **Tables join on their foreign keys** as they're added (composite keys
+  included; **Auto-join** turns that off). Drag from a column to a column of
+  another table to join them yourself, or right-click a table › **Join to…**
+  for the foreign keys it has. Click a join line, or use the **Joins** tab, to
+  make it inner, left, right or full outer, or delete it.
+- **Click a column** to put it in the result. The **Output** tab sets each
+  one's aggregate (count, count distinct, sum, average, min, max) and sort,
+  and double-clicking names it (`AS …`); plain columns are grouped on when any
+  is aggregated. Right-click a column to count its distinct values or group by
+  it and count rows.
+- **The SQL** under the panel is rewritten on every change, with the start
+  table, a row limit, Distinct, Quote all names, and the Dynamics *Latest
+  version only* and *Active records only* options. **Copy SQL**
+  (Ctrl+Shift+Q while the designer is open) copies it. A table no join
+  reaches is left out and named in a comment, never cross-joined.
+- Tables with more than 12 columns show their keys and the columns the query
+  uses, with a row to show the rest.
+
 ### Dynamics 365 / Dataverse exports
 
 - **Audit and system links are hidden automatically** when they make up more
@@ -211,6 +238,7 @@ selected, they say how to pick one.
 | Ctrl+Z | Undo the last change to the ticks |
 | F1 | The spreadsheet format |
 | Ctrl+M | Switch between diagram and map |
+| Ctrl+J | Open or close the Query designer |
 | Ctrl+I | Show or hide the Details panel |
 | Ctrl+1 … Ctrl+6 | Details: Tables · Columns · Links · Mermaid · SQL · Data |
 | Alt+Left · Alt+Right | Details: back and forward through the tables shown |
@@ -300,6 +328,7 @@ erDiagram
 | `src/xsltomermaid/relationships_view.py` | The Details panel's Links view. |
 | `src/xsltomermaid/options_bar.py` | The diagram options bar. |
 | `src/xsltomermaid/map_view.py` | The schema map (`QGraphicsView`). |
+| `src/xsltomermaid/query_designer.py` | The Query view: table cards, joins, output columns and the designed SQL. |
 | `src/xsltomermaid/highlight.py` | Syntax colouring for the SQL and Mermaid text (`QSyntaxHighlighter`). |
 | `src/xsltomermaid/diagram_view.py` | Renders Mermaid in a `QWebEngineView`; SVG/PNG/PDF/Draw.io/Excalidraw export. |
 | `src/xsltomermaid/widgets.py` | Small pieces: drop area, status line, render status, data model, workers. |
