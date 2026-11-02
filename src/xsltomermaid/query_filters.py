@@ -139,10 +139,14 @@ class ConditionRow(QWidget):
         self.op.currentTextChanged.connect(self._op_changed)
         self.value = QLineEdit(condition.value)
         self.value.setAccessibleName("Filter value")
+        # Wide enough for a date: the tree scrolls sideways rather than hide values.
+        value_width = self.fontMetrics().horizontalAdvance("2026-12-31 23:59") + 16
+        self.value.setMinimumWidth(value_width)
         self.value.textChanged.connect(self._value_changed)
         self.and_label = QLabel("and")
         self.value2 = QLineEdit(condition.value2)
         self.value2.setPlaceholderText("to")
+        self.value2.setMinimumWidth(value_width)
         self.value2.setAccessibleName("Filter upper value")
         self.value2.textChanged.connect(self._value2_changed)
         remove = QToolButton()
