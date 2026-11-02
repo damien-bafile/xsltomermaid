@@ -260,3 +260,125 @@ def test_cards_are_painted(app, tmp_path):
     assert view.grab().save(str(out))
     assert out.stat().st_size > 5000
     assert all(isinstance(c, TableCard) for c in view.cards.values())
+
+
+# ---------------------------------------------------------------------------
+# Filters (query_filters.py)
+# ---------------------------------------------------------------------------
+def _drop(widget, y, panel, item):
+    """A drag of ``item`` entering, moving over and dropping on ``widget``."""
+    from PySide6.QtCore import QMimeData, QPoint
+    from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent
+
+    from xsltomermaid.query_filters import MIME_FILTER
+
+    mime = QMimeData()
+    mime.setData(MIME_FILTER, b"1")
+    panel.dragged = item
+    args = (Qt.MoveAction, mime, Qt.LeftButton, Qt.NoModifier)
+    QApplication.sendEvent(widget, QDragEnterEvent(QPoint(30, int(y)), *args))
+    QApplication.sendEvent(widget, QDragMoveEvent(QPoint(30, int(y)), *args))
+    marker = widget.marker.isVisible() if hasattr(widget, "marker") else None
+    drop = QDropEvent(QPointF(30, y), *args)
+    QApplication.sendEvent(widget, drop)
+    panel.dragged = None
+    return drop.isAccepted(), marker
+
+
+def test_nested_filters_are_built_in_the_filters_tab(app):
+    view = _designer(app, _shop())
+    view.add_table("Customer")
+    view.add_table("Order")
+    panel = view.filters
+    # Name starts with A, and (Total > 100 or Total between 1 and 5).
+    first = view.add_filter("c", "Name")
+    row = panel.rows()[0]
+    assert view.side_tabs.currentWidget() is panel and row.condition is first
+    row.op.setCurrentText("starts with")
+    row.value.setText("A")
+    panel.add_group(view.design.where)
+    inner = panel.root.children_widgets[1]
+    inner.mode.setCurrentIndex(1)  # Any of these (OR)
+    view.add_filter("o", "Total", group=inner.group)
+    view.add_filter("o", "Total", group=panel.root.children_widgets[1].group)
+    rows = panel.rows()
+    rows[1].op.setCurrentText(">")
+    rows[1].value.setText("100")
+    rows[2].op.setCurrentText("between")
+    assert rows[2].value2.isVisibleTo(rows[2]) and not rows[1].value2.isVisibleTo(rows[1])
+    rows[2].value.setText("1")
+    rows[2].value2.setText("5")
+    _pump(view)
+    assert ("WHERE c.Name LIKE N'A%'\n  AND (o.Total > 100\n    OR o.Total BETWEEN 1 AND 5)"
+            in view.sql_text())
+    # The card marks the filtered columns.
+    assert view.filtered_columns("o") == {"total"}
+    # The column box re-targets a condition.
+    combo = rows[1].column
+    combo.setCurrentIndex(combo.findData("o\tOrderID"))
+    _pump(view)
+    assert "OR o.Total BETWEEN" in view.sql_text() and "(o.OrderID > 100" in view.sql_text()
+    # "None of these" negates the group.
+    panel.root.children_widgets[1].mode.setCurrentIndex(2)
+    _pump(view)
+    assert "AND NOT (o.OrderID > 100\n    OR o.Total BETWEEN 1 AND 5)" in view.sql_text()
+
+
+def test_filter_items_move_by_drag_and_drop(app):
+    view = _designer(app, _shop())
+    view.add_table("Customer")
+    view.add_table("Order")
+    panel = view.filters
+    a = view.add_filter("c", "Name")
+    b = view.add_filter("o", "Total")
+    panel.add_group(view.design.where)
+    group = view.design.where.items[2]
+    c = view.add_filter("o", "OrderID", group=group)
+    for cond, value in ((a, "x"), (b, "1"), (c, "2")):
+        cond.value = value
+    panel.rebuild()
+    view.resize(1200, 900)
+    QApplication.processEvents()
+
+    # Drop Total into the group, above OrderID.
+    box = panel.root.children_widgets[2]
+    accepted, marker = _drop(box, box.children_widgets[0].geometry().top() + 1, panel, b)
+    assert accepted and marker
+    assert view.design.where.items == [a, group] and group.items == [b, c]
+    # Drop Name at the end of its own group (reorder).
+    QApplication.processEvents()
+    root = panel.root
+    _drop(root, root.height() - 2, panel, a)
+    assert view.design.where.items == [group, a]
+    # A group can't go inside itself: over its own box, the group around it
+    # takes the drop and leaves it where it is.
+    QApplication.processEvents()
+    inner = panel.root.children_widgets[0]
+    _drop(inner, 10, panel, group)
+    assert view.design.where.items == [group, a] and group.items == [b, c]
+    # Nor into a group nested inside it.
+    panel.add_group(group)
+    nested = group.items[-1]
+    panel.move_item(group, nested, 0)
+    assert view.design.where.items == [group, a] and group.items == [b, c, nested]
+    panel.remove_item(nested)
+    _pump(view)
+    assert "WHERE (o.Total = 1\n    AND o.OrderID = 2)\n  AND c.Name = N'x'" in view.sql_text()
+
+
+def test_removing_filters_tables_and_clearing(app):
+    view = _designer(app, _shop())
+    view.add_table("Customer")
+    view.add_table("Order")
+    view.add_filter("c", "Name")
+    view.add_filter("o", "Total")
+    assert len(view.filters.rows()) == 2
+    view.remove_table("o")  # its conditions go with it
+    QApplication.processEvents()
+    assert [r.condition.alias for r in view.filters.rows()] == ["c"]
+    view.filters.remove_item(view.design.where.items[0])
+    assert view.filters.rows() == [] and view.design.where.items == []
+    view.add_filter()  # no column given: the first one
+    assert view.design.where.items[0].column == "CustomerID"
+    view.filters.clear()
+    assert view.design.where.items == [] and view.filters.rows() == []

@@ -51,16 +51,19 @@ from PySide6.QtWidgets import (
 
 from .excel_to_mermaid import Column, Schema, Table, system_columns
 from .highlight import SQL, RuleHighlighter
+from .query_filters import FiltersPanel
 from .query_model import (
     AGGREGATES,
     JOIN_KINDS,
+    Condition,
+    Group,
     Join,
     OutputColumn,
     QueryDesign,
     candidate_joins,
     generate_designed_select,
 )
-from .theme import _ACCENT_FILL, _blend, _muted_hex, _ok_hex, _surface
+from .theme import _ACCENT_FILL, _blend, _link_hex, _muted_hex, _ok_hex, _surface
 
 # A card with more columns than this starts collapsed to its keys and the
 # columns the query uses, with a row to show the rest.
@@ -200,6 +203,8 @@ class TableCard(QGraphicsItem):
 
         used = self.v.used_columns(self.alias)
         joined = self.v.joined_columns(self.alias)
+        filtered = self.v.filtered_columns(self.alias)
+        filter_colour = QColor(_link_hex(self.v))
         stripe = _blend(base, text, 0.04)
         hover = _blend(base, accent, 0.14)
         target = QColor(_ok_hex(self.v))
@@ -231,8 +236,10 @@ class TableCard(QGraphicsItem):
             font = QFont(self.v.font())
             font.setBold(column.name.lower() in joined)
             p.setFont(font)
-            p.setPen(text)
-            p.drawText(r.adjusted(30, 0, -8, 0), Qt.AlignVCenter, column.name)
+            is_filtered = column.name.lower() in filtered
+            p.setPen(filter_colour if is_filtered else text)
+            p.drawText(r.adjusted(30, 0, -8, 0), Qt.AlignVCenter,
+                       column.name + ("  ⏷" if is_filtered else ""))
             p.setFont(self.v.font())
             p.setPen(muted)
             key = "PK " if column.is_primary_key else "FK " if column.foreign_key_reference else ""
@@ -559,8 +566,11 @@ class QueryDesignerView(QWidget):
         joins_layout.addWidget(joins_note)
         joins_layout.addWidget(self.joins_table, 1)
 
+        self.filters = FiltersPanel(self)
+        self._filter_shape = None  # what the Filters tree was last built for
         self.side_tabs = QTabWidget()
         self.side_tabs.addTab(out_tab, "&Output")
+        self.side_tabs.addTab(self.filters, "&Filters")
         self.side_tabs.addTab(joins_tab, "&Joins")
 
         # SQL
@@ -614,7 +624,7 @@ class QueryDesignerView(QWidget):
         side = QSplitter(Qt.Vertical)
         side.addWidget(self.side_tabs)
         side.addWidget(sql_box)
-        side.setSizes([260, 340])
+        side.setSizes([400, 300])  # the tabs (filters nest) get the larger share
         split = QSplitter()
         split.addWidget(self.canvas)
         split.addWidget(side)
@@ -905,6 +915,45 @@ class QueryDesignerView(QWidget):
                 self.design.outputs.append(OutputColumn(alias, c.name))
         self._changed()
 
+    # --- filters ------------------------------------------------------------------
+
+    def column_choices(self) -> list[tuple[str, str]]:
+        """Every (alias, column) of the placed tables, in card order."""
+        return [(ref.alias, c.name) for ref in self.design.tables
+                for c in (self.table(ref.alias).columns if self.table(ref.alias) else [])]
+
+    def filtered_columns(self, alias: str) -> set[str]:
+        return {c.column.lower() for c in self.design.where.conditions() if c.alias == alias}
+
+    def add_filter(self, alias: str | None = None, column: str | None = None,
+                   group: Group | None = None):
+        """Add a condition (on the first column when none is given) to
+        ``group``, the top group by default, and put the cursor in its value."""
+        choices = self.column_choices()
+        if not choices:
+            self.message.emit("Add a table to the query first.")
+            return
+        if alias is None or column is None:
+            alias, column = choices[0]
+        condition = Condition(alias, column)
+        (group or self.design.where).items.append(condition)
+        self.filters.rebuild()
+        self.side_tabs.setCurrentWidget(self.filters)
+        row = next((r for r in self.filters.rows() if r.condition is condition), None)
+        if row is not None:
+            row.value.setFocus()
+            self.filters.scroll.ensureWidgetVisible(row)
+        self.filters_edited(columns=True)
+        return condition
+
+    def filters_edited(self, columns: bool = False):
+        """The Filters tab changed the design: rewrite the SQL, and repaint
+        the cards' filter marks when a condition's column changed."""
+        if columns:
+            for card in self.cards.values():
+                card.update()
+        self._refresh_timer.start()
+
     # --- menus --------------------------------------------------------------------
 
     def card_menu(self, card: TableCard, column: str | None, screen_pos):
@@ -915,6 +964,7 @@ class QueryDesignerView(QWidget):
             listed = column.lower() in self.used_columns(alias)
             menu.addAction("Leave out of the result" if listed else "Add to the result",
                            lambda: self.toggle_output(alias, column))
+            menu.addAction("Filter on this column…", lambda: self.add_filter(alias, column))
             menu.addAction("Count distinct values",
                            lambda: self.add_output(OutputColumn(alias, column, "COUNT DISTINCT")))
             menu.addAction("Group by this and count rows",
@@ -945,6 +995,14 @@ class QueryDesignerView(QWidget):
         """The design changed: redraw now (cards, edges) and the panels and
         SQL once the current event is done."""
         self._rebuild_cards()
+        # The filter tree is rebuilt only when what it's built from changed (a
+        # new design, or the tables its column boxes list), so typing in it
+        # isn't interrupted by unrelated edits.
+        shape = (id(self.design.where), tuple(t.alias for t in self.design.tables),
+                 len(self.design.where.conditions()))
+        if shape != self._filter_shape:
+            self._filter_shape = shape
+            self.filters.rebuild()
         self._refresh_timer.start()
 
     def _rebuild_cards(self):
