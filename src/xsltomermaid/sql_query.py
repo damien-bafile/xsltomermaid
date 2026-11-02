@@ -84,18 +84,61 @@ def _alias_base(name: str) -> str:
     return f"t{base}" if base[0].isdigit() else base
 
 
+def unique_alias(name: str, taken: set[str]) -> str:
+    """A short alias for table ``name`` not in ``taken`` (``o``, then ``o2``…),
+    added to ``taken``."""
+    base = _alias_base(name)
+    alias, n = base, 2
+    while alias in taken:
+        alias, n = f"{base}{n}", n + 1
+    taken.add(alias)
+    return alias
+
+
 def _aliases(tables: list[Table]) -> dict[str, str]:
     """One unique alias per table (``c``, ``o``, ``ol``; ``o2`` on a clash)."""
     taken: set[str] = set()
-    result: dict[str, str] = {}
-    for table in tables:
-        base = _alias_base(table.name)
-        alias, n = base, 2
-        while alias in taken:
-            alias, n = f"{base}{n}", n + 1
-        taken.add(alias)
-        result[table.name.lower()] = alias
-    return result
+    return {table.name.lower(): unique_alias(table.name, taken) for table in tables}
+
+
+def table_source(
+    table: Table,
+    alias: str,
+    q,
+    columns: list,
+    latest_only: bool = False,
+    active_only: bool = False,
+) -> tuple[str, list[str], set[str]]:
+    """The table (or its latest-version subquery), its row filters, and what
+    couldn't be applied: ``"key"`` (no primary key to rank versions by) and/or
+    ``"state"`` (no ``statecode`` column).
+
+    ``columns`` is where the table's columns are looked up: the whole sheet's,
+    as the drawn table may have had some left out.
+    """
+    ref, conditions, missing = _table_ref(table, q), [], set()
+    if latest_only:
+        keys = [c.name for c in columns if c.is_primary_key]
+        if keys:
+            ref = (
+                "(\n"
+                f"    SELECT *, ROW_NUMBER() OVER (PARTITION BY "
+                f"{', '.join(q(k) for k in keys)} ORDER BY versionnumber DESC)"
+                " AS _version_rank\n"
+                f"    FROM {ref}\n"
+                "    WHERE ISNULL(IsDelete, 0) = 0\n"
+                ")"
+            )
+            conditions.append(f"{q(alias)}._version_rank = 1")
+        else:
+            missing.add("key")
+    if active_only:
+        state = next((c.name for c in columns if c.name.lower() == "statecode"), None)
+        if state:
+            conditions.append(f"{q(alias)}.{q(state)} = 0")
+        else:
+            missing.add("state")
+    return ref, conditions, missing
 
 
 def _on_clause(rel: Relationship, aliases: dict[str, str], q=quote) -> str | None:
@@ -213,29 +256,14 @@ def generate_select(
 
     def source(table: Table, alias: str) -> tuple[str, list[str]]:
         """The table (or its latest-version subquery) and its row filters."""
-        ref, conditions = _table_ref(table, q), []
         columns = full.get(table.name.lower(), table).columns
-        if latest_only:
-            keys = [c.name for c in columns if c.is_primary_key]
-            if keys:
-                ref = (
-                    "(\n"
-                    f"    SELECT *, ROW_NUMBER() OVER (PARTITION BY "
-                    f"{', '.join(q(k) for k in keys)} ORDER BY versionnumber DESC)"
-                    " AS _version_rank\n"
-                    f"    FROM {ref}\n"
-                    "    WHERE ISNULL(IsDelete, 0) = 0\n"
-                    ")"
-                )
-                conditions.append(f"{q(alias)}._version_rank = 1")
-            else:
-                unranked.append(table.name)
-        if active_only:
-            state = next((c.name for c in columns if c.name.lower() == "statecode"), None)
-            if state:
-                conditions.append(f"{q(alias)}.{q(state)} = 0")
-            else:
-                no_state.append(table.name)
+        ref, conditions, missing = table_source(
+            table, alias, q, columns, latest_only, active_only
+        )
+        if "key" in missing:
+            unranked.append(table.name)
+        if "state" in missing:
+            no_state.append(table.name)
         return ref, conditions
 
     root_alias = aliases[root_table.name.lower()]

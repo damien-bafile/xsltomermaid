@@ -288,6 +288,7 @@ erDiagram
 | `src/xsltomermaid/excel_to_mermaid.py` | The core: read the sheet, build the schema model, emit Mermaid. No Qt. |
 | `src/xsltomermaid/schema_map.py` | Clusters and lays out a whole schema for the map. No Qt. |
 | `src/xsltomermaid/sql_query.py` | Writes the T-SQL `SELECT … JOIN` for the SQL view. No Qt. |
+| `src/xsltomermaid/query_model.py` | A query designed by hand (tables, joins, nested filters, output columns) and its T-SQL. No Qt. |
 | `src/xsltomermaid/selection_preset.py` | Reads and writes `.toml` table-list presets. No Qt. |
 | `src/xsltomermaid/schema_export.py` | Writes the ticked tables and columns as CSV, JSON or Excel. No Qt. |
 | `src/xsltomermaid/schema_export_dialog.py` | The options asked before that export. |
