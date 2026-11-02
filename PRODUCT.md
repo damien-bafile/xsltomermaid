@@ -58,6 +58,11 @@ schema-to-diagram converter with Mermaid as its rendering engine.
   table list on the left and a Details panel on the right: **Tables**, **Columns**,
   **Relationships**, **Mermaid**, **SQL** and **Data**. Users tick the tables to include,
   and save/load those selections as `.toml` presets (source filename included).
+- A third canvas view, the **Query designer** (Diagram | Map | Query), builds a T-SQL
+  `SELECT` by hand from the schema: placed tables joined on their foreign keys or by
+  dragging, join types, nested AND / OR / NOT filters, aggregates and sorting. It writes
+  SQL only: nothing is run and no data is needed (the input is a schema, not rows), which
+  keeps it inside the offline, no-connection principle. The design saves in presets.
 - Frequently used in offline / enterprise settings; also runnable headless (CLI generation
   via `excel_to_mermaid.py`, and `--screenshot` / `--screenshot-diagram` self-capture for
   CI where no display is available).
@@ -81,7 +86,7 @@ schema-to-diagram converter with Mermaid as its rendering engine.
 - **Mermaid ER parser limitation:** attribute types must be a single plain word, so
   `varchar(100)` / `decimal(18,2)` are flattened to `varchar_100` / `decimal_18_2`.
 - **Default rendered layout:** Left → Right.
-- **Current version:** see `src/xsltomermaid/__init__.py` (1.8.1 at the last update).
+- **Current version:** see `src/xsltomermaid/__init__.py` (1.9.0 at the last update).
 
 ## Brand Commitments
 

@@ -119,6 +119,20 @@ to copy into SQL Server, Synapse or Fabric.
   and double-clicking names it (`AS …`); plain columns are grouped on when any
   is aggregated. Right-click a column to count its distinct values or group by
   it and count rows.
+- **Filters** build the `WHERE` clause as a tree. Each group combines what's
+  in it as *All of these* (AND), *Any of these* (OR), *None of these* or *Not
+  all of these*, and **+ Group** nests another, as deep as needed:
+  `Name = X AND (Total > 100 OR Status IN (1, 2))`. A condition is a column,
+  one of 15 operators (`=`, `<>`, `>`, `>=`, `<`, `<=`, contains, does not
+  contain, starts with, ends with, in, not in, between, is null, is not null)
+  and a value, written to suit the column's type (`N'…'` for Unicode text, bare
+  numbers, 1/0 for `bit`, LIKE wildcards escaped). Drag a condition or group by
+  its ⠿ grip to reorder it or move it into another group. Right-click a column
+  on the canvas › **Filter on this column**; filtered columns are marked ⏷.
+- **Undo / Redo** in the designer's toolbar, or Ctrl+Z (Ctrl+Y or
+  Ctrl+Shift+Z to redo) while it's open; Clear can be undone too. The
+  **Table list › Save table list** preset keeps the query and its layout, and
+  loading the preset brings it back.
 - **The SQL** under the panel is rewritten on every change, with the start
   table, a row limit, Distinct, Quote all names, and the Dynamics *Latest
   version only* and *Active records only* options. **Copy SQL**
@@ -175,8 +189,9 @@ to copy into SQL Server, Synapse or Fabric.
   with foreign keys to it, and **●** marks a table in the diagram.
 - **Clear** and the bulk actions can be undone (**Undo**, or Ctrl+Z). The
   **Table list** menu saves and loads the ticked tables as `.toml` presets, with
-  the column choices (left-out columns, dragged orders, the sort) and moved
-  relationship labels. Older presets still load; they leave those as they are.
+  the column choices (left-out columns, dragged orders, the sort), moved
+  relationship labels and the Query designer's query. Older presets still
+  load; they leave those as they are.
 
 ### The Details panel
 
@@ -235,7 +250,8 @@ selected, they say how to pick one.
 | Ctrl+F | Find tables (by name or column) |
 | F5 · Ctrl+Enter | Draw the ticked tables now |
 | Esc | Stop drawing · clear the diagram selection |
-| Ctrl+Z | Undo the last change to the ticks |
+| Ctrl+Z | Undo the last change to the ticks (in the Query designer: to the query) |
+| Ctrl+Y · Ctrl+Shift+Z | Redo, in the Query designer |
 | F1 | The spreadsheet format |
 | Ctrl+M | Switch between diagram and map |
 | Ctrl+J | Open or close the Query designer |
@@ -328,7 +344,8 @@ erDiagram
 | `src/xsltomermaid/relationships_view.py` | The Details panel's Links view. |
 | `src/xsltomermaid/options_bar.py` | The diagram options bar. |
 | `src/xsltomermaid/map_view.py` | The schema map (`QGraphicsView`). |
-| `src/xsltomermaid/query_designer.py` | The Query view: table cards, joins, output columns and the designed SQL. |
+| `src/xsltomermaid/query_designer.py` | The Query view: table cards, joins, output columns, undo and the designed SQL. |
+| `src/xsltomermaid/query_filters.py` | The Query view's Filters tab: nested condition groups, moved by drag and drop. |
 | `src/xsltomermaid/highlight.py` | Syntax colouring for the SQL and Mermaid text (`QSyntaxHighlighter`). |
 | `src/xsltomermaid/diagram_view.py` | Renders Mermaid in a `QWebEngineView`; SVG/PNG/PDF/Draw.io/Excalidraw export. |
 | `src/xsltomermaid/widgets.py` | Small pieces: drop area, status line, render status, data model, workers. |
@@ -339,7 +356,7 @@ erDiagram
 | `src/xsltomermaid/__init__.py` | `__version__`, the single source of the app version. |
 | `src/xsltomermaid/vendor/mermaid.min.js` | Bundled Mermaid (MIT), so rendering works offline. |
 | `src/xsltomermaid/assets/` | Application icons. |
-| `tests/` | Core, map, SQL, preset and update tests (no display needed), plus headless GUI tests in `test_screenshot.py`. |
+| `tests/` | Core, map, SQL, query, preset and update tests (no display needed), plus headless GUI tests in `test_screenshot.py` and `test_query_designer.py`. |
 | `xsltomermaid.spec` | PyInstaller build definition. |
 
 ## Tests
